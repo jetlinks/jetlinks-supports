@@ -8,7 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.message.ChildDeviceMessage;
 import org.jetlinks.core.message.CommonDeviceMessageReply;
 import org.jetlinks.core.message.DeviceMessage;
-import org.jetlinks.core.message.EmptyDeviceMessage;
+import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.codec.*;
 import org.jetlinks.core.message.event.ChildDeviceOfflineMessage;
 import org.jetlinks.core.message.event.ChildDeviceOnlineMessage;
@@ -19,6 +19,7 @@ import org.jetlinks.core.message.property.ReadPropertyMessage;
 import org.jetlinks.core.message.property.ReadPropertyMessageReply;
 import org.jetlinks.core.message.property.WritePropertyMessage;
 import org.jetlinks.core.message.property.WritePropertyMessageReply;
+import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
 
@@ -29,10 +30,10 @@ import java.nio.charset.StandardCharsets;
  * @since 1.0.0
  */
 @Slf4j
-public class JetLinksMQTTDeviceMessageCodec implements TransportDeviceMessageCodec {
+public class JetLinksMQTTDeviceMessageCodec implements DeviceMessageCodec {
     @Override
     public Transport getSupportTransport() {
-        return Transport.MQTT;
+        return DefaultTransport.MQTT;
     }
 
     @AllArgsConstructor
@@ -119,32 +120,40 @@ public class JetLinksMQTTDeviceMessageCodec implements TransportDeviceMessageCod
     }
 
     @Override
-    public EncodedMessage encode(MessageEncodeContext context) {
-        DeviceMessage message = context.getMessage();
-        //读取设备属性
-        EncodeResult convertResult = encode(message);
+    public Mono<EncodedMessage> encode(MessageEncodeContext context) {
+        Message message = context.getMessage();
+        if (message instanceof DeviceMessage) {
+            DeviceMessage deviceMessage = ((DeviceMessage) message);
+            //读取设备属性
+            EncodeResult convertResult = encode(deviceMessage);
 
-        return EncodedMessage.mqtt(message.getDeviceId(),
-                convertResult.topic,
-                Unpooled.copiedBuffer(JSON.toJSONBytes(convertResult.data)));
+            return Mono.just(SimpleMqttMessage.builder()
+                    .deviceId(deviceMessage.getDeviceId())
+                    .topic(convertResult.topic)
+                    .payload(Unpooled.copiedBuffer(JSON.toJSONBytes(convertResult.data)))
+                    .build());
+        } else {
+            return Mono.empty();
+        }
+
     }
 
 
     @Override
-    public DeviceMessage decode(MessageDecodeContext context) {
+    public Mono<DeviceMessage> decode(MessageDecodeContext context) {
         MqttMessage message = (MqttMessage) context.getMessage();
         String topic = message.getTopic();
-        String jsonData = message.getByteBuf().toString(StandardCharsets.UTF_8);
+        String jsonData = message.getPayload().toString(StandardCharsets.UTF_8);
 
         JSONObject object = JSON.parseObject(jsonData, JSONObject.class);
         if (object == null) {
             log.warn("无法解析设备[{}]消息:{}", message.getDeviceId(), jsonData);
-            return EmptyDeviceMessage.INSTANCE;
+            return Mono.empty();
         }
         CommonDeviceMessageReply reply = decode(topic, object).message;
         if (reply.getDeviceId() == null || reply.getDeviceId().isEmpty()) {
             reply.setDeviceId(message.getDeviceId());
         }
-        return reply;
+        return Mono.just(reply);
     }
 }

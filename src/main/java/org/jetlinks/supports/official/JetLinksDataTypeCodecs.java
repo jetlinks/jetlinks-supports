@@ -12,7 +12,7 @@ public class JetLinksDataTypeCodecs {
 
     private static final Map<String, DataTypeCodec<? extends DataType>> codecMap = new HashMap<>();
 
-    {
+    static {
         register(new JetLinksArrayCodec());
         register(new JetLinksBooleanCodec());
         register(new JetLinksDateCodec());

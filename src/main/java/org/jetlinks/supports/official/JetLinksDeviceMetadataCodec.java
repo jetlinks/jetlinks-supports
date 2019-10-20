@@ -3,6 +3,7 @@ package org.jetlinks.supports.official;
 import com.alibaba.fastjson.JSON;
 import org.jetlinks.core.metadata.DeviceMetadata;
 import org.jetlinks.core.metadata.DeviceMetadataCodec;
+import reactor.core.publisher.Mono;
 
 /**
  * <pre>
@@ -69,12 +70,12 @@ import org.jetlinks.core.metadata.DeviceMetadataCodec;
  */
 public class JetLinksDeviceMetadataCodec implements DeviceMetadataCodec {
     @Override
-    public DeviceMetadata decode(String source) {
-        return new JetLinksDeviceMetadata(JSON.parseObject(source));
+    public Mono<DeviceMetadata> decode(String source) {
+        return Mono.just(new JetLinksDeviceMetadata(JSON.parseObject(source)));
     }
 
     @Override
-    public String encode(DeviceMetadata metadata) {
-        return new JetLinksDeviceMetadata(metadata).toJson().toJSONString();
+    public Mono<String> encode(DeviceMetadata metadata) {
+        return Mono.just(new JetLinksDeviceMetadata(metadata).toJson().toJSONString());
     }
 }
