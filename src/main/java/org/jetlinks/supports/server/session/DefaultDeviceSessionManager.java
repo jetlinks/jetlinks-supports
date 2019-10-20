@@ -211,6 +211,13 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     }
 
     @Override
+    public Flux<DeviceSession> getAllSession() {
+        return Flux
+                .fromIterable(repository.values())
+                .distinct();
+    }
+
+    @Override
     public DeviceSession unregister(String idOrDeviceId) {
         DeviceSession client = repository.remove(idOrDeviceId);
 
