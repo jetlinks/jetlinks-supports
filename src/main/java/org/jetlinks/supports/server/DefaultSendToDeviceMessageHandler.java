@@ -2,7 +2,6 @@ package org.jetlinks.supports.server;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.device.DeviceMessageHandler;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceState;
 import org.jetlinks.core.device.DeviceStateInfo;
@@ -10,6 +9,7 @@ import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.ToDeviceMessageContext;
+import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.Flux;
@@ -23,13 +23,13 @@ public class DefaultSendToDeviceMessageHandler {
 
     private DeviceSessionManager sessionManager;
 
-    private DeviceMessageHandler deviceMessageHandler;
+    private MessageHandler handler;
 
     public void startup() {
 
         //处理发往设备的消息
-        deviceMessageHandler
-                .handleDeviceMessage(serverId)
+        handler
+                .handleSendToDeviceMessage(serverId)
                 .subscribe(message -> {
                     if (message instanceof DeviceMessage) {
                         handleDeviceMessage(((DeviceMessage) message));
@@ -40,9 +40,7 @@ public class DefaultSendToDeviceMessageHandler {
                 });
 
         //处理设备状态检查
-        deviceMessageHandler
-                .handleGetDeviceState(serverId, deviceId ->
-                        Flux.from(deviceId).map(id -> new DeviceStateInfo(id, sessionManager.getSession(id) != null ? DeviceState.online : DeviceState.offline)));
+        handler.handleGetDeviceState(serverId, deviceId -> Flux.from(deviceId).map(id -> new DeviceStateInfo(id, sessionManager.getSession(id) != null ? DeviceState.online : DeviceState.offline)));
 
     }
 
@@ -123,7 +121,7 @@ public class DefaultSendToDeviceMessageHandler {
 
 
     private Mono<Boolean> doReply(DeviceMessageReply reply) {
-        return deviceMessageHandler
+        return handler
                 .reply(reply)
                 .as(mo -> {
                     if (log.isDebugEnabled()) {

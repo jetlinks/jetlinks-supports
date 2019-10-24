@@ -13,7 +13,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.Objects;
@@ -130,11 +129,6 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                     for (Runnable runnable = scheduleJobQueue.poll(); runnable != null; runnable = scheduleJobQueue.poll()) {
                         runnable.run();
                     }
-//                    Map<String, Long> total = repository.values().stream()
-//                            .collect(Collectors.groupingBy(session -> session.getTransport().getId(), Collectors.counting()));
-
-//                    total.forEach((transport, number) -> gatewayServerMonitor.metrics().reportSession(transport, number.intValue()));
-
                     if (log.isInfoEnabled()) {
                         log.info("check session complete,current server sessions:{}.use time:{}ms.",
                                 transportCounter,

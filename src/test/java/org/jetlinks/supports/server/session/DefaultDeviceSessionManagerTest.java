@@ -8,30 +8,25 @@ import org.jetlinks.core.device.*;
 import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.server.monitor.GatewayServerMetrics;
 import org.jetlinks.core.server.monitor.GatewayServerMonitor;
-import org.jetlinks.core.server.session.DeviceSessionManager;
 import org.jetlinks.supports.DefaultProtocolSupports;
 import org.jetlinks.supports.server.monitor.MicrometerGatewayServerMetrics;
-import org.junit.Assert;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-
-import static org.junit.Assert.*;
 
 public class DefaultDeviceSessionManagerTest {
 
 
-    private DeviceMessageHandler handler = new StandaloneDeviceMessageHandler();
+    private DeviceOperationBroker handler = new StandaloneDeviceMessageBroker();
 
 
     @Test
     @SneakyThrows
     public void test() {
-        DeviceRegistry registry = new TestDeviceRegistry(new DefaultProtocolSupports(), new StandaloneDeviceMessageHandler());
+        DeviceRegistry registry = new TestDeviceRegistry(new DefaultProtocolSupports(), new StandaloneDeviceMessageBroker());
 
         DefaultDeviceSessionManager sessionManager = new DefaultDeviceSessionManager();
         sessionManager.setGatewayServerMonitor(new GatewayServerMonitor() {

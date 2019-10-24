@@ -51,7 +51,6 @@ public class MicrometerGatewayServerMetrics implements GatewayServerMetrics {
 
         registry.counter("gateway-server-requests-accepts", "transport", transport, "server", getServerId())
                 .increment();
-
     }
 
     @Override
