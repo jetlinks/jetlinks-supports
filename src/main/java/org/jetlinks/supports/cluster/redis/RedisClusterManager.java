@@ -16,18 +16,23 @@ public class RedisClusterManager implements ClusterManager {
     private Map<String, ClusterQueue> queues = new ConcurrentHashMap<>();
     private Map<String, ClusterTopic> topics = new ConcurrentHashMap<>();
     private Map<String, ClusterCache> caches = new ConcurrentHashMap<>();
-    private Map<String, HaManager> haManagers = new ConcurrentHashMap<>();
 
     private ReactiveRedisOperations<?, ?> commonOperations;
 
+    private RedisHaManager haManager;
+
     private RedisClusterNotifier notifier;
 
-    public RedisClusterManager(String name, String serverId, ReactiveRedisOperations<?, ?> operations) {
+    public RedisClusterManager(String name, ServerNode serverNode, ReactiveRedisOperations<?, ?> operations) {
         this.clusterName = name;
         this.commonOperations = operations;
-        this.notifier = new RedisClusterNotifier(name, serverId, this);
-        this.serverId=serverId;
+        this.notifier = new RedisClusterNotifier(name, serverNode.getId(), this);
+        this.serverId = serverNode.getId();
+        this.haManager = new RedisHaManager(name, serverNode, this, (ReactiveRedisOperations) operations);
+    }
 
+    public RedisClusterManager(String name, String serverId, ReactiveRedisOperations<?, ?> operations) {
+        this(name, ServerNode.builder().id(serverId).build(), operations);
     }
 
     @Override
@@ -36,11 +41,17 @@ public class RedisClusterManager implements ClusterManager {
     }
 
     public void startup() {
-        notifier.startup();
+        this.notifier.startup();
+        this.haManager.startup();
     }
 
-    public void shutdown(){
+    public void shutdown() {
+        this.haManager.shutdown();
+    }
 
+    @Override
+    public HaManager getHaManager() {
+        return haManager;
     }
 
     @SuppressWarnings("all")
@@ -69,6 +80,6 @@ public class RedisClusterManager implements ClusterManager {
 
     @Override
     public <K, V> ClusterCache<K, V> getCache(String cache) {
-        return caches.computeIfAbsent(cache, id -> new RedisClusterCache<K,V>(cache, this.getRedis()));
+        return caches.computeIfAbsent(cache, id -> new RedisClusterCache<K, V>(cache, this.getRedis()));
     }
 }

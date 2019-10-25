@@ -1,9 +1,6 @@
 package org.jetlinks.supports.cluster.redis;
 
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
 import java.io.Serializable;
 
@@ -11,6 +8,7 @@ import java.io.Serializable;
 @Setter
 @AllArgsConstructor(staticName = "of")
 @NoArgsConstructor
+@ToString
 public class NotifierMessage implements Serializable {
 
     private String messageId;

@@ -104,6 +104,12 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     @Override
+    public void stop() {
+        stopPoll();
+
+    }
+
+    @Override
     public Mono<T> poll() {
         return operations
                 .opsForList()
