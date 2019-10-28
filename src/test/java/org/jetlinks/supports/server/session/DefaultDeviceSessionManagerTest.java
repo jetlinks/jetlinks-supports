@@ -8,7 +8,7 @@ import org.jetlinks.core.device.*;
 import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.server.monitor.GatewayServerMetrics;
 import org.jetlinks.core.server.monitor.GatewayServerMonitor;
-import org.jetlinks.supports.DefaultProtocolSupports;
+import org.jetlinks.supports.protocol.StaticProtocolSupports;
 import org.jetlinks.supports.server.monitor.MicrometerGatewayServerMetrics;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
@@ -26,7 +26,7 @@ public class DefaultDeviceSessionManagerTest {
     @Test
     @SneakyThrows
     public void test() {
-        DeviceRegistry registry = new TestDeviceRegistry(new DefaultProtocolSupports(), new StandaloneDeviceMessageBroker());
+        DeviceRegistry registry = new TestDeviceRegistry(new StaticProtocolSupports(), new StandaloneDeviceMessageBroker());
 
         DefaultDeviceSessionManager sessionManager = new DefaultDeviceSessionManager();
         sessionManager.setGatewayServerMonitor(new GatewayServerMonitor() {

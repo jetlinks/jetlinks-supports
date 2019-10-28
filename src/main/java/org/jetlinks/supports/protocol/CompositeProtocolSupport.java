@@ -1,4 +1,4 @@
-package org.jetlinks.supports;
+package org.jetlinks.supports.protocol;
 
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -17,7 +17,6 @@ import reactor.core.publisher.Mono;
 import javax.annotation.Nonnull;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 @Getter
@@ -56,8 +55,7 @@ public class CompositeProtocolSupport implements ProtocolSupport {
     @Override
     public Flux<Transport> getSupportedTransport() {
         return Flux.fromIterable(messageCodecSupports.values())
-                .map(Supplier::get)
-                .flatMap(Function.identity())
+                .flatMap(Supplier::get)
                 .map(DeviceMessageCodec::getSupportTransport);
     }
 

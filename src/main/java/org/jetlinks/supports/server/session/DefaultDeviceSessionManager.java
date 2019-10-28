@@ -111,7 +111,7 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                 .doOnNext(this::unregister)
                 .collect(Collectors.counting())
                 .doOnNext((l) -> {
-                    if (log.isInfoEnabled()) {
+                    if (log.isInfoEnabled() && l > 0) {
                         log.info("expired sessions:{}", l);
                     }
                 })
@@ -186,11 +186,14 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
         //注册中心上线
         session.getOperator()
                 .online(serverId, session.getId())
+                .doFinally(s->{
+                    //通知
+                    if (onDeviceRegister.hasDownstreams()) {
+                        onDeviceRegister.onNext(session);
+                    }
+                })
                 .subscribe();
-        //通知
-        if (onDeviceRegister.hasDownstreams()) {
-            onDeviceRegister.onNext(session);
-        }
+
         return old;
     }
 
@@ -226,13 +229,16 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
             //注册中心下线
             client.getOperator()
                     .offline()
+                    .doFinally(s->{
+                        //通知
+                        if (onDeviceRegister.hasDownstreams()) {
+                            onDeviceUnRegister.onNext(client);
+                        }
+                    })
                     .subscribe();
             //加入关闭连接队列
             scheduleJobQueue.add(client::close);
-            //通知
-            if (onDeviceRegister.hasDownstreams()) {
-                onDeviceUnRegister.onNext(client);
-            }
+
         }
         return client;
     }

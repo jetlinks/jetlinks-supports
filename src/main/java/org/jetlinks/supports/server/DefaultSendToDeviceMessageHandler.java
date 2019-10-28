@@ -98,7 +98,7 @@ public class DefaultSendToDeviceMessageHandler {
                         }
 
                         @Override
-                        public DeviceOperator getDeviceOperator() {
+                        public DeviceOperator getDevice() {
                             return session.getOperator();
                         }
                     }))

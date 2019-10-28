@@ -58,26 +58,32 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> put(K key, V value) {
-        return clusterCache.put(key, value)
-                .doOnNext(r -> cache.invalidate(key))
-                .flatMap(r -> clearTopic.publish(Mono.just(key)))
-                .thenReturn(true);
+        return Mono.defer(() -> {
+            cache.invalidate(key);
+            return clusterCache.put(key, value)
+                    .flatMap(r -> clearTopic.publish(Mono.just(key)))
+                    .thenReturn(true);
+        });
     }
 
     @Override
     public Mono<Boolean> remove(K key) {
-        return clusterCache.remove(key)
-                .doOnNext(r -> cache.invalidate(key))
-                .flatMap(r -> clearTopic.publish(Mono.just(key)))
-                .thenReturn(true);
+        return Mono.defer(() -> {
+            cache.invalidate(key);
+            return clusterCache.remove(key)
+                    .flatMap(r -> clearTopic.publish(Mono.just(key)))
+                    .thenReturn(true);
+        });
     }
 
     @Override
     public Mono<Boolean> remove(Collection<K> key) {
-        return clusterCache.remove(key)
-                .doOnNext(r -> cache.invalidateAll(key))
-                .flatMap(r -> clearTopic.publish(Flux.fromIterable(key)))
-                .thenReturn(true);
+        return Mono.defer(() -> {
+            cache.invalidateAll(key);
+            return clusterCache.remove(key)
+                    .flatMap(r -> clearTopic.publish(Flux.fromIterable(key)))
+                    .thenReturn(true);
+        });
     }
 
     @Override
@@ -103,10 +109,12 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> putAll(Map<? extends K, ? extends V> multi) {
-        return clusterCache.putAll(multi)
-                .doOnSuccess(r -> cache.putAll(multi))
-                .flatMap(r -> clearTopic.publish(Flux.fromIterable(multi.keySet())))
-                .thenReturn(true);
+        return Mono.defer(() -> {
+            cache.putAll(multi);
+            return clusterCache.putAll(multi)
+                    .flatMap(r -> clearTopic.publish(Flux.fromIterable(multi.keySet())))
+                    .thenReturn(true);
+        });
     }
 
     @Override
@@ -121,7 +129,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Void> clear() {
-        return clusterCache.clear()
-                .doOnNext(r -> cache.invalidateAll());
+        return Mono.defer(() -> {
+            cache.invalidateAll();
+            return clusterCache.clear();
+        });
     }
 }

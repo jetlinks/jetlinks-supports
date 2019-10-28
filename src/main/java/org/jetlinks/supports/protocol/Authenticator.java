@@ -1,4 +1,4 @@
-package org.jetlinks.supports;
+package org.jetlinks.supports.protocol;
 
 import org.jetlinks.core.device.AuthenticationRequest;
 import org.jetlinks.core.device.AuthenticationResponse;
@@ -10,5 +10,5 @@ import javax.annotation.Nonnull;
 public interface Authenticator {
 
     Mono<AuthenticationResponse> authenticate(@Nonnull AuthenticationRequest request,
-                                              @Nonnull DeviceOperator deviceOperation);
+                                              @Nonnull DeviceOperator device);
 }

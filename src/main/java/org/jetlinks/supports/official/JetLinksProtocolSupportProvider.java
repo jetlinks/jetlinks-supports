@@ -1,10 +1,13 @@
 package org.jetlinks.supports.official;
 
 import org.jetlinks.core.message.codec.DefaultTransport;
-import org.jetlinks.supports.CompositeProtocolSupport;
+import org.jetlinks.core.message.codec.DeviceMessageCodec;
 import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
+import org.jetlinks.supports.protocol.CompositeProtocolSupport;
 import reactor.core.publisher.Mono;
+
+import java.util.function.Supplier;
 
 public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider {
 
@@ -23,8 +26,9 @@ public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider 
 
             JetLinksMQTTDeviceMessageCodec codec = new JetLinksMQTTDeviceMessageCodec();
 
-            support.addMessageCodecSupport(DefaultTransport.MQTT, () -> Mono.just(codec));
-            support.addMessageCodecSupport(DefaultTransport.MQTTS, () -> Mono.just(codec));
+            Supplier<Mono<DeviceMessageCodec>> codecSupplier = () -> Mono.just(codec);
+            support.addMessageCodecSupport(DefaultTransport.MQTT, codecSupplier);
+            support.addMessageCodecSupport(DefaultTransport.MQTTS, codecSupplier);
 
             return Mono.just(support);
         });

@@ -6,7 +6,7 @@ import org.jetlinks.core.device.AuthenticationRequest;
 import org.jetlinks.core.device.AuthenticationResponse;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.MqttAuthenticationRequest;
-import org.jetlinks.supports.Authenticator;
+import org.jetlinks.supports.protocol.Authenticator;
 import reactor.core.publisher.Mono;
 
 import javax.annotation.Nonnull;

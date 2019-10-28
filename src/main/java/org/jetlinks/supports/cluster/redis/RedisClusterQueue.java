@@ -110,6 +110,13 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     @Override
+    public Mono<Integer> size() {
+        return operations.opsForList()
+                .size(id)
+                .map(Number::intValue);
+    }
+
+    @Override
     public Mono<T> poll() {
         return operations
                 .opsForList()
