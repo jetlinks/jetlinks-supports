@@ -27,6 +27,6 @@ public class NotifierMessageReply implements Serializable {
     }
 
     public static NotifierMessageReply fail(String address, String messageId, Throwable e) {
-        return of(address, messageId, null, false, e.getClass().getName().concat(":").concat(e.getMessage()));
+        return of(address, messageId, null, false, e.getClass().getName().concat(":").concat(String.valueOf(e.getMessage())));
     }
 }

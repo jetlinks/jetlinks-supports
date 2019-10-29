@@ -79,7 +79,13 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                 return;
             }
             pollBatch()
-                    .doOnNext(processor::onNext)
+                    .doOnNext(v -> {
+                        if (!processor.hasDownstreams()) {
+                            operations.opsForList().leftPush(id, v).subscribe();
+                        } else {
+                            processor.onNext(v);
+                        }
+                    })
                     .count()
                     .doFinally((s) -> polling.set(false))
                     .subscribe(r -> {
@@ -92,8 +98,12 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     protected void stopPoll() {
-        disposable.dispose();
-        timer.dispose();
+        if (disposable != null) {
+            disposable.dispose();
+        }
+        if (timer != null) {
+            timer.dispose();
+        }
     }
 
     @Override

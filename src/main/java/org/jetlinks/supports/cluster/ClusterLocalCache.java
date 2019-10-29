@@ -67,6 +67,15 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
     }
 
     @Override
+    public Mono<Boolean> putIfAbsent(K key, V value) {
+        return Mono.defer(() -> {
+            cache.invalidate(key);
+            return clusterCache.putIfAbsent(key, value)
+                    .flatMap(r -> clearTopic.publish(Mono.just(key)).thenReturn(r));
+        });
+    }
+
+    @Override
     public Mono<Boolean> remove(K key) {
         return Mono.defer(() -> {
             cache.invalidate(key);
