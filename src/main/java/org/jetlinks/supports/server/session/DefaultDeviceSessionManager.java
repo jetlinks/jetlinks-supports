@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -46,9 +47,9 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     @Setter
     private ScheduledExecutorService executorService;
 
-    private EmitterProcessor<DeviceSession> onDeviceRegister = EmitterProcessor.create(false);
+    private FluxProcessor<DeviceSession, DeviceSession> onDeviceRegister = EmitterProcessor.create(false);
 
-    private EmitterProcessor<DeviceSession> onDeviceUnRegister = EmitterProcessor.create(false);
+    private FluxProcessor<DeviceSession, DeviceSession> onDeviceUnRegister = EmitterProcessor.create(false);
 
     private String serverId;
 
@@ -186,7 +187,7 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
         //注册中心上线
         session.getOperator()
                 .online(serverId, session.getId())
-                .doFinally(s->{
+                .doFinally(s -> {
                     //通知
                     if (onDeviceRegister.hasDownstreams()) {
                         onDeviceRegister.onNext(session);
@@ -199,19 +200,23 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
 
     @Override
     public Flux<DeviceSession> onRegister() {
-        return onDeviceRegister.map(Function.identity());
+        return onDeviceRegister
+                .map(Function.identity())
+                .doOnError(err -> log.error(err.getMessage(), err));
     }
 
     @Override
     public Flux<DeviceSession> onUnRegister() {
-        return onDeviceUnRegister.map(Function.identity());
+        return onDeviceUnRegister
+                .map(Function.identity())
+                .doOnError(err -> log.error(err.getMessage(), err));
     }
 
     @Override
     public Flux<DeviceSession> getAllSession() {
         return Flux
                 .fromIterable(repository.values())
-                .distinct();
+                .distinct(DeviceSession::getDeviceId);
     }
 
     @Override
@@ -229,9 +234,9 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
             //注册中心下线
             client.getOperator()
                     .offline()
-                    .doFinally(s->{
+                    .doFinally(s -> {
                         //通知
-                        if (onDeviceRegister.hasDownstreams()) {
+                        if (onDeviceUnRegister.hasDownstreams()) {
                             onDeviceUnRegister.onNext(client);
                         }
                     })
