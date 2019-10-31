@@ -151,6 +151,7 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
 
     }
 
+
     @Override
     public DeviceSession getSession(String clientId) {
         DeviceSession session = repository.get(clientId);

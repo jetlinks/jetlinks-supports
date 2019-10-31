@@ -23,7 +23,7 @@ public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider 
 
             support.addAuthenticator(DefaultTransport.MQTT, new JetLinksAuthenticator());
             support.addAuthenticator(DefaultTransport.MQTTS, new JetLinksAuthenticator());
-
+            support.setMetadataCodec(new JetLinksDeviceMetadataCodec());
             JetLinksMQTTDeviceMessageCodec codec = new JetLinksMQTTDeviceMessageCodec();
 
             Supplier<Mono<DeviceMessageCodec>> codecSupplier = () -> Mono.just(codec);

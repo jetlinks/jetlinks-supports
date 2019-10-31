@@ -7,11 +7,12 @@ import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSession;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
+import reactor.extra.processor.TopicProcessor;
 
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 
 @Slf4j
@@ -22,32 +23,47 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     private FluxProcessor<Message, Message> processor;
 
     public DefaultDecodedClientMessageHandler(MessageHandler handler) {
-        this(handler, EmitterProcessor.create(false));
+        this(handler, TopicProcessor.<Message>builder()
+                .bufferSize(128)
+                .executor(ForkJoinPool.commonPool())
+                .requestTaskExecutor(ForkJoinPool.commonPool())
+                .share(true)
+                .autoCancel(false)
+                .build());
     }
 
     public DefaultDecodedClientMessageHandler(MessageHandler handler, FluxProcessor<Message, Message> processor) {
         this.deviceMessageBroker = handler;
         this.processor = processor;
-        this.subscribe().flatMap(message -> {
-            if (message instanceof DeviceMessageReply) {
-                //强制回复
-                if (message.getHeader(Headers.forceReply).orElse(false)) {
-                    return doReply(((DeviceMessageReply) message));
-                }
-                if (!(message instanceof EventMessage)) {
-                    return doReply(((DeviceMessageReply) message));
-                }
-            }
-            return Mono.just(true);
-        })
+        this.subscribe()
+                .flatMap(message -> {
+                    if (message instanceof DeviceMessageReply) {
+                        //强制回复
+                        if (message.getHeader(Headers.forceReply).orElse(false)) {
+                            return doReply(((DeviceMessageReply) message));
+                        }
+                        if (!(message instanceof EventMessage)) {
+                            return doReply(((DeviceMessageReply) message));
+                        }
+                    }
+                    return Mono.just(true);
+                })
+                .onErrorContinue((err, res) -> {
+                    log.error("reply device message [{}] error", res, err);
+                })
                 .subscribe(success -> {
 
                 });
     }
 
+    public void shutdown() {
+
+    }
+
     public Flux<Message> subscribe() {
         return processor
-                .map(Function.identity());
+                .map(Function.identity())
+                .doOnError(err -> log.error(err.getMessage(), err));
     }
 
     @Override
