@@ -80,17 +80,16 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
     public void handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
         clusterManager.<DeviceCheckRequest>getTopic("device:state:checker:".concat(serverId))
                 .subscribe()
-                .subscribe(request -> {
-                    stateMapper.apply(Flux.fromIterable(request.getDeviceId()))
-                            .collectList()
-                            .map(resp -> new DeviceCheckResponse(resp, request.getRequestId()))
-                            .as(clusterManager.getTopic("device:state:check:result:".concat(request.getFrom()))::publish)
-                            .subscribe(len -> {
-                                if (len <= 0) {
-                                    log.warn("device check reply fail");
-                                }
-                            });
-                });
+                .subscribe(request ->
+                        stateMapper.apply(Flux.fromIterable(request.getDeviceId()))
+                                .collectList()
+                                .map(resp -> new DeviceCheckResponse(resp, request.getRequestId()))
+                                .as(clusterManager.getTopic("device:state:check:result:".concat(request.getFrom()))::publish)
+                                .subscribe(len -> {
+                                    if (len <= 0) {
+                                        log.warn("device check reply fail");
+                                    }
+                                }));
     }
 
     @Override
