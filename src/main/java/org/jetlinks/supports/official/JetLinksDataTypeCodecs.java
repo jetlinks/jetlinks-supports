@@ -30,8 +30,25 @@ public class JetLinksDataTypeCodecs {
         codecMap.put(codec.getTypeId(), codec);
     }
 
-    public static Optional< DataTypeCodec<DataType>> getCodec(String typeId) {
+    public static Optional<DataTypeCodec<DataType>> getCodec(String typeId) {
 
         return Optional.ofNullable((DataTypeCodec) codecMap.get(typeId));
+    }
+
+    public static DataType decode(DataType type, Map<String, Object> config) {
+        if (type == null) {
+            return null;
+        }
+        return getCodec(type.getId())
+                .map(codec -> codec.decode(type, config))
+                .orElse(type);
+    }
+
+    public static Optional<Map<String, Object>> encode(DataType type) {
+        if (type == null) {
+            return Optional.empty();
+        }
+        return getCodec(type.getId())
+                .map(codec -> codec.encode(type));
     }
 }

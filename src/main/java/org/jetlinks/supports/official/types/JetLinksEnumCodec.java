@@ -24,6 +24,8 @@ public class JetLinksEnumCodec implements DataTypeCodec<EnumType> {
     public EnumType decode(EnumType type, Map<String, Object> config) {
         JSONObject jsonObject = new JSONObject(config);
 
+        ofNullable(jsonObject.getString("description"))
+                .ifPresent(type::setDescription);
 
         ofNullable(jsonObject.getJSONArray("enums"))
                 .map(list -> list.stream()
@@ -42,6 +44,8 @@ public class JetLinksEnumCodec implements DataTypeCodec<EnumType> {
                 .stream()
                 .map(EnumType.Element::toMap).collect(Collectors.toList()));
 
+        json.put("type",getTypeId());
+        json.put("description", type.getDescription());
         return json;
     }
 }

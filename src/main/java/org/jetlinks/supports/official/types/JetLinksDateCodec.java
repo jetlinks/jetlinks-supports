@@ -6,6 +6,7 @@ import lombok.Setter;
 import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.types.DateTimeType;
 
+import java.time.ZoneId;
 import java.util.Map;
 
 import static java.util.Optional.ofNullable;
@@ -25,7 +26,12 @@ public class JetLinksDateCodec implements DataTypeCodec<DateTimeType> {
         ofNullable(jsonObject.getString("format"))
                 .ifPresent(type::setFormat);
         ofNullable(jsonObject.getString("tz"))
-                .ifPresent(type::setTzOffset);
+                .map(ZoneId::of)
+                .ifPresent(type::setZoneId);
+
+        ofNullable(jsonObject.getString("description"))
+                .ifPresent(type::setDescription);
+
 
         return type;
     }
@@ -34,8 +40,10 @@ public class JetLinksDateCodec implements DataTypeCodec<DateTimeType> {
     public Map<String, Object> encode(DateTimeType type) {
         JSONObject json = new JSONObject();
         json.put("format", type.getFormat());
-        json.put("tz", type.getTzOffset());
+        json.put("tz", type.getZoneId().toString());
 
+        json.put("type",getTypeId());
+        json.put("description", type.getDescription());
         return json;
     }
 }

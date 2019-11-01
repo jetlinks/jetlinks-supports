@@ -1,12 +1,11 @@
 package org.jetlinks.supports.server;
 
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.message.DeviceMessageReply;
-import org.jetlinks.core.message.Headers;
-import org.jetlinks.core.message.Message;
+import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSession;
+import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
@@ -22,8 +21,10 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
 
     private FluxProcessor<Message, Message> processor;
 
-    public DefaultDecodedClientMessageHandler(MessageHandler handler) {
-        this(handler, TopicProcessor.<Message>builder()
+    private DeviceSessionManager sessionManager;
+
+    public DefaultDecodedClientMessageHandler(MessageHandler handler, DeviceSessionManager sessionManager) {
+        this(handler, sessionManager, TopicProcessor.<Message>builder()
                 .bufferSize(128)
                 .executor(ForkJoinPool.commonPool())
                 .requestTaskExecutor(ForkJoinPool.commonPool())
@@ -32,28 +33,38 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
                 .build());
     }
 
-    public DefaultDecodedClientMessageHandler(MessageHandler handler, FluxProcessor<Message, Message> processor) {
+    public DefaultDecodedClientMessageHandler(MessageHandler handler, DeviceSessionManager sessionManager, FluxProcessor<Message, Message> processor) {
         this.deviceMessageBroker = handler;
         this.processor = processor;
-        this.subscribe()
-                .flatMap(message -> {
-                    if (message instanceof DeviceMessageReply) {
-                        //强制回复
-                        if (message.getHeader(Headers.forceReply).orElse(false)) {
-                            return doReply(((DeviceMessageReply) message));
-                        }
-                        if (!(message instanceof EventMessage)) {
-                            return doReply(((DeviceMessageReply) message));
-                        }
-                    }
-                    return Mono.just(true);
-                })
-                .onErrorContinue((err, res) -> {
-                    log.error("reply device message [{}] error", res, err);
-                })
-                .subscribe(success -> {
+        this.sessionManager = sessionManager;
+    }
 
-                });
+    protected Mono<Boolean> handleDeviceMessageReply(DeviceMessageReply message) {
+        //强制回复
+        if (message.getHeader(Headers.forceReply).orElse(false)) {
+            return doReply(message);
+        }
+        if (!(message instanceof EventMessage)) {
+            return doReply(message);
+        }
+        return Mono.just(true);
+    }
+
+    protected Mono<Boolean> handleChildrenDeviceMessageReply(ChildDeviceMessageReply reply) {
+        Message message = reply.getChildDeviceMessage();
+        String deviceId = reply.getChildDeviceId();
+        if (message instanceof DeviceMessageReply) {
+            return handleDeviceMessageReply(((DeviceMessageReply) message));
+        } else if (message instanceof DeviceOnlineMessage) {
+            return sessionManager.registerChildren(reply.getDeviceId(), deviceId)
+                    .map(__ -> true)
+                    .switchIfEmpty(Mono.just(false));
+        } else if (message instanceof DeviceOfflineMessage) {
+            return sessionManager.unRegisterChildren(reply.getDeviceId(), deviceId)
+                    .map(__ -> true)
+                    .switchIfEmpty(Mono.just(false));
+        }
+        return Mono.just(true);
     }
 
     public void shutdown() {
@@ -68,10 +79,22 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
 
     @Override
     public Mono<Boolean> handleMessage(DeviceSession session, Message message) {
-        return Mono.fromSupplier(() -> {
-            processor.onNext(message);
-            return true;
-        });
+        return Mono.defer(() -> {
+            if (message instanceof ChildDeviceMessageReply) {
+                return handleChildrenDeviceMessageReply(((ChildDeviceMessageReply) message));
+            }
+            if (message instanceof DeviceMessageReply) {
+                return handleDeviceMessageReply(((DeviceMessageReply) message));
+            }
+            return Mono.just(true);
+        })
+                .switchIfEmpty(Mono.just(false))
+                .doOnError(err -> log.error("handle device[{}] message [{}] error", session.getDeviceId(), message, err))
+                .doFinally(s -> {
+                    if (processor.hasDownstreams()) {
+                        processor.onNext(message);
+                    }
+                });
 
     }
 
@@ -81,6 +104,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         }
         return deviceMessageBroker
                 .reply(reply)
+                .switchIfEmpty(Mono.just(false))
                 .doOnSuccess(success -> {
                     if (log.isDebugEnabled()) {
                         log.debug("reply message {} complete", reply.getMessageId());

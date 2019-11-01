@@ -2,9 +2,7 @@ package org.jetlinks.supports.server;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.device.DeviceOperator;
-import org.jetlinks.core.device.DeviceState;
-import org.jetlinks.core.device.DeviceStateInfo;
+import org.jetlinks.core.device.*;
 import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.EncodedMessage;
@@ -25,11 +23,12 @@ public class DefaultSendToDeviceMessageHandler {
 
     private MessageHandler handler;
 
+    private DeviceRegistry registry;
+
     public void startup() {
 
         //处理发往设备的消息
-        handler
-                .handleSendToDeviceMessage(serverId)
+        handler.handleSendToDeviceMessage(serverId)
                 .subscribe(message -> {
                     if (message instanceof DeviceMessage) {
                         handleDeviceMessage(((DeviceMessage) message));
@@ -40,7 +39,9 @@ public class DefaultSendToDeviceMessageHandler {
                 });
 
         //处理设备状态检查
-        handler.handleGetDeviceState(serverId, deviceId -> Flux.from(deviceId).map(id -> new DeviceStateInfo(id, sessionManager.getSession(id) != null ? DeviceState.online : DeviceState.offline)));
+        handler.handleGetDeviceState(serverId, deviceId -> Flux
+                .from(deviceId)
+                .map(id -> new DeviceStateInfo(id, sessionManager.sessionIsAlive(id) ? DeviceState.online : DeviceState.offline)));
 
     }
 
@@ -51,10 +52,39 @@ public class DefaultSendToDeviceMessageHandler {
         if (session != null) {
             doSend(message, session);
         } else {
-            log.warn("device[{}] not connected,send message fail", message.getDeviceId());
-            doReply(createReply(deviceId, message)
-                    .error(ErrorCode.CLIENT_OFFLINE))
+            //判断子设备消息
+            registry.getDevice(deviceId)
+                    .flatMap(deviceOperator -> {
+                        //获取上级设备
+                        return deviceOperator
+                                .getConfig(DeviceConfigKey.parentMeshDeviceId)
+                                .flatMap(registry::getDevice);
+                    })
+                    .flatMap(operator -> {
+                        ChildDeviceMessage children = new ChildDeviceMessage();
+                        children.setDeviceId(operator.getDeviceId());
+                        children.setMessageId(message.getMessageId());
+                        children.setTimestamp(message.getTimestamp());
+                        children.setChildDeviceId(deviceId);
+                        children.setChildDeviceMessage(message);
+                        DeviceSession parentSession = sessionManager.getSession(operator.getDeviceId());
+                        if (null != parentSession) {
+                            doSend(children, parentSession);
+                            return Mono.just(true);
+                        }
+                        return operator
+                                .messageSender()
+                                .send(Mono.just(children))
+                                .flatMap(this::doReply)
+                                .all(r -> r);
+                    })
+                    .switchIfEmpty(Mono.defer(() -> {
+                        log.warn("device[{}] not connected,send message fail", message.getDeviceId());
+                        return doReply(createReply(deviceId, message)
+                                .error(ErrorCode.CLIENT_OFFLINE));
+                    }))
                     .subscribe();
+
         }
     }
 

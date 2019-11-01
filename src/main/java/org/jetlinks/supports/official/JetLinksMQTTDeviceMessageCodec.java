@@ -51,7 +51,7 @@ public class JetLinksMQTTDeviceMessageCodec implements DeviceMessageCodec {
         private CommonDeviceMessageReply message;
     }
 
-    protected EncodeResult encode(DeviceMessage message) {
+    protected EncodeResult encode(Message message) {
         if (message instanceof ReadPropertyMessage) {
             String topic = "/read-property";
             JSONObject mqttData = new JSONObject();
@@ -140,7 +140,7 @@ public class JetLinksMQTTDeviceMessageCodec implements DeviceMessageCodec {
 
 
     @Override
-    public Mono<DeviceMessage> decode(MessageDecodeContext context) {
+    public Mono<Message> decode(MessageDecodeContext context) {
         MqttMessage message = (MqttMessage) context.getMessage();
         String topic = message.getTopic();
         String jsonData = message.getPayload().toString(StandardCharsets.UTF_8);

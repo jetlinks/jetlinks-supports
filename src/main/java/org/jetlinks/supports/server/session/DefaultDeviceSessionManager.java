@@ -2,8 +2,10 @@ package org.jetlinks.supports.server.session;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.jetlinks.core.device.DeviceRegistry;
 import org.jetlinks.core.message.codec.Transport;
 import org.jetlinks.core.server.monitor.GatewayServerMonitor;
+import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import org.slf4j.Logger;
@@ -14,10 +16,7 @@ import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.util.ArrayDeque;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -35,6 +34,8 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
 
     private final Map<String, DeviceSession> repository = new ConcurrentHashMap<>(4096);
 
+    private final Map<String, Map<String, ChildrenDeviceSession>> children = new ConcurrentHashMap<>(4096);
+
     @Getter
     @Setter
     private Logger log = LoggerFactory.getLogger(DefaultDeviceSessionManager.class);
@@ -46,6 +47,10 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     @Getter
     @Setter
     private ScheduledExecutorService executorService;
+
+    @Getter
+    @Setter
+    private DeviceRegistry registry;
 
     private FluxProcessor<DeviceSession, DeviceSession> onDeviceRegister = EmitterProcessor.create(false);
 
@@ -141,6 +146,7 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
 
     public void init() {
         Objects.requireNonNull(gatewayServerMonitor, "gatewayServerMonitor");
+        Objects.requireNonNull(registry, "registry");
         if (executorService == null) {
             executorService = Executors.newSingleThreadScheduledExecutor();
         }
@@ -155,10 +161,55 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     @Override
     public DeviceSession getSession(String clientId) {
         DeviceSession session = repository.get(clientId);
+
         if (session == null || !session.isAlive()) {
             return null;
         }
         return session;
+    }
+
+    @Override
+    public Mono<ChildrenDeviceSession> getSession(String deviceId, String childrenId) {
+        return Mono.justOrEmpty(children.get(deviceId))
+                .map(map -> map.get(childrenId))
+                .filter(ChildrenDeviceSession::isAlive);
+    }
+
+    @Override
+    public Mono<ChildrenDeviceSession> registerChildren(String deviceId, String childrenDeviceId) {
+        return Mono.defer(() -> {
+            DeviceSession session = getSession(deviceId);
+            if (session == null) {
+                return Mono.empty();
+            }
+            return registry
+                    .getDevice(childrenDeviceId)
+                    .switchIfEmpty(Mono.fromRunnable(() -> {
+                        log.warn("device [{}] not fond in registry", childrenDeviceId);
+                    }))
+                    .flatMap(deviceOperator -> deviceOperator
+                            .online(serverId, session.getId())
+                            .thenReturn(new ChildrenDeviceSession(childrenDeviceId, session, deviceOperator)))
+                    .doOnSuccess(s -> children.computeIfAbsent(deviceId, __ -> new ConcurrentHashMap<>()).put(childrenDeviceId, s));
+        });
+
+    }
+
+    @Override
+    public Mono<ChildrenDeviceSession> unRegisterChildren(String deviceId, String childrenId) {
+
+        return Mono.justOrEmpty(children.get(deviceId))
+                .flatMap(map -> Mono.justOrEmpty(map.remove(childrenId)))
+                .doOnNext(ChildrenDeviceSession::close)
+                .flatMap(session -> session.getOperator()
+                        .offline()
+                        .doFinally(s -> {
+                            //通知
+                            if (onDeviceRegister.hasDownstreams()) {
+                                onDeviceRegister.onNext(session);
+                            }
+                        })
+                        .thenReturn(session));
     }
 
     @Override
@@ -185,6 +236,7 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                     .computeIfAbsent(session.getTransport().getId(), transport -> new LongAdder())
                     .increment();
         }
+
         //注册中心上线
         session.getOperator()
                 .online(serverId, session.getId())
@@ -221,32 +273,57 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     }
 
     @Override
-    public DeviceSession unregister(String idOrDeviceId) {
-        DeviceSession client = repository.remove(idOrDeviceId);
+    public boolean sessionIsAlive(String deviceId) {
+        return getSession(deviceId) != null
+                ||
+                children.values()
+                        .stream()
+                        .anyMatch(r -> {
+                            DeviceSession session = r.get(deviceId);
+                            return session != null && session.isAlive();
+                        });
+    }
 
-        if (null != client) {
-            if (!client.getId().equals(client.getDeviceId())) {
-                repository.remove(client.getId().equals(idOrDeviceId) ? client.getDeviceId() : client.getId());
+    @Override
+    public DeviceSession unregister(String idOrDeviceId) {
+        DeviceSession session = repository.remove(idOrDeviceId);
+
+        if (null != session) {
+            if (!session.getId().equals(session.getDeviceId())) {
+                repository.remove(session.getId().equals(idOrDeviceId) ? session.getDeviceId() : session.getId());
             }
             //本地计数
             transportCounter
-                    .computeIfAbsent(client.getTransport().getId(), transport -> new LongAdder())
+                    .computeIfAbsent(session.getTransport().getId(), transport -> new LongAdder())
                     .decrement();
             //注册中心下线
-            client.getOperator()
+            session.getOperator()
                     .offline()
                     .doFinally(s -> {
                         //通知
                         if (onDeviceUnRegister.hasDownstreams()) {
-                            onDeviceUnRegister.onNext(client);
+                            onDeviceUnRegister.onNext(session);
                         }
                     })
                     .subscribe();
-            //加入关闭连接队列
-            scheduleJobQueue.add(client::close);
+            //下线子设备
+            Mono.justOrEmpty(children.remove(session.getDeviceId()))
+                    .flatMapIterable(Map::values)
+                    .flatMap(childrenDeviceSession -> childrenDeviceSession.getOperator()
+                            .offline()
+                            .doFinally(s -> {
+                                if (onDeviceUnRegister.hasDownstreams()) {
+                                    onDeviceUnRegister.onNext(childrenDeviceSession);
+                                }
+                                scheduleJobQueue.add(childrenDeviceSession::close);
+                            })
+                    )
+                    .subscribe();
 
+            //加入关闭连接队列
+            scheduleJobQueue.add(session::close);
         }
-        return client;
+        return session;
     }
 
 }

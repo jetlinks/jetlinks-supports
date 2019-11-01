@@ -61,7 +61,7 @@ public class CompositeProtocolSupport implements ProtocolSupport {
 
     @Nonnull
     @Override
-    public Mono<DeviceMessageCodec> getMessageCodec(Transport transport) {
+    public Mono<? extends DeviceMessageCodec> getMessageCodec(Transport transport) {
         return messageCodecSupports.getOrDefault(transport.getId(), Mono::empty).get();
     }
 

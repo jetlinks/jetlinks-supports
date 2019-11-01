@@ -1,10 +1,10 @@
 package org.jetlinks.supports.server.session;
 
-import io.micrometer.core.instrument.Metrics;
-import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.SneakyThrows;
-import org.jetlinks.core.device.*;
+import org.jetlinks.core.device.DeviceInfo;
+import org.jetlinks.core.device.DeviceOperationBroker;
+import org.jetlinks.core.device.DeviceRegistry;
+import org.jetlinks.core.device.StandaloneDeviceMessageBroker;
 import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.server.monitor.GatewayServerMetrics;
 import org.jetlinks.core.server.monitor.GatewayServerMonitor;
@@ -29,6 +29,8 @@ public class DefaultDeviceSessionManagerTest {
         DeviceRegistry registry = new TestDeviceRegistry(new StaticProtocolSupports(), new StandaloneDeviceMessageBroker());
 
         DefaultDeviceSessionManager sessionManager = new DefaultDeviceSessionManager();
+        sessionManager.setRegistry(registry);
+
         sessionManager.setGatewayServerMonitor(new GatewayServerMonitor() {
             @Override
             public String getCurrentServerId() {
@@ -40,9 +42,6 @@ public class DefaultDeviceSessionManagerTest {
                 return new MicrometerGatewayServerMetrics("test");
             }
         });
-
-        Metrics.addRegistry(new SimpleMeterRegistry());
-        Metrics.addRegistry(new LoggingMeterRegistry());
 
         sessionManager.init();
 

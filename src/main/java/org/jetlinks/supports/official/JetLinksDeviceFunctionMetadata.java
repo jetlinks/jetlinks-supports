@@ -3,11 +3,15 @@ package org.jetlinks.supports.official;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
+import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.FunctionMetadata;
 import org.jetlinks.core.metadata.Jsonable;
 import org.jetlinks.core.metadata.PropertyMetadata;
+import org.jetlinks.core.metadata.types.DataTypes;
+import org.jetlinks.core.metadata.types.UnknownType;
 
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -22,7 +26,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
 
     private List<PropertyMetadata> inputs;
 
-    private PropertyMetadata output;
+    private DataType output;
 
     @Getter
     @Setter
@@ -74,16 +78,15 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     }
 
     @Override
-    public PropertyMetadata getOutput() {
+    public DataType getOutput() {
         if (output == null && jsonObject != null) {
-            output = Optional.ofNullable(jsonObject.getJSONObject("output"))
-                    .map(JetLinksPropertyMetadata::new)
-                    .orElse(null);
+            output = Optional.ofNullable(jsonObject.getString("output"))
+                    .map(DataTypes::lookup)
+                    .map(Supplier::get)
+                    .orElseGet(UnknownType::new);
         }
         if (output == null && another != null) {
-            output = Optional.ofNullable(another.getOutput())
-                    .map(JetLinksPropertyMetadata::new)
-                    .orElse(null);
+            output = another.getOutput();
         }
         return output;
     }
@@ -109,9 +112,9 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         json.put("description", description);
         json.put("async", async);
         json.put("inputs", getInputs().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        Optional.ofNullable(getOutput())
-                .map(Jsonable::toJson)
-                .ifPresent(output -> json.put("output", output));
+        if (output instanceof Jsonable) {
+            json.put("output", ((Jsonable) output).toJson());
+        }
         json.put("expands", expands);
 
         return json;

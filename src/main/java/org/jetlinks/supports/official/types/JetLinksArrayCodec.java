@@ -25,7 +25,8 @@ public class JetLinksArrayCodec implements DataTypeCodec<ArrayType> {
     @Override
     public ArrayType decode(ArrayType type, Map<String, Object> config) {
         JSONObject jsonObject = new JSONObject(config);
-
+        ofNullable(jsonObject.getString("description"))
+                .ifPresent(type::setDescription);
         ofNullable(jsonObject.getJSONObject("eleType"))
                 .map(eleType -> {
                     DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
@@ -46,6 +47,8 @@ public class JetLinksArrayCodec implements DataTypeCodec<ArrayType> {
         JetLinksDataTypeCodecs.getCodec(type.getId())
                 .ifPresent(codec-> json.put("eleType", codec.encode(type.getElementType())));
 
+        json.put("type",getTypeId());
+        json.put("description", type.getDescription());
         return json;
     }
 }

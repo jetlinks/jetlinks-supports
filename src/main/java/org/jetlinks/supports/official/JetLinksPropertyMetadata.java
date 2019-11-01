@@ -5,7 +5,6 @@ import lombok.Getter;
 import lombok.Setter;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.DataTypeCodec;
-import org.jetlinks.core.metadata.Jsonable;
 import org.jetlinks.core.metadata.PropertyMetadata;
 import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.core.metadata.types.UnknownType;
@@ -88,11 +87,7 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
         json.put("id", id);
         json.put("name", name);
         json.put("description", description);
-        if (null != getValueType()) {
-            if (getValueType() instanceof Jsonable) {
-                json.put("valueType", ((Jsonable) getValueType()).toJson());
-            }
-        }
+        json.put("valueType", JetLinksDataTypeCodecs.encode(getValueType()).orElse(null));
         return json;
     }
 
@@ -111,9 +106,9 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
     @Override
     public String toString() {
         //  /* 测试 */ int name,
-        return String.join("", new String[]{
-                " /* ", getName(), " */ ", getValueType().getId(), " ", getId()
-        });
+        return String.join("",
+                getValueType().getId(), " ", getId(), " /* ", getName(), " */ "
+        );
 
     }
 }

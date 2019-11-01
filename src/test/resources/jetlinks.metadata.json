@@ -1,12 +1,4 @@
-package org.jetlinks.supports.official;
-
-import com.alibaba.fastjson.JSON;
-import org.jetlinks.core.metadata.DeviceMetadata;
-import org.jetlinks.core.metadata.DeviceMetadataCodec;
-import reactor.core.publisher.Mono;
-
-/*
- {
+{
   "id": "test",
   "name": "测试",
   "properties": [
@@ -75,21 +67,4 @@ import reactor.core.publisher.Mono;
       }
     }
   ]
-}
- */
-
-/**
- * @author zhouhao
- * @since 1.0.0
- */
-public class JetLinksDeviceMetadataCodec implements DeviceMetadataCodec {
-    @Override
-    public Mono<DeviceMetadata> decode(String source) {
-        return Mono.just(new JetLinksDeviceMetadata(JSON.parseObject(source)));
-    }
-
-    @Override
-    public Mono<String> encode(DeviceMetadata metadata) {
-        return Mono.just(new JetLinksDeviceMetadata(metadata).toJson().toJSONString());
-    }
 }

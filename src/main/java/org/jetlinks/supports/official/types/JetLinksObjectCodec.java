@@ -33,6 +33,8 @@ public class JetLinksObjectCodec implements DataTypeCodec<ObjectType> {
                         .<PropertyMetadata>map(JetLinksPropertyMetadata::new)
                         .collect(Collectors.toList()))
                 .ifPresent(type::setProperties);
+        ofNullable(jsonObject.getString("description"))
+                .ifPresent(type::setDescription);
 
         return type;
     }
@@ -44,7 +46,8 @@ public class JetLinksObjectCodec implements DataTypeCodec<ObjectType> {
                 .stream()
                 .map(PropertyMetadata::toJson)
                 .collect(Collectors.toList()));
-
+        json.put("description", type.getDescription());
+        json.put("type",getTypeId());
         return json;
     }
 }

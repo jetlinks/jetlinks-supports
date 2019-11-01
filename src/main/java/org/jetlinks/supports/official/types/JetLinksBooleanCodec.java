@@ -32,6 +32,8 @@ public class JetLinksBooleanCodec implements DataTypeCodec<BooleanType> {
                 .ifPresent(type::setTrueValue);
         ofNullable(jsonObject.getString("falseValue"))
                 .ifPresent(type::setFalseValue);
+        ofNullable(jsonObject.getString("description"))
+                .ifPresent(type::setDescription);
 
         return type;
     }
@@ -44,6 +46,8 @@ public class JetLinksBooleanCodec implements DataTypeCodec<BooleanType> {
         json.put("trueValue", type.getTrueValue());
         json.put("falseValue", type.getFalseValue());
 
+        json.put("type",getTypeId());
+        json.put("description", type.getDescription());
         return json;
     }
 }

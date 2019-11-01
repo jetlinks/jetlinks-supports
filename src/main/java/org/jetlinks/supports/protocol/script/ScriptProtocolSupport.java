@@ -72,7 +72,7 @@ public class ScriptProtocolSupport extends CompositeProtocolSupport {
             }
 
             @Override
-            public <T extends Message> Mono<T> decode(MessageDecodeContext context) {
+            public   Mono<? extends Message> decode(MessageDecodeContext context) {
                 return deviceMessageDecoder.decode(context);
             }
 

@@ -3,12 +3,14 @@ package org.jetlinks.supports.official;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
+import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.EventMetadata;
-import org.jetlinks.core.metadata.Jsonable;
-import org.jetlinks.core.metadata.PropertyMetadata;
+import org.jetlinks.core.metadata.types.DataTypes;
+import org.jetlinks.core.metadata.types.UnknownType;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * @author zhouhao
@@ -18,7 +20,7 @@ public class JetLinksEventMetadata implements EventMetadata {
 
     private JSONObject jsonObject;
 
-    private List<PropertyMetadata> parameters;
+    private DataType type;
 
     private transient EventMetadata another;
 
@@ -40,7 +42,7 @@ public class JetLinksEventMetadata implements EventMetadata {
 
 
     public JetLinksEventMetadata(JSONObject jsonObject) {
-       fromJson(jsonObject);
+        fromJson(jsonObject);
     }
 
     public JetLinksEventMetadata(EventMetadata another) {
@@ -48,24 +50,21 @@ public class JetLinksEventMetadata implements EventMetadata {
     }
 
     @Override
-    public List<PropertyMetadata> getParameters() {
-        if (parameters == null && jsonObject != null) {
-            parameters = Optional.ofNullable(jsonObject.getJSONArray("parameters"))
-                    .map(Collection::stream)
-                    .map(stream -> stream
-                            .map(JSONObject.class::cast)
-                            .map(JetLinksPropertyMetadata::new)
-                            .map(PropertyMetadata.class::cast)
-                            .collect(Collectors.toList()))
-                    .orElse(Collections.emptyList());
+    public DataType getType() {
+        if (type == null && jsonObject != null) {
+            JSONObject typeJson = jsonObject.getJSONObject("valueType");
+
+            type = Optional.ofNullable(typeJson.getString("type"))
+                    .map(DataTypes::lookup)
+                    .map(Supplier::get)
+                    .orElseGet(UnknownType::new);
+
+            type = JetLinksDataTypeCodecs.decode(type, typeJson);
         }
-        if (parameters == null && another != null) {
-            parameters = another.getParameters()
-                    .stream()
-                    .map(JetLinksPropertyMetadata::new)
-                    .collect(Collectors.toList());
+        if (type == null && another != null) {
+            type = another.getType();
         }
-        return parameters;
+        return type;
     }
 
     @Override
@@ -74,19 +73,19 @@ public class JetLinksEventMetadata implements EventMetadata {
         jsonObject.put("id", id);
         jsonObject.put("name", name);
         jsonObject.put("description", description);
-        jsonObject.put("parameters", getParameters().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        jsonObject.put("expands",expands);
+        jsonObject.put("valueType", JetLinksDataTypeCodecs.encode(getType()).orElse(null));
+        jsonObject.put("expands", expands);
         return jsonObject;
     }
 
     @Override
     public void fromJson(JSONObject json) {
         this.jsonObject = json;
-        this.parameters = null;
+        this.type = null;
         this.id = json.getString("id");
         this.name = json.getString("name");
         this.description = json.getString("description");
-        this.expands=json.getJSONObject("expands");
+        this.expands = json.getJSONObject("expands");
 
     }
 }

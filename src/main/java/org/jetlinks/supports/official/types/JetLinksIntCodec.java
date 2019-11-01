@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.types.IntType;
+import org.jetlinks.core.metadata.unit.ValueUnits;
 
 import java.util.Map;
 
@@ -26,9 +27,11 @@ public class JetLinksIntCodec implements DataTypeCodec<IntType> {
                 .ifPresent(type::setMax);
         ofNullable(jsonObject.getInteger("min"))
                 .ifPresent(type::setMin);
-        ofNullable(jsonObject.get("unit"))
-                .map(JetLinksStandardValueUnit::of)
+        ofNullable(jsonObject.getString("unit"))
+                .flatMap(ValueUnits::lookup)
                 .ifPresent(type::setUnit);
+        ofNullable(jsonObject.getString("description"))
+                .ifPresent(type::setDescription);
 
         return type;
     }
@@ -42,6 +45,8 @@ public class JetLinksIntCodec implements DataTypeCodec<IntType> {
         if (type.getUnit() != null) {
             json.put("unit", type.getUnit().getId());
         }
+        json.put("type",getTypeId());
+        json.put("description", type.getDescription());
         return json;
     }
 }
