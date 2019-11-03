@@ -5,13 +5,8 @@ import com.alibaba.fastjson.JSONObject;
 import io.netty.buffer.Unpooled;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.message.ChildDeviceMessage;
-import org.jetlinks.core.message.CommonDeviceMessageReply;
-import org.jetlinks.core.message.DeviceMessage;
-import org.jetlinks.core.message.Message;
+import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.*;
-import org.jetlinks.core.message.event.ChildDeviceOfflineMessage;
-import org.jetlinks.core.message.event.ChildDeviceOnlineMessage;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessageReply;
@@ -48,7 +43,7 @@ public class JetLinksMQTTDeviceMessageCodec implements DeviceMessageCodec {
         }
 
         private String topic;
-        private CommonDeviceMessageReply message;
+        private Message message;
     }
 
     protected EncodeResult encode(Message message) {
@@ -150,10 +145,19 @@ public class JetLinksMQTTDeviceMessageCodec implements DeviceMessageCodec {
             log.warn("无法解析设备[{}]消息:{}", message.getDeviceId(), jsonData);
             return Mono.empty();
         }
-        CommonDeviceMessageReply reply = decode(topic, object).message;
-        if (reply.getDeviceId() == null || reply.getDeviceId().isEmpty()) {
-            reply.setDeviceId(message.getDeviceId());
+        Message reply = decode(topic, object).message;
+        if (reply instanceof CommonDeviceMessage) {
+            CommonDeviceMessage common = ((CommonDeviceMessage) reply);
+            if (common.getDeviceId() == null || common.getDeviceId().isEmpty()) {
+                common.setDeviceId(message.getDeviceId());
+            }
+        } else if (reply instanceof CommonDeviceMessageReply) {
+            CommonDeviceMessageReply common = ((CommonDeviceMessageReply) reply);
+            if (common.getDeviceId() == null || common.getDeviceId().isEmpty()) {
+                common.setDeviceId(message.getDeviceId());
+            }
         }
+
         return Mono.just(reply);
     }
 }

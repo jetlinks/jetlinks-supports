@@ -8,6 +8,7 @@ import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.ToDeviceMessageContext;
 import org.jetlinks.core.server.MessageHandler;
+import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.Flux;
@@ -67,16 +68,20 @@ public class DefaultSendToDeviceMessageHandler {
                         children.setTimestamp(message.getTimestamp());
                         children.setChildDeviceId(deviceId);
                         children.setChildDeviceMessage(message);
-                        DeviceSession parentSession = sessionManager.getSession(operator.getDeviceId());
-                        if (null != parentSession) {
-                            doSend(children, parentSession);
+
+                        ChildrenDeviceSession childrenDeviceSession = sessionManager.getSession(deviceId, operator.getDeviceId());
+                        if (null != childrenDeviceSession) {
+                            doSend(children, childrenDeviceSession);
                             return Mono.just(true);
                         }
-                        return operator
-                                .messageSender()
-                                .send(Mono.just(children))
-                                .flatMap(this::doReply)
-                                .all(r -> r);
+                        DeviceSession childrenSession = sessionManager.getSession(operator.getDeviceId());
+                        if (null != childrenSession) {
+                            doSend(children, childrenSession);
+                            return Mono.just(true);
+                        }
+                        //回复离线
+                        return doReply(createReply(deviceId, message)
+                                .error(ErrorCode.CLIENT_OFFLINE));
                     })
                     .switchIfEmpty(Mono.defer(() -> {
                         log.warn("device[{}] not connected,send message fail", message.getDeviceId());

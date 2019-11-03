@@ -2,6 +2,8 @@ package org.jetlinks.supports.server;
 
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.message.*;
+import org.jetlinks.core.message.ChildDeviceOfflineMessage;
+import org.jetlinks.core.message.ChildDeviceOnlineMessage;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSession;
@@ -17,7 +19,7 @@ import java.util.function.Function;
 @Slf4j
 public class DefaultDecodedClientMessageHandler implements DecodedClientMessageHandler {
 
-    private MessageHandler deviceMessageBroker;
+    private MessageHandler messageHandler;
 
     private FluxProcessor<Message, Message> processor;
 
@@ -34,7 +36,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     }
 
     public DefaultDecodedClientMessageHandler(MessageHandler handler, DeviceSessionManager sessionManager, FluxProcessor<Message, Message> processor) {
-        this.deviceMessageBroker = handler;
+        this.messageHandler = handler;
         this.processor = processor;
         this.sessionManager = sessionManager;
     }
@@ -50,21 +52,27 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         return Mono.just(true);
     }
 
-    protected Mono<Boolean> handleChildrenDeviceMessageReply(ChildDeviceMessageReply reply) {
-        Message message = reply.getChildDeviceMessage();
-        String deviceId = reply.getChildDeviceId();
+    protected Mono<Boolean> handleChildrenDeviceMessage(DeviceSession session, String childrenId, Message message) {
         if (message instanceof DeviceMessageReply) {
             return handleDeviceMessageReply(((DeviceMessageReply) message));
         } else if (message instanceof DeviceOnlineMessage) {
-            return sessionManager.registerChildren(reply.getDeviceId(), deviceId)
+            return sessionManager.registerChildren(session.getDeviceId(), childrenId)
                     .map(__ -> true)
                     .switchIfEmpty(Mono.just(false));
         } else if (message instanceof DeviceOfflineMessage) {
-            return sessionManager.unRegisterChildren(reply.getDeviceId(), deviceId)
+            return sessionManager.unRegisterChildren(session.getDeviceId(), childrenId)
                     .map(__ -> true)
                     .switchIfEmpty(Mono.just(false));
         }
         return Mono.just(true);
+    }
+
+    protected Mono<Boolean> handleChildrenDeviceMessageReply(DeviceSession session, ChildDeviceMessage reply) {
+        return handleChildrenDeviceMessage(session, reply.getChildDeviceId(), reply.getChildDeviceMessage());
+    }
+
+    protected Mono<Boolean> handleChildrenDeviceMessageReply(DeviceSession session, ChildDeviceMessageReply reply) {
+        return handleChildrenDeviceMessage(session, reply.getChildDeviceId(), reply.getChildDeviceMessage());
     }
 
     public void shutdown() {
@@ -79,17 +87,38 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
 
     @Override
     public Mono<Boolean> handleMessage(DeviceSession session, Message message) {
-        return Mono.defer(() -> {
-            if (message instanceof ChildDeviceMessageReply) {
-                return handleChildrenDeviceMessageReply(((ChildDeviceMessageReply) message));
-            }
-            if (message instanceof DeviceMessageReply) {
-                return handleDeviceMessageReply(((DeviceMessageReply) message));
-            }
-            return Mono.just(true);
-        })
+        return Mono
+                .defer(() -> {
+                    if (message instanceof ChildDeviceMessageReply) {
+                        return handleChildrenDeviceMessageReply(session, ((ChildDeviceMessageReply) message));
+                    } else if (message instanceof ChildDeviceMessage) {
+                        return handleChildrenDeviceMessageReply(session, ((ChildDeviceMessage) message));
+                    } else if (message instanceof DeviceOnlineMessage) {
+                        return sessionManager.registerChildren(session.getDeviceId(), ((DeviceOnlineMessage) message).getDeviceId())
+                                .map(__ -> true)
+                                .switchIfEmpty(Mono.just(false));
+                    } else if (message instanceof DeviceOfflineMessage) {
+                        return sessionManager.unRegisterChildren(session.getDeviceId(), ((DeviceOfflineMessage) message).getDeviceId())
+                                .map(__ -> true)
+                                .switchIfEmpty(Mono.just(false));
+                    } else if (message instanceof ChildDeviceOnlineMessage) {
+                        return sessionManager.registerChildren(session.getDeviceId(), ((ChildDeviceOnlineMessage) message).getChildDeviceId())
+                                .map(__ -> true)
+                                .switchIfEmpty(Mono.just(false));
+                    } else if (message instanceof ChildDeviceOfflineMessage) {
+                        return sessionManager.unRegisterChildren(session.getDeviceId(), ((ChildDeviceOfflineMessage) message).getChildDeviceId())
+                                .map(__ -> true)
+                                .switchIfEmpty(Mono.just(false));
+                    }
+                    if (message instanceof DeviceMessageReply) {
+                        return handleDeviceMessageReply(((DeviceMessageReply) message));
+                    }
+                    return Mono.just(true);
+                })
+                .onErrorContinue((err, res) -> {
+                    log.error("handle device[{}] message [{}] error", session.getDeviceId(), message, err);
+                })
                 .switchIfEmpty(Mono.just(false))
-                .doOnError(err -> log.error("handle device[{}] message [{}] error", session.getDeviceId(), message, err))
                 .doFinally(s -> {
                     if (processor.hasDownstreams()) {
                         processor.onNext(message);
@@ -102,7 +131,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         if (log.isDebugEnabled()) {
             log.debug("reply message {}", reply.getMessageId());
         }
-        return deviceMessageBroker
+        return messageHandler
                 .reply(reply)
                 .switchIfEmpty(Mono.just(false))
                 .doOnSuccess(success -> {

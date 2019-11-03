@@ -2,6 +2,7 @@ package org.jetlinks.supports.protocol;
 
 import lombok.NonNull;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.ProtocolSupport;
 import org.jetlinks.core.ProtocolSupports;
 import org.jetlinks.core.spi.ProtocolSupportProvider;
@@ -11,6 +12,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.ServiceLoader;
 
+@Slf4j
 public class ServiceLoaderProtocolSupports implements ProtocolSupports {
 
     private StaticProtocolSupports supports = new StaticProtocolSupports();
@@ -40,6 +42,11 @@ public class ServiceLoaderProtocolSupports implements ProtocolSupports {
 
     public void init() {
         ServiceLoader<ProtocolSupportProvider> loader = ServiceLoader.load(ProtocolSupportProvider.class, getClassLoader());
-        loader.iterator().forEachRemaining(provider -> provider.create(serviceContext).subscribe(supports::register));
+        loader.iterator().forEachRemaining(provider -> {
+
+            provider.create(serviceContext)
+                    .doOnNext(pro -> log.debug("found protocol support provider:{}", pro))
+                    .subscribe(supports::register);
+        });
     }
 }

@@ -4,7 +4,7 @@ import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.message.codec.DeviceMessageCodec;
 import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
-import org.jetlinks.supports.protocol.CompositeProtocolSupport;
+import org.jetlinks.core.defaults.CompositeProtocolSupport;
 import reactor.core.publisher.Mono;
 
 import java.util.function.Supplier;

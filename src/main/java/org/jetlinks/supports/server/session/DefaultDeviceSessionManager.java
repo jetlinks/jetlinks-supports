@@ -169,10 +169,11 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     }
 
     @Override
-    public Mono<ChildrenDeviceSession> getSession(String deviceId, String childrenId) {
-        return Mono.justOrEmpty(children.get(deviceId))
+    public ChildrenDeviceSession getSession(String deviceId, String childrenId) {
+        return Optional.ofNullable(children.get(deviceId))
                 .map(map -> map.get(childrenId))
-                .filter(ChildrenDeviceSession::isAlive);
+                .filter(ChildrenDeviceSession::isAlive)
+                .orElse(null);
     }
 
     @Override
@@ -180,13 +181,12 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
         return Mono.defer(() -> {
             DeviceSession session = getSession(deviceId);
             if (session == null) {
+                log.warn("device[{}] session not alive", deviceId);
                 return Mono.empty();
             }
             return registry
                     .getDevice(childrenDeviceId)
-                    .switchIfEmpty(Mono.fromRunnable(() -> {
-                        log.warn("device [{}] not fond in registry", childrenDeviceId);
-                    }))
+                    .switchIfEmpty(Mono.fromRunnable(() -> log.warn("children device [{}] not fond in registry", childrenDeviceId)))
                     .flatMap(deviceOperator -> deviceOperator
                             .online(serverId, session.getId())
                             .thenReturn(new ChildrenDeviceSession(childrenDeviceId, session, deviceOperator)))

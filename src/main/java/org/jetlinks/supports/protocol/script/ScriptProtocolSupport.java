@@ -6,8 +6,8 @@ import lombok.SneakyThrows;
 import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.codec.*;
 import org.jetlinks.core.metadata.DeviceMetadataCodec;
-import org.jetlinks.supports.protocol.Authenticator;
-import org.jetlinks.supports.protocol.CompositeProtocolSupport;
+import org.jetlinks.core.defaults.Authenticator;
+import org.jetlinks.core.defaults.CompositeProtocolSupport;
 import reactor.core.publisher.Mono;
 
 import javax.annotation.Nonnull;
