@@ -1,8 +1,11 @@
 package org.jetlinks.supports.official;
 
 import lombok.SneakyThrows;
+import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.DeviceMetadata;
 import org.jetlinks.core.metadata.EventMetadata;
+import org.jetlinks.core.metadata.FunctionMetadata;
+import org.jetlinks.core.metadata.types.BooleanType;
 import org.junit.Assert;
 import org.junit.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -28,6 +31,11 @@ public class JetLinksDeviceMetadataCodecTest {
 
         assertEquals("object", eventMetadata.getType().getId());
 
+        Assert.assertTrue(deviceMetadata.getFunction("playVoice").isPresent());
+
+        DataType type= deviceMetadata.getFunction("playVoice").map(FunctionMetadata::getOutput).get();
+
+        Assert.assertTrue(type instanceof BooleanType);
 
     }
 }

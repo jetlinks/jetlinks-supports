@@ -80,9 +80,10 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     @Override
     public DataType getOutput() {
         if (output == null && jsonObject != null) {
-            output = Optional.ofNullable(jsonObject.getString("output"))
-                    .map(DataTypes::lookup)
-                    .map(Supplier::get)
+            output = Optional.ofNullable(jsonObject.getJSONObject("output"))
+                    .flatMap(conf -> Optional.ofNullable(DataTypes.lookup(conf.getString("type")))
+                            .map(Supplier::get)
+                            .map(type -> JetLinksDataTypeCodecs.decode(type, conf)))
                     .orElseGet(UnknownType::new);
         }
         if (output == null && another != null) {
@@ -112,9 +113,8 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         json.put("description", description);
         json.put("async", async);
         json.put("inputs", getInputs().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        if (output instanceof Jsonable) {
-            json.put("output", ((Jsonable) output).toJson());
-        }
+        JetLinksDataTypeCodecs.encode(getOutput())
+                .ifPresent(ot -> json.put("output", ot));
         json.put("expands", expands);
 
         return json;
@@ -129,6 +129,6 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         this.name = json.getString("name");
         this.description = json.getString("description");
         this.async = json.getBooleanValue("async");
-        this.expands=json.getJSONObject("expands");
+        this.expands = json.getJSONObject("expands");
     }
 }
