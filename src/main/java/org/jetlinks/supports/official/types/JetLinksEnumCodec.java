@@ -3,7 +3,6 @@ package org.jetlinks.supports.official.types;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.types.EnumType;
 
 import java.util.Map;
@@ -13,7 +12,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
-public class JetLinksEnumCodec implements DataTypeCodec<EnumType> {
+public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
 
     @Override
     public String getTypeId() {
@@ -22,10 +21,8 @@ public class JetLinksEnumCodec implements DataTypeCodec<EnumType> {
 
     @Override
     public EnumType decode(EnumType type, Map<String, Object> config) {
+        super.decode(type,config);
         JSONObject jsonObject = new JSONObject(config);
-
-        ofNullable(jsonObject.getString("description"))
-                .ifPresent(type::setDescription);
 
         ofNullable(jsonObject.getJSONArray("enums"))
                 .map(list -> list.stream()
@@ -38,14 +35,11 @@ public class JetLinksEnumCodec implements DataTypeCodec<EnumType> {
     }
 
     @Override
-    public Map<String, Object> encode(EnumType type) {
-        JSONObject json = new JSONObject();
-        json.put("enums", type.getElements()
+    protected void doEncode(Map<String, Object> encoded, EnumType type) {
+        super.doEncode(encoded, type);
+        encoded.put("enums", type.getElements()
                 .stream()
                 .map(EnumType.Element::toMap).collect(Collectors.toList()));
 
-        json.put("type",getTypeId());
-        json.put("description", type.getDescription());
-        return json;
     }
 }

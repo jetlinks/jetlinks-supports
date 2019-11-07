@@ -3,7 +3,6 @@ package org.jetlinks.supports.official.types;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.types.DoubleType;
 import org.jetlinks.core.metadata.unit.ValueUnits;
 
@@ -13,7 +12,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
-public class JetLinksDoubleCodec implements DataTypeCodec<DoubleType> {
+public class JetLinksDoubleCodec extends AbstractDataTypeCodec<DoubleType> {
 
     @Override
     public String getTypeId() {
@@ -22,6 +21,7 @@ public class JetLinksDoubleCodec implements DataTypeCodec<DoubleType> {
 
     @Override
     public DoubleType decode(DoubleType type, Map<String, Object> config) {
+        super.decode(type,config);
         JSONObject jsonObject = new JSONObject(config);
         ofNullable(jsonObject.getDouble("max"))
                 .ifPresent(type::setMax);
@@ -32,9 +32,6 @@ public class JetLinksDoubleCodec implements DataTypeCodec<DoubleType> {
         ofNullable(jsonObject.getString("unit"))
                 .flatMap(ValueUnits::lookup)
                 .ifPresent(type::setUnit);
-        ofNullable(jsonObject.getString("description"))
-                .ifPresent(type::setDescription);
-
         return type;
     }
 
@@ -48,8 +45,7 @@ public class JetLinksDoubleCodec implements DataTypeCodec<DoubleType> {
         if (type.getUnit() != null) {
             json.put("unit", type.getUnit().getId());
         }
-        json.put("type",getTypeId());
-        json.put("description", type.getDescription());
+
         return json;
     }
 }

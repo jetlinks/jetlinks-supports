@@ -23,7 +23,8 @@ public class JetLinksDataTypeCodecs {
         register(new JetLinksLongCodec());
         register(new JetLinksObjectCodec());
         register(new JetLinksStringCodec());
-
+        register(new JetLinksPasswordCodec());
+        register(new JetLinksFileCodec());
     }
 
     public static void register(DataTypeCodec<? extends DataType> codec) {

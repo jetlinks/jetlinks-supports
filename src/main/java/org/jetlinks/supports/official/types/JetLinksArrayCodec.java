@@ -4,7 +4,6 @@ import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
 import org.jetlinks.core.metadata.DataType;
-import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.types.ArrayType;
 import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.supports.official.JetLinksDataTypeCodecs;
@@ -15,7 +14,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
-public class JetLinksArrayCodec implements DataTypeCodec<ArrayType> {
+public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
 
     @Override
     public String getTypeId() {
@@ -24,15 +23,14 @@ public class JetLinksArrayCodec implements DataTypeCodec<ArrayType> {
 
     @Override
     public ArrayType decode(ArrayType type, Map<String, Object> config) {
+        super.decode(type, config);
         JSONObject jsonObject = new JSONObject(config);
-        ofNullable(jsonObject.getString("description"))
-                .ifPresent(type::setDescription);
         ofNullable(jsonObject.getJSONObject("eleType"))
                 .map(eleType -> {
                     DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
 
-                     JetLinksDataTypeCodecs.getCodec(dataType.getId())
-                            .ifPresent(codec->codec.decode(dataType,eleType));
+                    JetLinksDataTypeCodecs.getCodec(dataType.getId())
+                            .ifPresent(codec -> codec.decode(dataType, eleType));
 
                     return dataType;
                 })
@@ -42,13 +40,10 @@ public class JetLinksArrayCodec implements DataTypeCodec<ArrayType> {
     }
 
     @Override
-    public Map<String, Object> encode(ArrayType type) {
-        JSONObject json = new JSONObject();
+    protected void doEncode(Map<String, Object> encoded, ArrayType type) {
+        super.doEncode(encoded, type);
         JetLinksDataTypeCodecs.getCodec(type.getId())
-                .ifPresent(codec-> json.put("eleType", codec.encode(type.getElementType())));
+                .ifPresent(codec -> encoded.put("eleType", codec.encode(type.getElementType())));
 
-        json.put("type",getTypeId());
-        json.put("description", type.getDescription());
-        return json;
     }
 }

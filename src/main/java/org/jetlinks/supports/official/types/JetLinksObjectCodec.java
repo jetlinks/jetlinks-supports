@@ -3,7 +3,6 @@ package org.jetlinks.supports.official.types;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.PropertyMetadata;
 import org.jetlinks.core.metadata.types.ObjectType;
 import org.jetlinks.supports.official.JetLinksPropertyMetadata;
@@ -15,7 +14,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
-public class JetLinksObjectCodec implements DataTypeCodec<ObjectType> {
+public class JetLinksObjectCodec extends AbstractDataTypeCodec<ObjectType> {
 
     @Override
     public String getTypeId() {
@@ -24,6 +23,7 @@ public class JetLinksObjectCodec implements DataTypeCodec<ObjectType> {
 
     @Override
     public ObjectType decode(ObjectType type, Map<String, Object> config) {
+        super.decode(type,config);
         JSONObject jsonObject = new JSONObject(config);
 
         ofNullable(jsonObject.getJSONArray("properties"))
@@ -33,21 +33,17 @@ public class JetLinksObjectCodec implements DataTypeCodec<ObjectType> {
                         .<PropertyMetadata>map(JetLinksPropertyMetadata::new)
                         .collect(Collectors.toList()))
                 .ifPresent(type::setProperties);
-        ofNullable(jsonObject.getString("description"))
-                .ifPresent(type::setDescription);
+
 
         return type;
     }
 
     @Override
-    public Map<String, Object> encode(ObjectType type) {
-        JSONObject json = new JSONObject();
-        json.put("properties", type.getProperties()
+    protected void doEncode(Map<String, Object> encoded, ObjectType type) {
+        super.doEncode(encoded,type);
+        encoded.put("properties", type.getProperties()
                 .stream()
                 .map(PropertyMetadata::toJson)
                 .collect(Collectors.toList()));
-        json.put("description", type.getDescription());
-        json.put("type",getTypeId());
-        return json;
     }
 }

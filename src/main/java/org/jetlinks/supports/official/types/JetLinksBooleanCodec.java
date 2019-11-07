@@ -3,7 +3,6 @@ package org.jetlinks.supports.official.types;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.types.BooleanType;
 
 import java.util.Map;
@@ -13,7 +12,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
-public class JetLinksBooleanCodec implements DataTypeCodec<BooleanType> {
+public class JetLinksBooleanCodec extends AbstractDataTypeCodec<BooleanType> {
 
     @Override
     public String getTypeId() {
@@ -22,6 +21,7 @@ public class JetLinksBooleanCodec implements DataTypeCodec<BooleanType> {
 
     @Override
     public BooleanType decode(BooleanType type, Map<String, Object> config) {
+        super.decode(type,config);
         JSONObject jsonObject = new JSONObject(config);
 
         ofNullable(jsonObject.getString("trueText"))
@@ -39,15 +39,12 @@ public class JetLinksBooleanCodec implements DataTypeCodec<BooleanType> {
     }
 
     @Override
-    public Map<String, Object> encode(BooleanType type) {
-        JSONObject json = new JSONObject();
-        json.put("trueText", type.getTrueText());
-        json.put("falseText", type.getFalseText());
-        json.put("trueValue", type.getTrueValue());
-        json.put("falseValue", type.getFalseValue());
+    protected void doEncode(Map<String, Object> encoded, BooleanType type) {
+        super.doEncode(encoded, type);
+        encoded.put("trueText", type.getTrueText());
+        encoded.put("falseText", type.getFalseText());
+        encoded.put("trueValue", type.getTrueValue());
+        encoded.put("falseValue", type.getFalseValue());
 
-        json.put("type",getTypeId());
-        json.put("description", type.getDescription());
-        return json;
     }
 }

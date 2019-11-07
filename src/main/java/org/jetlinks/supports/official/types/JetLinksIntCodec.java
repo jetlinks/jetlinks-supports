@@ -3,7 +3,6 @@ package org.jetlinks.supports.official.types;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.core.metadata.types.IntType;
 import org.jetlinks.core.metadata.unit.ValueUnits;
 
@@ -13,7 +12,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
-public class JetLinksIntCodec implements DataTypeCodec<IntType> {
+public class JetLinksIntCodec extends AbstractDataTypeCodec<IntType> {
 
     @Override
     public String getTypeId() {
@@ -22,6 +21,7 @@ public class JetLinksIntCodec implements DataTypeCodec<IntType> {
 
     @Override
     public IntType decode(IntType type, Map<String, Object> config) {
+        super.decode(type,config);
         JSONObject jsonObject = new JSONObject(config);
         ofNullable(jsonObject.getInteger("max"))
                 .ifPresent(type::setMax);
@@ -30,23 +30,19 @@ public class JetLinksIntCodec implements DataTypeCodec<IntType> {
         ofNullable(jsonObject.getString("unit"))
                 .flatMap(ValueUnits::lookup)
                 .ifPresent(type::setUnit);
-        ofNullable(jsonObject.getString("description"))
-                .ifPresent(type::setDescription);
 
         return type;
     }
 
+
     @Override
-    public Map<String, Object> encode(IntType type) {
-        JSONObject json = new JSONObject();
-        json.put("max", type.getMax());
-        json.put("min", type.getMin());
+    protected void doEncode(Map<String, Object> encoded, IntType type) {
+        encoded.put("max", type.getMax());
+        encoded.put("min", type.getMin());
+
 
         if (type.getUnit() != null) {
-            json.put("unit", type.getUnit().getId());
+            encoded.put("unit", type.getUnit().getId());
         }
-        json.put("type",getTypeId());
-        json.put("description", type.getDescription());
-        return json;
     }
 }
