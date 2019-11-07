@@ -25,7 +25,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
 
     private ReactiveRedisOperations<String, T> operations;
 
-    private FluxProcessor<T, T> processor = EmitterProcessor.create(512);
+    private FluxProcessor<T, T> processor = EmitterProcessor.create(512, false);
 
     private AtomicBoolean polling = new AtomicBoolean(false);
 
@@ -63,6 +63,9 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     protected void startPoll() {
+        if (disposable != null || timer != null) {
+            return;
+        }
         disposable = operations
                 .listenToChannel("queue:data:produced:".concat(id))
                 .map(ReactiveSubscription.Message::getMessage)
@@ -100,9 +103,11 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     protected void stopPoll() {
         if (disposable != null) {
             disposable.dispose();
+            disposable = null;
         }
         if (timer != null) {
             timer.dispose();
+            timer = null;
         }
     }
 

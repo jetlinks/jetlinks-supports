@@ -188,7 +188,7 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                     .getDevice(childrenDeviceId)
                     .switchIfEmpty(Mono.fromRunnable(() -> log.warn("children device [{}] not fond in registry", childrenDeviceId)))
                     .flatMap(deviceOperator -> deviceOperator
-                            .online(serverId, session.getId())
+                            .online(session.getServerId().orElse(serverId), session.getId())
                             .thenReturn(new ChildrenDeviceSession(childrenDeviceId, session, deviceOperator)))
                     .doOnSuccess(s -> children.computeIfAbsent(deviceId, __ -> new ConcurrentHashMap<>()).put(childrenDeviceId, s));
         });
@@ -239,7 +239,7 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
 
         //注册中心上线
         session.getOperator()
-                .online(serverId, session.getId())
+                .online(session.getServerId().orElse(serverId), session.getId())
                 .doFinally(s -> {
                     //通知
                     if (onDeviceRegister.hasDownstreams()) {
