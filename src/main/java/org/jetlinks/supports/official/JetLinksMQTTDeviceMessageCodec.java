@@ -92,10 +92,10 @@ public class JetLinksMQTTDeviceMessageCodec implements DeviceMessageCodec {
                 result.message = object.toJavaObject(WritePropertyMessageReply.class);
                 break;
             case "/child-device-connect":
-                result.message = object.toJavaObject(ChildDeviceOnlineMessage.class);
+                result.message = object.toJavaObject(DeviceOnlineMessage.class);
                 break;
             case "/child-device-disconnect":
-                result.message = object.toJavaObject(ChildDeviceOfflineMessage.class);
+                result.message = object.toJavaObject(DeviceOfflineMessage.class);
                 break;
             case "/invoke-function-reply":
                 result.message = object.toJavaObject(FunctionInvokeMessageReply.class);
@@ -125,6 +125,7 @@ public class JetLinksMQTTDeviceMessageCodec implements DeviceMessageCodec {
             return Mono.just(SimpleMqttMessage.builder()
                     .deviceId(deviceMessage.getDeviceId())
                     .topic(convertResult.topic)
+                    .payloadType(MessagePayloadType.JSON)
                     .payload(Unpooled.copiedBuffer(JSON.toJSONBytes(convertResult.data)))
                     .build());
         } else {

@@ -2,8 +2,6 @@ package org.jetlinks.supports.server;
 
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.message.*;
-import org.jetlinks.core.message.ChildDeviceOfflineMessage;
-import org.jetlinks.core.message.ChildDeviceOnlineMessage;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSession;
@@ -99,14 +97,6 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
                                 .switchIfEmpty(Mono.just(false));
                     } else if (message instanceof DeviceOfflineMessage) {
                         return sessionManager.unRegisterChildren(session.getDeviceId(), ((DeviceOfflineMessage) message).getDeviceId())
-                                .map(__ -> true)
-                                .switchIfEmpty(Mono.just(false));
-                    } else if (message instanceof ChildDeviceOnlineMessage) {
-                        return sessionManager.registerChildren(session.getDeviceId(), ((ChildDeviceOnlineMessage) message).getChildDeviceId())
-                                .map(__ -> true)
-                                .switchIfEmpty(Mono.just(false));
-                    } else if (message instanceof ChildDeviceOfflineMessage) {
-                        return sessionManager.unRegisterChildren(session.getDeviceId(), ((ChildDeviceOfflineMessage) message).getChildDeviceId())
                                 .map(__ -> true)
                                 .switchIfEmpty(Mono.just(false));
                     }
