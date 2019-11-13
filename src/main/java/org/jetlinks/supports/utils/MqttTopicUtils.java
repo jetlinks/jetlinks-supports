@@ -3,7 +3,7 @@ package org.jetlinks.supports.utils;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.util.PathMatcher;
 
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 
@@ -28,7 +28,7 @@ public class MqttTopicUtils {
         try {
             return pathMatcher.extractUriTemplateVariables(template, topic);
         }catch (Exception e){
-            return Collections.emptyMap();
+            return new HashMap<>();
         }
     }
 

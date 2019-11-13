@@ -77,7 +77,7 @@ public class ScriptProtocolSupport extends CompositeProtocolSupport {
             }
 
             @Override
-            public Mono<EncodedMessage> encode(MessageEncodeContext context) {
+            public Mono<? extends EncodedMessage> encode(MessageEncodeContext context) {
                 return encoder.encode(context);
             }
         }));

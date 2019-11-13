@@ -22,6 +22,12 @@
         </dependency>
 
         <dependency>
+            <groupId>org.jetlinks</groupId>
+            <artifactId>coap-codec</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
             <version>28.0-jre</version>
