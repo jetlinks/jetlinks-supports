@@ -1,12 +1,10 @@
 package org.jetlinks.supports.server;
 
 import lombok.SneakyThrows;
-import org.jetlinks.core.defaults.CompositeProtocolSupports;
 import org.jetlinks.core.device.DeviceConfigKey;
 import org.jetlinks.core.device.DeviceInfo;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.StandaloneDeviceMessageBroker;
-import org.jetlinks.core.message.ChildDeviceMessage;
 import org.jetlinks.core.message.ChildDeviceMessageReply;
 import org.jetlinks.core.message.property.ReadPropertyMessageReply;
 import org.jetlinks.core.server.monitor.GatewayServerMetrics;
@@ -16,12 +14,9 @@ import org.jetlinks.supports.protocol.ServiceLoaderProtocolSupports;
 import org.jetlinks.supports.server.monitor.MicrometerGatewayServerMetrics;
 import org.jetlinks.supports.server.session.DefaultDeviceSessionManager;
 import org.jetlinks.supports.server.session.TestDeviceRegistry;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import reactor.test.StepVerifier;
-
-import static org.junit.Assert.*;
 
 public class DefaultSendToDeviceMessageHandlerTest {
     private StandaloneDeviceMessageBroker broker;
@@ -91,7 +86,7 @@ public class DefaultSendToDeviceMessageHandlerTest {
             reply.setChildDeviceId("test-children");
             reply.setChildDeviceMessage(readPropertyMessageReply);
 
-            decodedHandler.handleMessage(sessionManager.getSession("test"), reply)
+            decodedHandler.handleMessage(sessionManager.getSession("test").getOperator(), reply)
                     .subscribe();
         }));
 

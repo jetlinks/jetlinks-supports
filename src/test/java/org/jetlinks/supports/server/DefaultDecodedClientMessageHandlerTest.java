@@ -80,7 +80,7 @@ public class DefaultDecodedClientMessageHandlerTest {
         onlineMessage.setDeviceId("test-children");
 
 
-        handler.handleMessage(session, onlineMessage)
+        handler.handleMessage(session.getOperator(), onlineMessage)
                 .as(StepVerifier::create)
                 .expectNext(true)
                 .verifyComplete();
@@ -97,7 +97,7 @@ public class DefaultDecodedClientMessageHandlerTest {
         offlineMessage.setDeviceId("test-children");
 
 
-        handler.handleMessage(session, offlineMessage)
+        handler.handleMessage(session.getOperator(), offlineMessage)
                 .as(StepVerifier::create)
                 .expectNext(true)
                 .verifyComplete();
@@ -129,7 +129,7 @@ public class DefaultDecodedClientMessageHandlerTest {
 
         reply.setChildDeviceMessage(onlineMessage);
 
-        handler.handleMessage(session, reply)
+        handler.handleMessage(session.getOperator(), reply)
                 .as(StepVerifier::create)
                 .expectNext(true)
                 .verifyComplete();
@@ -147,7 +147,7 @@ public class DefaultDecodedClientMessageHandlerTest {
 
         reply.setChildDeviceMessage(offlineMessage);
 
-        handler.handleMessage(session, reply)
+        handler.handleMessage(session.getOperator(), reply)
                 .as(StepVerifier::create)
                 .expectNext(true)
                 .verifyComplete();

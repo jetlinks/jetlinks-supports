@@ -45,9 +45,14 @@ public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider 
             support.addConfigMetadata(DefaultTransport.MQTTS, mqttConfigSupplier);
 
             JetLinksMqttDeviceMessageCodec codec = new JetLinksMqttDeviceMessageCodec();
+            JetLinksCoapDeviceMessageCodec coapCodec = new JetLinksCoapDeviceMessageCodec();
 
             Supplier<Mono<DeviceMessageCodec>> codecSupplier = () -> Mono.just(codec);
+            Supplier<Mono<DeviceMessageCodec>> coapCodecSupplier = () -> Mono.just(coapCodec);
+
             support.addMessageCodecSupport(DefaultTransport.MQTT, codecSupplier);
+            support.addMessageCodecSupport(DefaultTransport.CoAP, coapCodecSupplier);
+
             support.addMessageCodecSupport(DefaultTransport.MQTTS, codecSupplier);
 
             return Mono.just(support);

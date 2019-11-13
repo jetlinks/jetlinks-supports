@@ -1,10 +1,10 @@
 package org.jetlinks.supports.server;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.server.MessageHandler;
-import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxProcessor;
@@ -50,7 +50,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         return Mono.just(true);
     }
 
-    protected Mono<Boolean> handleChildrenDeviceMessage(DeviceSession session, String childrenId, Message message) {
+    protected Mono<Boolean> handleChildrenDeviceMessage(DeviceOperator session, String childrenId, Message message) {
         if (message instanceof DeviceMessageReply) {
             return handleDeviceMessageReply(((DeviceMessageReply) message));
         } else if (message instanceof DeviceOnlineMessage) {
@@ -65,11 +65,11 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         return Mono.just(true);
     }
 
-    protected Mono<Boolean> handleChildrenDeviceMessageReply(DeviceSession session, ChildDeviceMessage reply) {
+    protected Mono<Boolean> handleChildrenDeviceMessageReply(DeviceOperator session, ChildDeviceMessage reply) {
         return handleChildrenDeviceMessage(session, reply.getChildDeviceId(), reply.getChildDeviceMessage());
     }
 
-    protected Mono<Boolean> handleChildrenDeviceMessageReply(DeviceSession session, ChildDeviceMessageReply reply) {
+    protected Mono<Boolean> handleChildrenDeviceMessageReply(DeviceOperator session, ChildDeviceMessageReply reply) {
         return handleChildrenDeviceMessage(session, reply.getChildDeviceId(), reply.getChildDeviceMessage());
     }
 
@@ -84,19 +84,19 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     }
 
     @Override
-    public Mono<Boolean> handleMessage(DeviceSession session, Message message) {
+    public Mono<Boolean> handleMessage(DeviceOperator device, Message message) {
         return Mono
                 .defer(() -> {
                     if (message instanceof ChildDeviceMessageReply) {
-                        return handleChildrenDeviceMessageReply(session, ((ChildDeviceMessageReply) message));
+                        return handleChildrenDeviceMessageReply(device, ((ChildDeviceMessageReply) message));
                     } else if (message instanceof ChildDeviceMessage) {
-                        return handleChildrenDeviceMessageReply(session, ((ChildDeviceMessage) message));
+                        return handleChildrenDeviceMessageReply(device, ((ChildDeviceMessage) message));
                     } else if (message instanceof DeviceOnlineMessage) {
-                        return sessionManager.registerChildren(session.getDeviceId(), ((DeviceOnlineMessage) message).getDeviceId())
+                        return sessionManager.registerChildren(device.getDeviceId(), ((DeviceOnlineMessage) message).getDeviceId())
                                 .map(__ -> true)
                                 .switchIfEmpty(Mono.just(false));
                     } else if (message instanceof DeviceOfflineMessage) {
-                        return sessionManager.unRegisterChildren(session.getDeviceId(), ((DeviceOfflineMessage) message).getDeviceId())
+                        return sessionManager.unRegisterChildren(device.getDeviceId(), ((DeviceOfflineMessage) message).getDeviceId())
                                 .map(__ -> true)
                                 .switchIfEmpty(Mono.just(false));
                     }
@@ -106,7 +106,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
                     return Mono.just(true);
                 })
                 .onErrorContinue((err, res) -> {
-                    log.error("handle device[{}] message [{}] error", session.getDeviceId(), message, err);
+                    log.error("handle device[{}] message [{}] error", device.getDeviceId(), message, err);
                 })
                 .switchIfEmpty(Mono.just(false))
                 .doFinally(s -> {
