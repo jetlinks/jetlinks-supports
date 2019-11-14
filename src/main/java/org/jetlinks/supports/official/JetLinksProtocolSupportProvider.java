@@ -1,17 +1,14 @@
 package org.jetlinks.supports.official;
 
+import org.jetlinks.core.defaults.CompositeProtocolSupport;
 import org.jetlinks.core.message.codec.DefaultTransport;
-import org.jetlinks.core.message.codec.DeviceMessageCodec;
-import org.jetlinks.core.metadata.ConfigMetadata;
 import org.jetlinks.core.metadata.DefaultConfigMetadata;
+import org.jetlinks.core.metadata.types.EnumType;
 import org.jetlinks.core.metadata.types.PasswordType;
 import org.jetlinks.core.metadata.types.StringType;
 import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
-import org.jetlinks.core.defaults.CompositeProtocolSupport;
 import reactor.core.publisher.Mono;
-
-import java.util.function.Supplier;
 
 public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider {
 
@@ -25,6 +22,22 @@ public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider 
             .add("secureId", "secureId", "密钥ID", new StringType())
             .add("secureKey", "secureKey", "密钥KEY", new PasswordType());
 
+    private static final DefaultConfigMetadata coapConfig = new DefaultConfigMetadata(
+            "CoAP认证配置",
+            "使用CoAP进行数据上报时,需要对数据进行加密:" +
+                    "encrypt(payload,secureKey);")
+            .add("encAlg", "加密算法", "加密算法",
+                    new EnumType().addElement(EnumType.Element.of("AES", "AES加密(ECB,PKCS#5)", "加密模式:ECB,填充方式:PKCS#5")))
+            .add("secureKey", "密钥", "16位密钥KEY", new PasswordType());
+
+    private static final DefaultConfigMetadata coapDTLSConfig = new DefaultConfigMetadata(
+            "CoAP DTLS配置",
+            "使用CoAP DTLS 进行数据上报需要先进行签名认证获取token.\n" +
+                    "之后上报数据需要在Option中携带token信息. \n" +
+                    "自定义Option: 2110,sign ; 2111,token ")
+            .add("secureKey", "密钥", "认证签名密钥", new PasswordType());
+
+
     @Override
     public Mono<CompositeProtocolSupport> create(ServiceContext context) {
 
@@ -36,24 +49,21 @@ public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider 
             support.setDescription("JetLinks Protocol Version 1.0");
 
             support.addAuthenticator(DefaultTransport.MQTT, new JetLinksAuthenticator());
-            support.addAuthenticator(DefaultTransport.MQTTS, new JetLinksAuthenticator());
+            support.addAuthenticator(DefaultTransport.MQTT_SSL, new JetLinksAuthenticator());
 
             support.setMetadataCodec(new JetLinksDeviceMetadataCodec());
-            Supplier<Mono<ConfigMetadata>> mqttConfigSupplier = () -> Mono.just(mqttConfig);
 
-            support.addConfigMetadata(DefaultTransport.MQTT, mqttConfigSupplier);
-            support.addConfigMetadata(DefaultTransport.MQTTS, mqttConfigSupplier);
+            support.addConfigMetadata(DefaultTransport.MQTT, mqttConfig);
+            support.addConfigMetadata(DefaultTransport.MQTT_SSL, mqttConfig);
+            support.addConfigMetadata(DefaultTransport.CoAP, coapConfig);
+            support.addConfigMetadata(DefaultTransport.CoAP_DTLS, coapDTLSConfig);
 
-            JetLinksMqttDeviceMessageCodec codec = new JetLinksMqttDeviceMessageCodec();
-            JetLinksCoapDeviceMessageCodec coapCodec = new JetLinksCoapDeviceMessageCodec();
+            support.addMessageCodecSupport(new JetLinksMqttDeviceMessageCodec(DefaultTransport.MQTT));
+            support.addMessageCodecSupport(new JetLinksMqttDeviceMessageCodec(DefaultTransport.MQTT_SSL));
 
-            Supplier<Mono<DeviceMessageCodec>> codecSupplier = () -> Mono.just(codec);
-            Supplier<Mono<DeviceMessageCodec>> coapCodecSupplier = () -> Mono.just(coapCodec);
+            support.addMessageCodecSupport(new JetLinksCoapDeviceMessageCodec());
+            support.addMessageCodecSupport(new JetLinksCoapDTLSDeviceMessageCodec());
 
-            support.addMessageCodecSupport(DefaultTransport.MQTT, codecSupplier);
-            support.addMessageCodecSupport(DefaultTransport.CoAP, coapCodecSupplier);
-
-            support.addMessageCodecSupport(DefaultTransport.MQTTS, codecSupplier);
 
             return Mono.just(support);
         });

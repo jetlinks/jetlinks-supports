@@ -27,7 +27,7 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
         ofNullable(jsonObject.getJSONArray("enums"))
                 .map(list -> list.stream()
                         .map(JSONObject.class::cast)
-                        .map(e -> EnumType.Element.of(e.getString("value"), e.getString("text")))
+                        .map(e -> EnumType.Element.of(e.getString("value"), e.getString("text"),e.getString("description")))
                         .collect(Collectors.toList()))
                 .ifPresent(type::setElements);
 

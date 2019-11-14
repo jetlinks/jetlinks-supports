@@ -8,7 +8,6 @@ import org.jetlinks.core.device.DeviceConfigKey;
 import org.jetlinks.core.message.DeviceMessage;
 import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.codec.*;
-import org.jetlinks.supports.protocol.DefaultMqttMessageCodecDescription;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
@@ -50,34 +49,21 @@ import java.nio.charset.StandardCharsets;
  */
 @Slf4j
 public class JetLinksMqttDeviceMessageCodec extends JetlinksTopicMessageCodec implements DeviceMessageCodec {
-    @Override
-    public Transport getSupportTransport() {
-        return DefaultTransport.MQTT;
+
+    private Transport transport;
+
+
+    public JetLinksMqttDeviceMessageCodec(Transport transport) {
+        this.transport = transport;
     }
 
-    private static final DefaultMqttMessageCodecDescription codecDescription;
+    public JetLinksMqttDeviceMessageCodec() {
+        this(DefaultTransport.MQTT);
+    }
 
-    static {
-        codecDescription = new DefaultMqttMessageCodecDescription();
-//        codecDescription
-//                .addDownstream(DefaultMqttMessageCodecDescription
-//                        .DefaultTopic
-//                        .builder()
-//                        .topic("/{productId}/{deviceId}/properties/read")
-//                        .payloadType(MessagePayloadType.JSON)
-//                        .description("读取设备属性")
-//                        .templatePayload("{\"messageId\":\"消息ID\",\"properties\":[\"属性1ID\",\"属性2ID\"]}")
-//                        .variables(Arrays.asList("productId", "deviceId"))
-//                )
-//                .addDownstream(DefaultMqttMessageCodecDescription
-//                        .DefaultTopic
-//                        .builder()
-//                        .topic("/{productId}/{deviceId}/properties/write")
-//                        .payloadType(MessagePayloadType.JSON)
-//                        .description("修改属性")
-//                        .templatePayload("{\"messageId\":\"消息ID\",\"properties\":{\"属性ID\":\"属性值\"]}")
-//                        .variables(Arrays.asList("productId", "deviceId"))
-//                );
+    @Override
+    public Transport getSupportTransport() {
+        return transport;
     }
 
     public Mono<MqttMessage> encode(MessageEncodeContext context) {
@@ -98,9 +84,7 @@ public class JetLinksMqttDeviceMessageCodec extends JetlinksTopicMessageCodec im
                 return Mono.empty();
             }
         });
-
     }
-
 
     @Override
     public Mono<Message> decode(MessageDecodeContext context) {
