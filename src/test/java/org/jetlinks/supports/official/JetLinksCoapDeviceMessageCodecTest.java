@@ -63,7 +63,7 @@ public class JetLinksCoapDeviceMessageCodecTest {
                         codec.decode(new MessageDecodeContext() {
                             @Override
                             public EncodedMessage getMessage() {
-                                return new CoapExchangeMessage(device.getDeviceId(), exchange);
+                                return new CoapExchangeMessage(exchange);
                             }
 
                             @Override

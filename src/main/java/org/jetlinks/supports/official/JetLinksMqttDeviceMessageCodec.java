@@ -75,7 +75,7 @@ public class JetLinksMqttDeviceMessageCodec extends JetlinksTopicMessageCodec im
                 return context.getDevice()
                         .getConfig(DeviceConfigKey.productId)
                         .map(productId -> SimpleMqttMessage.builder()
-                                .deviceId(deviceMessage.getDeviceId())
+                                .clientId(deviceMessage.getDeviceId())
                                 .topic("/".concat(productId).concat(convertResult.topic))
                                 .payloadType(MessagePayloadType.JSON)
                                 .payload(Unpooled.wrappedBuffer(JSON.toJSONBytes(convertResult.payload)))
