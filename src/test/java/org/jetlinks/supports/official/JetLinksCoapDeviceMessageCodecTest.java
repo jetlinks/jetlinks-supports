@@ -17,7 +17,7 @@ import org.jetlinks.core.device.DeviceInfo;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.StandaloneDeviceMessageBroker;
 import org.jetlinks.core.message.Message;
-import org.jetlinks.core.message.codec.CoapMessage;
+import org.jetlinks.core.message.codec.CoapExchangeMessage;
 import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.MessageDecodeContext;
 import org.jetlinks.supports.official.cipher.Ciphers;
@@ -63,7 +63,7 @@ public class JetLinksCoapDeviceMessageCodecTest {
                         codec.decode(new MessageDecodeContext() {
                             @Override
                             public EncodedMessage getMessage() {
-                                return new CoapMessage(device.getDeviceId(), exchange);
+                                return new CoapExchangeMessage(device.getDeviceId(), exchange);
                             }
 
                             @Override

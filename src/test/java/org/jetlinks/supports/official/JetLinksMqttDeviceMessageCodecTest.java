@@ -87,7 +87,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testReadPropertyReply() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/properties/read/reply")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ReadPropertyMessageReply);
@@ -103,7 +103,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testChildReadPropertyReply() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/properties/read/reply")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
@@ -160,7 +160,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testWritePropertyReply() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/properties/write/reply")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof WritePropertyMessageReply);
@@ -178,7 +178,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testWriteChildPropertyReply() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/properties/write/reply")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
@@ -217,7 +217,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testInvokeFunctionReply() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/function/invoke/reply")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"output\":\"ok\"}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"output\":\"ok\"}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof FunctionInvokeMessageReply);
@@ -233,7 +233,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testInvokeChildFunctionReply() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/function/invoke/reply")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"output\":\"ok\"}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"output\":\"ok\"}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
@@ -255,7 +255,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testEvent() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/event/temp")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"data\":100}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":100}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof EventMessage);
@@ -271,7 +271,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testChildEvent() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/event/temp")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"data\":100}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":100}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
@@ -288,7 +288,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testPropertiesReport() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/properties/report")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"data\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof EventMessage);
@@ -306,7 +306,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testChildPropertiesReport() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/properties/report")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"data\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
@@ -325,7 +325,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testMetadataDerived() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/metadata/derived")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"data\":{\"functions\":[]}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"functions\":[]}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof EventMessage);
@@ -342,7 +342,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testChildMetadataDerived() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/metadata/derived")
-                .payload(Unpooled.copiedBuffer("{\"messageId\":\"test\",\"data\":{\"functions\":[]}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"functions\":[]}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);

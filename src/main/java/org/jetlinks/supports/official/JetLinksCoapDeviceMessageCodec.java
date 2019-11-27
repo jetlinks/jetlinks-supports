@@ -2,6 +2,7 @@ package org.jetlinks.supports.official;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
+import io.netty.buffer.ByteBuf;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.server.resources.CoapExchange;
@@ -24,36 +25,51 @@ public class JetLinksCoapDeviceMessageCodec extends JetlinksTopicMessageCodec im
         return JSON.parseObject(text);
     }
 
+    protected Mono<? extends Message> decode(CoapMessage message, MessageDecodeContext context) {
+        String path = message.getPath();
+        return context
+                .getDevice()
+                .getConfigs("encAlg", "secureKey")
+                .flatMap(configs -> {
+                    Ciphers ciphers = configs.getValue("encAlg").map(Value::asString).flatMap(Ciphers::of).orElse(Ciphers.AES);
+                    String secureKey = configs.getValue("secureKey").map(Value::asString).orElse(null);
+                    ByteBuf byteBuf = message.getPayload();
+                    byte[] req = new byte[byteBuf.readableBytes()];
+                    byteBuf.readBytes(req);
+                    byteBuf.resetReaderIndex();
+                    String payload = new String(ciphers.decrypt(req, secureKey));
+                    //解码
+                    return Mono.just(decode(path, decode(payload)).getMessage());
+                });
+    }
+
+    protected Mono<? extends Message> decode(CoapExchangeMessage message, MessageDecodeContext context) {
+        CoapExchange exchange = message.getExchange();
+        return decode((CoapMessage) message,context)
+                .doOnSuccess(msg -> {
+                    exchange.respond(CoAP.ResponseCode.CREATED);
+                    exchange.accept();
+                })
+                .switchIfEmpty(Mono.fromRunnable(() -> {
+                    exchange.respond(CoAP.ResponseCode.BAD_REQUEST);
+                }))
+                .doOnError(error -> {
+                    log.error("decode coap message error", error);
+                    exchange.respond(CoAP.ResponseCode.BAD_REQUEST);
+                });
+    }
+
     @Override
     public Mono<? extends Message> decode(MessageDecodeContext context) {
         return Mono.defer(() -> {
-            CoapMessage message = ((CoapMessage) context.getMessage());
-            CoapExchange exchange = message.getExchange();
-            String path = exchange.getRequestOptions().getUriString();
+            if (context.getMessage() instanceof CoapExchangeMessage) {
+                return decode(((CoapExchangeMessage) context.getMessage()), context);
+            }
+            if (context.getMessage() instanceof CoapMessage) {
+                return decode(((CoapMessage) context.getMessage()), context);
+            }
 
-
-            return context.getDevice()
-                    .getConfigs("encAlg","secureKey")
-                    .flatMap(configs -> {
-                        Ciphers ciphers = configs.getValue("encAlg").map(Value::asString).flatMap(Ciphers::of).orElse(Ciphers.AES);
-
-                        String secureKey = configs.getValue("secureKey").map(Value::asString).orElse(null);
-
-                        String payload = new String(ciphers.decrypt(exchange.getRequestPayload(),secureKey));
-                        //解码
-                        return Mono.just(decode(path, decode(payload)).getMessage());
-                    })
-                    .doOnSuccess(msg -> {
-                        exchange.respond(CoAP.ResponseCode.CREATED);
-                        exchange.accept();
-                    })
-                    .switchIfEmpty(Mono.fromRunnable(() -> {
-                        exchange.respond(CoAP.ResponseCode.BAD_REQUEST);
-                    }))
-                    .doOnError(error -> {
-                        log.error("decode coap message error", error);
-                        exchange.respond(CoAP.ResponseCode.BAD_REQUEST);
-                    });
+            return Mono.empty();
         });
     }
 
