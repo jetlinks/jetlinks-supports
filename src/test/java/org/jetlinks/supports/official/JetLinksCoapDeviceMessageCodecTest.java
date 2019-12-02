@@ -102,7 +102,7 @@ public class JetLinksCoapDeviceMessageCodecTest {
 
         CoapResponse response = coapClient.advanced(request);
         Assert.assertTrue(response.isSuccess());
-
+        Thread.sleep(1000);
         Assert.assertNotNull(messageRef.get());
 
         System.out.println(messageRef.get());
