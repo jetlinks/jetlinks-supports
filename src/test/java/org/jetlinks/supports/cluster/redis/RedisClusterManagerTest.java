@@ -4,14 +4,11 @@ import lombok.SneakyThrows;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.cluster.ServerNode;
 import org.jetlinks.supports.cluster.ClusterLocalCache;
+import org.jetlinks.supports.cluster.RedisHelper;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -23,17 +20,16 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-@SpringBootTest(classes = TestApplication.class)
-@RunWith(SpringJUnit4ClassRunner.class)
 public class RedisClusterManagerTest {
 
-    @Autowired
     private ReactiveRedisTemplate<Object, Object> operations;
 
     public RedisClusterManager clusterManager;
 
     @Before
     public void init() {
+        operations = RedisHelper.getRedisTemplate();
+
         clusterManager = new RedisClusterManager("default", "test", operations);
     }
 
@@ -68,8 +64,8 @@ public class RedisClusterManagerTest {
     }
 
     @Test
-    public void testLocalCache(){
-        ClusterCache<String, Object> cache = new ClusterLocalCache<>("test",clusterManager);
+    public void testLocalCache() {
+        ClusterCache<String, Object> cache = new ClusterLocalCache<>("test", clusterManager);
 
         cache.putAll(Collections.singletonMap("test", "123"))
                 .as(StepVerifier::create)

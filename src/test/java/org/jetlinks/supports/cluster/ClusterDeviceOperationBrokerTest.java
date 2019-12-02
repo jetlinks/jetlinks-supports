@@ -9,14 +9,9 @@ import org.jetlinks.core.message.Headers;
 import org.jetlinks.core.message.function.FunctionInvokeMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessageReply;
 import org.jetlinks.supports.cluster.redis.RedisClusterManager;
-import org.jetlinks.supports.cluster.redis.TestApplication;
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -24,12 +19,9 @@ import reactor.test.StepVerifier;
 import java.time.Duration;
 import java.util.Collections;
 
-@SpringBootTest(classes = TestApplication.class)
-@RunWith(SpringJUnit4ClassRunner.class)
 public class ClusterDeviceOperationBrokerTest {
 
-    @Autowired
-    private ReactiveRedisTemplate<Object, Object> operations;
+    private ReactiveRedisTemplate<Object, Object> operations= RedisHelper.getRedisTemplate();
 
     public RedisClusterManager clusterManager;
 
