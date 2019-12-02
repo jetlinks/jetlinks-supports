@@ -115,7 +115,7 @@ public class DefaultSendToDeviceMessageHandler {
             session.getOperator()
                     .getProtocol()
                     .flatMap(protocolSupport -> protocolSupport.getMessageCodec(session.getTransport()))
-                    .flatMap(codec -> codec.encode(new ToDeviceMessageContext() {
+                    .flatMapMany(codec -> codec.encode(new ToDeviceMessageContext() {
                         @Override
                         public Mono<Boolean> sendToDevice(EncodedMessage message) {
                             return session.send(message);
@@ -138,6 +138,7 @@ public class DefaultSendToDeviceMessageHandler {
                         }
                     }))
                     .flatMap(session::send)
+                    .all(Boolean.TRUE::equals)
                     .flatMap(success -> {
                         if (message.getHeader(Headers.async).orElse(false)) {
                             return doReply(reply.message(ErrorCode.REQUEST_HANDLING.getText())
