@@ -93,7 +93,7 @@ public class DefaultSendToDeviceMessageHandlerTest {
         sessionManager.registerChildren("test", "test-children").block();
 
 
-        Thread.sleep(100);
+        Thread.sleep(1);
         children.messageSender()
                 .readProperty("name")
                 .messageId("test")
