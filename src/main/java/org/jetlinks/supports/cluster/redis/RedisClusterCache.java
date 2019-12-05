@@ -3,6 +3,7 @@ package org.jetlinks.supports.cluster.redis;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.springframework.data.redis.core.ReactiveHashOperations;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
+import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -80,6 +81,9 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> putAll(Map<? extends K, ? extends V> multi) {
+        if(CollectionUtils.isEmpty(multi)){
+            return Mono.just(true);
+        }
         return hash.putAll(redisKey, multi);
     }
 

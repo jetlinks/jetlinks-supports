@@ -6,6 +6,7 @@ import com.google.common.collect.ImmutableMap;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.cluster.ClusterTopic;
+import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.function.Tuple2;
@@ -118,6 +119,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> putAll(Map<? extends K, ? extends V> multi) {
+        if(CollectionUtils.isEmpty(multi)){
+            return Mono.just(true);
+        }
         return Mono.defer(() -> {
             cache.putAll(multi);
             return clusterCache.putAll(multi)
