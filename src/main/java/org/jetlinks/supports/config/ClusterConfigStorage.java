@@ -20,6 +20,10 @@ public class ClusterConfigStorage implements ConfigStorage {
 
     ClusterCache<String, Object> cache;
 
+    public ClusterCache<String, Object> getCache() {
+        return cache;
+    }
+
     @Override
     public Mono<Value> getConfig(String key) {
         if(StringUtils.isEmpty(key)){

@@ -31,23 +31,35 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
                 .build());
     }
 
-    public ClusterLocalCache(String name, ClusterManager clusterManager, ClusterCache<K, V> clusterCache, Cache<K, V> localCache) {
+    public ClusterLocalCache(String name,
+                             ClusterManager clusterManager,
+                             ClusterCache<K, V> clusterCache,
+                             Cache<K, V> localCache) {
         this.clusterCache = clusterCache;
         this.cache = localCache;
         this.clearTopic = clusterManager.getTopic("_local_cache_modify:".concat(name));
+    }
 
-        clearTopic.subscribe()
-                .subscribe(key -> cache.invalidate(key));
+    public void clearLocalCache(K key) {
+        if (key != null) {
+            cache.invalidate(key);
+        }
     }
 
     @Override
     public Mono<V> get(K key) {
+        if (key == null) {
+            return Mono.empty();
+        }
         return Mono.justOrEmpty(cache.getIfPresent(key))
                 .switchIfEmpty(clusterCache.get(key).doOnNext(v -> cache.put(key, v)));
     }
 
     @Override
     public Flux<V> get(Collection<K> key) {
+        if (key == null) {
+            return Flux.empty();
+        }
         return Mono.justOrEmpty(cache.getAllPresent(key))
                 .map(ImmutableMap::values)
                 .flatMapMany(Flux::fromIterable)
@@ -59,6 +71,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> put(K key, V value) {
+        if (value == null || key == null) {
+            return Mono.just(true);
+        }
         return Mono.defer(() -> {
             cache.invalidate(key);
             return clusterCache.put(key, value)
@@ -69,6 +84,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> putIfAbsent(K key, V value) {
+        if (value == null || key == null) {
+            return Mono.just(true);
+        }
         return Mono.defer(() -> {
             cache.invalidate(key);
             return clusterCache.putIfAbsent(key, value)
@@ -78,6 +96,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> remove(K key) {
+        if (key == null) {
+            return Mono.just(true);
+        }
         return Mono.defer(() -> {
             cache.invalidate(key);
             return clusterCache.remove(key)
@@ -88,6 +109,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> remove(Collection<K> key) {
+        if (key == null) {
+            return Mono.just(true);
+        }
         return Mono.defer(() -> {
             cache.invalidateAll(key);
             return clusterCache.remove(key)
@@ -98,6 +122,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> containsKey(K key) {
+        if (key == null) {
+            return Mono.just(true);
+        }
         return Mono.defer(() -> {
             if (clusterCache.containsKey(key) != null) {
                 return Mono.just(true);
@@ -119,7 +146,7 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> putAll(Map<? extends K, ? extends V> multi) {
-        if(CollectionUtils.isEmpty(multi)){
+        if (CollectionUtils.isEmpty(multi)) {
             return Mono.just(true);
         }
         return Mono.defer(() -> {

@@ -14,6 +14,7 @@ import org.jetlinks.supports.config.ClusterConfigStorageManager;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -85,6 +86,11 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     public Mono<DeviceOperator> registry(DeviceInfo deviceInfo) {
         DefaultDeviceOperator operator = createOperator(deviceInfo.getId());
         operatorCache.put(operator.getDeviceId(), operator);
+        Map<String, Object> configs = new HashMap<>();
+
+        configs.put(DeviceConfigKey.productId.getKey(), deviceInfo.getProductId());
+        configs.put(DeviceConfigKey.protocol.getKey(), deviceInfo.getProtocol());
+
         return operator.setConfigs(
                 DeviceConfigKey.productId.value(deviceInfo.getProductId()),
                 DeviceConfigKey.protocol.value(deviceInfo.getProtocol()))

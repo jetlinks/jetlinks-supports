@@ -2,7 +2,6 @@ package org.jetlinks.supports.cluster.redis;
 
 import org.jetlinks.core.cluster.ClusterTopic;
 import org.reactivestreams.Publisher;
-import org.springframework.data.redis.connection.ReactiveSubscription;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import reactor.core.Disposable;
 import reactor.core.publisher.EmitterProcessor;
@@ -18,7 +17,7 @@ public class RedisClusterTopic<T> implements ClusterTopic<T> {
 
     private ReactiveRedisOperations<Object, T> operations;
 
-    private FluxProcessor<T,T> processor;
+    private FluxProcessor<TopicMessage<T>, TopicMessage<T>> processor;
 
     public RedisClusterTopic(String topic, ReactiveRedisOperations<Object, T> operations) {
         this.topicName = topic;
@@ -33,21 +32,30 @@ public class RedisClusterTopic<T> implements ClusterTopic<T> {
     private void doSubscribe() {
         if (subscribed.compareAndSet(false, true)) {
             disposable = operations
-                    .listenToChannel(topicName)
-                    .map(ReactiveSubscription.Message::getMessage)
+                    .listenToPattern(topicName)
                     .subscribe(data -> {
                         if (!processor.hasDownstreams()) {
                             disposable.dispose();
                             subscribed.compareAndSet(true, false);
                         } else {
-                            processor.onNext(data);
+                            processor.onNext(new TopicMessage<T>() {
+                                @Override
+                                public String getTopic() {
+                                    return data.getChannel();
+                                }
+
+                                @Override
+                                public T getMessage() {
+                                    return data.getMessage();
+                                }
+                            });
                         }
                     });
         }
     }
 
     @Override
-    public Flux<T> subscribe() {
+    public Flux<TopicMessage<T>> subscribePattern() {
         return processor
                 .doOnSubscribe((r) -> doSubscribe());
     }

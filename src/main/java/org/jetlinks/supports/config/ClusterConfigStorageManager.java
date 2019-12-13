@@ -7,17 +7,30 @@ import org.jetlinks.supports.cluster.ClusterLocalCache;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ClusterConfigStorageManager implements ConfigStorageManager {
 
     private ClusterManager clusterManager;
 
+    @SuppressWarnings("all")
     public ClusterConfigStorageManager(ClusterManager clusterManager) {
         this.clusterManager = clusterManager;
+        clusterManager.getTopic("_local_cache_modify:*")
+                .subscribePattern()
+                .subscribe(msg -> {
+                    String[] type = msg.getTopic().split("[:]", 2);
+                    if (type.length <= 0) {
+                        return;
+                    }
+                    Optional.ofNullable(storageMap.get(type[1]))
+                            .ifPresent(store -> ((ClusterLocalCache) store.getCache()).clearLocalCache(msg.getMessage()));
+
+                });
     }
 
-    private Map<String, ConfigStorage> storageMap = new ConcurrentHashMap<>();
+    private Map<String, ClusterConfigStorage> storageMap = new ConcurrentHashMap<>();
 
     @Override
     public Mono<ConfigStorage> getStorage(String id) {
