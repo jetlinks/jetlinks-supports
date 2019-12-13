@@ -25,7 +25,7 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
     public ArrayType decode(ArrayType type, Map<String, Object> config) {
         super.decode(type, config);
         JSONObject jsonObject = new JSONObject(config);
-        ofNullable(jsonObject.getJSONObject("eleType"))
+        ofNullable(jsonObject.getJSONObject("elementType"))
                 .map(eleType -> {
                     DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
 
@@ -43,7 +43,7 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
     protected void doEncode(Map<String, Object> encoded, ArrayType type) {
         super.doEncode(encoded, type);
         JetLinksDataTypeCodecs.getCodec(type.getId())
-                .ifPresent(codec -> encoded.put("eleType", codec.encode(type.getElementType())));
+                .ifPresent(codec -> encoded.put("elementType", codec.encode(type.getElementType())));
 
     }
 }
