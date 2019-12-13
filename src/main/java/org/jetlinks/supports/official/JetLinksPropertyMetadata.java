@@ -40,6 +40,10 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
     @Setter
     private Map<String, Object> expands;
 
+    public JetLinksPropertyMetadata(){
+
+    }
+
     public JetLinksPropertyMetadata(JSONObject json) {
         fromJson(json);
     }
