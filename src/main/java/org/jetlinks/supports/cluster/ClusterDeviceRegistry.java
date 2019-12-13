@@ -16,6 +16,7 @@ import reactor.core.publisher.Mono;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ClusterDeviceRegistry implements DeviceRegistry {
@@ -84,27 +85,44 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     @Override
     public Mono<DeviceOperator> registry(DeviceInfo deviceInfo) {
-        DefaultDeviceOperator operator = createOperator(deviceInfo.getId());
-        operatorCache.put(operator.getDeviceId(), operator);
-        Map<String, Object> configs = new HashMap<>();
+        return Mono.defer(() -> {
+            DefaultDeviceOperator operator = new DefaultDeviceOperator(
+                    deviceInfo.getId(),
+                    supports, manager, handler, interceptor, this
+            );
+            operatorCache.put(operator.getDeviceId(), operator);
 
-        configs.put(DeviceConfigKey.productId.getKey(), deviceInfo.getProductId());
-        configs.put(DeviceConfigKey.protocol.getKey(), deviceInfo.getProtocol());
+            Map<String, Object> configs = new HashMap<>();
+            Optional.ofNullable(deviceInfo.getMetadata())
+                    .ifPresent(conf -> configs.put(DeviceConfigKey.metadata.getKey(), conf));
+            Optional.ofNullable(deviceInfo.getProtocol())
+                    .ifPresent(conf -> configs.put(DeviceConfigKey.protocol.getKey(), conf));
+            Optional.ofNullable(deviceInfo.getProductId())
+                    .ifPresent(conf -> configs.put(DeviceConfigKey.productId.getKey(), conf));
 
-        return operator.setConfigs(
-                DeviceConfigKey.productId.value(deviceInfo.getProductId()),
-                DeviceConfigKey.protocol.value(deviceInfo.getProtocol()))
-                .thenReturn(operator);
+            Optional.ofNullable(deviceInfo.getConfiguration())
+                    .ifPresent(configs::putAll);
+
+            return operator.setConfigs(configs).thenReturn(operator);
+        });
     }
 
     @Override
     public Mono<DeviceProductOperator> registry(ProductInfo productInfo) {
-        DefaultDeviceProductOperator operator = new DefaultDeviceProductOperator(productInfo.getId(), supports, manager);
-        productOperatorMap.put(operator.getId(), operator);
-        return operator.setConfigs(
-                DeviceConfigKey.metadata.value(productInfo.getMetadata()),
-                DeviceConfigKey.protocol.value(productInfo.getProtocol()))
-                .thenReturn(operator);
+        return Mono.defer(() -> {
+            DefaultDeviceProductOperator operator = new DefaultDeviceProductOperator(productInfo.getId(), supports, manager);
+            productOperatorMap.put(operator.getId(), operator);
+            Map<String, Object> configs = new HashMap<>();
+            Optional.ofNullable(productInfo.getMetadata())
+                    .ifPresent(conf -> configs.put(DeviceConfigKey.metadata.getKey(), conf));
+            Optional.ofNullable(productInfo.getProtocol())
+                    .ifPresent(conf -> configs.put(DeviceConfigKey.protocol.getKey(), conf));
+
+            Optional.ofNullable(productInfo.getConfiguration())
+                    .ifPresent(configs::putAll);
+
+            return operator.setConfigs(configs).thenReturn(operator);
+        });
     }
 
     @Override
