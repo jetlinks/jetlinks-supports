@@ -36,6 +36,10 @@ public class StaticProtocolSupports implements ProtocolSupports {
     }
 
     public void unRegister(ProtocolSupport support) {
-        supports.remove(support.getId());
+        unRegister(support.getId());
+    }
+
+    public void unRegister(String id) {
+        supports.remove(id);
     }
 }

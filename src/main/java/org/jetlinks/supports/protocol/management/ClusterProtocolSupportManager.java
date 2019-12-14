@@ -41,6 +41,9 @@ public class ClusterProtocolSupportManager implements ProtocolSupportManager {
 
     @Override
     public Mono<Boolean> remove(String id) {
-        return cache.remove(id);
+        return cache.get(id)
+                .doOnNext(def -> def.setState((byte) -1))
+                .flatMap(this::save)
+                .then(cache.remove(id));
     }
 }

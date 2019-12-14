@@ -59,7 +59,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                     DeviceOperator deviceOperator = createOperator(deviceId);
                     return deviceOperator.getConfig(DeviceConfigKey.protocol)
                             .doOnNext(r -> operatorCache.put(deviceId, deviceOperator))
-                            .thenReturn(deviceOperator);
+                            .map((r) -> deviceOperator);
                 }));
     }
 
@@ -70,7 +70,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                     DeviceProductOperator deviceOperator = createProductOperator(productId);
                     return deviceOperator.getConfig(DeviceConfigKey.protocol)
                             .doOnNext(r -> productOperatorMap.put(productId, deviceOperator))
-                            .thenReturn(deviceOperator);
+                            .map((r) -> deviceOperator);
                 }));
     }
 
