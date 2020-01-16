@@ -71,8 +71,8 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
             return clusterManager.getTopic("device:state:checker:".concat(serverId))
                     .publish(Mono.just(request))
-                    .thenMany(processor
-                            .flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())));
+                    .flatMapMany(m -> processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
+                    .timeout(Duration.ofSeconds(5), Flux.empty());
         });
     }
 
@@ -130,7 +130,7 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
-        message.addHeader(Headers.replyFrom,serverId);
+        message.addHeader(Headers.replyFrom, serverId);
         if (replyProcessor.containsKey(message.getMessageId())) {
             handleReply(message);
             return Mono.just(true);

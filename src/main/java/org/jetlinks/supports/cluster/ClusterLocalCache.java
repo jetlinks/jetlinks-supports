@@ -17,7 +17,7 @@ import java.util.Map;
 
 public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
-    private Cache<K, V> cache;
+    private Cache<K, Object> cache;
 
     private ClusterCache<K, V> clusterCache;
 
@@ -27,14 +27,14 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
         this(name, clusterManager, clusterManager.getCache(name), CacheBuilder.newBuilder()
                 .expireAfterAccess(Duration.ofMinutes(30))
                 .expireAfterWrite(Duration.ofMinutes(30))
-                .softValues()
+//                .softValues()
                 .build());
     }
 
     public ClusterLocalCache(String name,
                              ClusterManager clusterManager,
                              ClusterCache<K, V> clusterCache,
-                             Cache<K, V> localCache) {
+                             Cache<K, Object> localCache) {
         this.clusterCache = clusterCache;
         this.cache = localCache;
         this.clearTopic = clusterManager.getTopic("_local_cache_modify:".concat(name));
@@ -46,13 +46,19 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
         }
     }
 
+    public static final Object NULL_VALUE = new Object();
+
     @Override
     public Mono<V> get(K key) {
         if (key == null) {
             return Mono.empty();
         }
         return Mono.justOrEmpty(cache.getIfPresent(key))
-                .switchIfEmpty(clusterCache.get(key).doOnNext(v -> cache.put(key, v)));
+                .switchIfEmpty(Mono.defer(() -> clusterCache.get(key)
+                        .switchIfEmpty(Mono.fromRunnable(() -> cache.put(key, NULL_VALUE)))
+                        .doOnNext(v -> cache.put(key, v))))
+                .filter(v -> v != NULL_VALUE)
+                .map(v -> (V) v);
     }
 
     @Override
@@ -64,9 +70,14 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
                 .map(ImmutableMap::values)
                 .flatMapMany(Flux::fromIterable)
                 .switchIfEmpty(Flux.fromIterable(key)
-                        .flatMap(k -> Mono.just(k).zipWith(clusterCache.get(k)))
+                        .flatMap(k -> Mono.just(k)
+                                .zipWith(clusterCache.get(k))
+                                .switchIfEmpty(Mono.fromRunnable(() -> cache.put(k, NULL_VALUE))))
                         .doOnNext(tuple -> cache.put(tuple.getT1(), tuple.getT2()))
-                        .map(Tuple2::getT2));
+                        .map(Tuple2::getT2)
+                )
+                .filter(v -> v != NULL_VALUE)
+                .map(v -> (V) v);
     }
 
     @Override

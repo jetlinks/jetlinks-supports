@@ -20,7 +20,7 @@ public class JetLinksEventMetadata implements EventMetadata {
 
     private JSONObject jsonObject;
 
-    private DataType type;
+    private volatile DataType type;
 
     private transient EventMetadata another;
 

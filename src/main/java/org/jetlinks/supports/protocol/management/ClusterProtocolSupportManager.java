@@ -33,10 +33,11 @@ public class ClusterProtocolSupportManager implements ProtocolSupportManager {
 
     @Override
     public Mono<Boolean> save(ProtocolSupportDefinition definition) {
-        return clusterManager.getTopic("_protocol_changed")
-                .publish(Mono.just(definition))
-                .then(cache
-                        .put(definition.getId(), definition));
+        return cache
+                .put(definition.getId(), definition)
+                .flatMap(su -> clusterManager.getTopic("_protocol_changed")
+                        .publish(Mono.just(definition))
+                        .thenReturn(su));
     }
 
     @Override

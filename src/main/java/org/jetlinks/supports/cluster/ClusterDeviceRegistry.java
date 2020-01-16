@@ -11,9 +11,13 @@ import org.jetlinks.core.defaults.DefaultDeviceProductOperator;
 import org.jetlinks.core.device.*;
 import org.jetlinks.core.message.interceptor.DeviceMessageSenderInterceptor;
 import org.jetlinks.supports.config.ClusterConfigStorageManager;
+import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2;
 
 import java.time.Duration;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -50,6 +54,29 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.handler = handler;
         this.manager = new ClusterConfigStorageManager(clusterManager);
         this.operatorCache = cache;
+    }
+
+    @Override
+    public Flux<DeviceStateInfo> checkDeviceState(Flux<? extends Collection<String>> id) {
+
+        return id.flatMap(list -> Flux.fromIterable(list)
+                .flatMap(this::getDevice)
+                .flatMap(device -> device
+                        .getConnectionServerId()
+                        .defaultIfEmpty("__")
+                        .zipWith(Mono.just(device)))
+                .groupBy(Tuple2::getT1, Tuple2::getT2)
+                .flatMap(group -> {
+                    if (!StringUtils.hasText(group.key()) || "__".equals(group.key())) {
+                        return group.flatMap(operator -> operator
+                                .getState()
+                                .map(state -> new DeviceStateInfo(operator.getDeviceId(), state)));
+                    }
+                    return group
+                            .map(DeviceOperator::getDeviceId)
+                            .collectList()
+                            .flatMapMany(deviceIdList -> handler.getDeviceState(group.key(), deviceIdList));
+                }));
     }
 
     @Override

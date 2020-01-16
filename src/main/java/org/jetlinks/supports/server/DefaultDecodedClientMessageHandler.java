@@ -8,6 +8,7 @@ import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxProcessor;
+import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.extra.processor.TopicProcessor;
 
@@ -20,6 +21,8 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     private MessageHandler messageHandler;
 
     private FluxProcessor<Message, Message> processor;
+
+    private FluxSink<Message> sink;
 
     private DeviceSessionManager sessionManager;
 
@@ -37,6 +40,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         this.messageHandler = handler;
         this.processor = processor;
         this.sessionManager = sessionManager;
+        this.sink = processor.sink();
     }
 
     protected Mono<Boolean> handleDeviceMessageReply(DeviceMessageReply message) {
@@ -105,14 +109,13 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
                     }
                     return Mono.just(true);
                 })
-                .onErrorContinue((err, res) -> {
-                    log.error("handle device[{}] message [{}] error", device.getDeviceId(), message, err);
-                })
                 .switchIfEmpty(Mono.just(false))
                 .doFinally(s -> {
                     if (processor.hasDownstreams()) {
-                        processor.onNext(message);
+                        sink.next(message);
                     }
+                }).onErrorContinue((err, res) -> {
+                    log.error("handle device[{}] message [{}] error", device.getDeviceId(), message, err);
                 });
 
     }

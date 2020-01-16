@@ -16,11 +16,11 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
 
     private JSONObject jsonObject;
 
-    private List<PropertyMetadata> properties;
+    private volatile List<PropertyMetadata> properties;
 
-    private List<FunctionMetadata> functions;
+    private volatile List<FunctionMetadata> functions;
 
-    private List<EventMetadata> events;
+    private volatile List<EventMetadata> events;
 
     @Getter
     @Setter
