@@ -8,10 +8,7 @@ import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessageReply;
-import org.jetlinks.core.message.property.ReadPropertyMessage;
-import org.jetlinks.core.message.property.ReadPropertyMessageReply;
-import org.jetlinks.core.message.property.WritePropertyMessage;
-import org.jetlinks.core.message.property.WritePropertyMessageReply;
+import org.jetlinks.core.message.property.*;
 import org.jetlinks.supports.utils.MqttTopicUtils;
 import org.springframework.util.Assert;
 
@@ -46,8 +43,9 @@ class JetlinksTopicMessageCodec {
             }
             derivedMetadata = topic.endsWith("metadata/derived");
 
-            event = event || derivedMetadata || (reportProperties = topic.endsWith("properties/report"));
+            event = event || derivedMetadata;
 
+            reportProperties = topic.endsWith("properties/report");
             readPropertyReply = topic.endsWith("properties/read/reply");
             writePropertyReply = topic.endsWith("properties/write/reply");
             functionInvokeReply = topic.endsWith("function/invoke/reply");
@@ -69,8 +67,8 @@ class JetlinksTopicMessageCodec {
 
     protected EncodedTopic encode(String deviceId, Message message) {
 
-        Assert.hasText(deviceId,"deviceId can not be null");
-        Assert.notNull(message,"message can not be null");
+        Assert.hasText(deviceId, "deviceId can not be null");
+        Assert.notNull(message, "message can not be null");
 
         if (message instanceof ReadPropertyMessage) {
             String topic = "/".concat(deviceId).concat("/properties/read");
@@ -114,6 +112,8 @@ class JetlinksTopicMessageCodec {
         Message message = null;
         if (result.isEvent()) {
             message = decodeEvent(result, object);
+        } else if (result.isReportProperties()) {
+            message = decodeReportPropertyReply(result, object);
         } else if (result.isReadPropertyReply()) {
             message = decodeReadPropertyReply(result, object);
         } else if (result.isWritePropertyReply()) {
@@ -155,9 +155,7 @@ class JetlinksTopicMessageCodec {
         EventMessage message = event.toJavaObject(EventMessage.class);
         message.setData(event.get("data"));
         message.setEvent(result.args.get("eventId"));
-        if (result.isReportProperties()) {
-            message.addHeader(Headers.reportProperties, true);
-        }
+
         if (result.isDerivedMetadata()) {
             message.addHeader(Headers.reportDerivedMetadata, true);
         }
@@ -166,7 +164,6 @@ class JetlinksTopicMessageCodec {
         } else {
             message.setDeviceId(result.getDeviceId());
         }
-        message.setSuccess(Optional.ofNullable(event.getBoolean("success")).orElse(true));
         return message;
     }
 
@@ -174,6 +171,13 @@ class JetlinksTopicMessageCodec {
 
         return data.toJavaObject(ReadPropertyMessageReply.class);
     }
+
+
+    private Message decodeReportPropertyReply(DecodeResult result, JSONObject data) {
+
+        return data.toJavaObject(ReportPropertyMessage.class);
+    }
+
 
     private Message decodeWritePropertyReply(DecodeResult result, JSONObject data) {
 

@@ -3,7 +3,6 @@ package org.jetlinks.supports.server;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.message.*;
-import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.Flux;
@@ -46,9 +45,6 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     protected Mono<Boolean> handleDeviceMessageReply(DeviceMessageReply message) {
         //强制回复
         if (message.getHeader(Headers.forceReply).orElse(false)) {
-            return doReply(message);
-        }
-        if (!(message instanceof EventMessage)) {
             return doReply(message);
         }
         return Mono.just(true);

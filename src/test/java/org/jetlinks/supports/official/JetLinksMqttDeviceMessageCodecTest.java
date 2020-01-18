@@ -14,10 +14,7 @@ import org.jetlinks.core.message.codec.*;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessageReply;
-import org.jetlinks.core.message.property.ReadPropertyMessage;
-import org.jetlinks.core.message.property.ReadPropertyMessageReply;
-import org.jetlinks.core.message.property.WritePropertyMessage;
-import org.jetlinks.core.message.property.WritePropertyMessageReply;
+import org.jetlinks.core.message.property.*;
 import org.jetlinks.supports.server.session.TestDeviceRegistry;
 import org.junit.Assert;
 import org.junit.Before;
@@ -260,7 +257,6 @@ public class JetLinksMqttDeviceMessageCodecTest {
 
         Assert.assertTrue(message instanceof EventMessage);
         EventMessage reply = ((EventMessage) message);
-        Assert.assertTrue(reply.isSuccess());
         Assert.assertEquals(reply.getDeviceId(), "device1");
         Assert.assertEquals(reply.getMessageId(), "test");
         Assert.assertEquals(reply.getData(), 100);
@@ -277,7 +273,6 @@ public class JetLinksMqttDeviceMessageCodecTest {
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
 
         EventMessage reply = ((EventMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
-        Assert.assertTrue(reply.isSuccess());
         Assert.assertEquals(reply.getDeviceId(), "test");
         Assert.assertEquals(reply.getMessageId(), "test");
         Assert.assertEquals(reply.getData(), 100);
@@ -288,16 +283,14 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testPropertiesReport() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/properties/report")
-                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof EventMessage);
-        EventMessage reply = ((EventMessage) message);
-        Assert.assertTrue(reply.getHeader(Headers.reportProperties).orElse(false));
-        Assert.assertTrue(reply.isSuccess());
+        Assert.assertTrue(message instanceof ReportPropertyMessage);
+        ReportPropertyMessage reply = ((ReportPropertyMessage) message);
         Assert.assertEquals(reply.getDeviceId(), "device1");
         Assert.assertEquals(reply.getMessageId(), "test");
-        Assert.assertEquals(reply.getData(), Collections.singletonMap("sn", "test"));
+        Assert.assertEquals(reply.getProperties(), Collections.singletonMap("sn", "test"));
         System.out.println(reply);
     }
 
@@ -306,17 +299,15 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testChildPropertiesReport() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/properties/report")
-                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"sn\":\"test\"}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
 
-        EventMessage reply = ((EventMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
-        Assert.assertTrue(reply.getHeader(Headers.reportProperties).orElse(false));
-        Assert.assertTrue(reply.isSuccess());
+        ReportPropertyMessage reply = ((ReportPropertyMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
         Assert.assertEquals(reply.getDeviceId(), "test");
         Assert.assertEquals(reply.getMessageId(), "test");
-        Assert.assertEquals(reply.getData(), Collections.singletonMap("sn", "test"));
+        Assert.assertEquals(reply.getProperties(), Collections.singletonMap("sn", "test"));
         System.out.println(reply);
     }
 
@@ -331,7 +322,6 @@ public class JetLinksMqttDeviceMessageCodecTest {
         Assert.assertTrue(message instanceof EventMessage);
         EventMessage reply = ((EventMessage) message);
         Assert.assertTrue(reply.getHeader(Headers.reportDerivedMetadata).orElse(false));
-        Assert.assertTrue(reply.isSuccess());
         Assert.assertEquals(reply.getDeviceId(), "device1");
         Assert.assertEquals(reply.getMessageId(), "test");
         Assert.assertEquals(reply.getData(), Collections.singletonMap("functions", Collections.emptyList()));
@@ -349,7 +339,6 @@ public class JetLinksMqttDeviceMessageCodecTest {
 
         EventMessage reply = ((EventMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
         Assert.assertTrue(reply.getHeader(Headers.reportDerivedMetadata).orElse(false));
-        Assert.assertTrue(reply.isSuccess());
         Assert.assertEquals(reply.getDeviceId(), "test");
         Assert.assertEquals(reply.getMessageId(), "test");
         Assert.assertEquals(reply.getData(), Collections.singletonMap("functions", Collections.emptyList()));
