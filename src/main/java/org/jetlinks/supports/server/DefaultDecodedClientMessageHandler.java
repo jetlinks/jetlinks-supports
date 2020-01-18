@@ -43,11 +43,8 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     }
 
     protected Mono<Boolean> handleDeviceMessageReply(DeviceMessageReply message) {
-        //强制回复
-        if (message.getHeader(Headers.forceReply).orElse(false)) {
-            return doReply(message);
-        }
-        return Mono.just(true);
+
+        return doReply(message);
     }
 
     protected Mono<Boolean> handleChildrenDeviceMessage(DeviceOperator session, String childrenId, Message message) {
