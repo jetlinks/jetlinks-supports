@@ -11,6 +11,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
 
+import javax.annotation.Nonnull;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
@@ -111,6 +112,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
         }
     }
 
+    @Nonnull
     @Override
     public Flux<T> subscribe() {
         return processor
@@ -131,6 +133,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                 .map(Number::intValue);
     }
 
+    @Nonnull
     @Override
     public Mono<T> poll() {
         return operations

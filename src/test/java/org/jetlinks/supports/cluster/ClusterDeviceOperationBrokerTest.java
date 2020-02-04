@@ -17,11 +17,12 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 
 public class ClusterDeviceOperationBrokerTest {
 
-    private ReactiveRedisTemplate<Object, Object> operations= RedisHelper.getRedisTemplate();
+    private ReactiveRedisTemplate<Object, Object> operations = RedisHelper.getRedisTemplate();
 
     public RedisClusterManager clusterManager;
 
@@ -29,8 +30,8 @@ public class ClusterDeviceOperationBrokerTest {
 
     @Before
     public void init() {
-        clusterManager = new RedisClusterManager("default","test", operations);
-        broker=new ClusterDeviceOperationBroker(clusterManager);
+        clusterManager = new RedisClusterManager("default", "test", operations);
+        broker = new ClusterDeviceOperationBroker(clusterManager);
     }
 
 
@@ -45,6 +46,22 @@ public class ClusterDeviceOperationBrokerTest {
                 .as(StepVerifier::create)
                 .expectNext(DeviceState.online)
                 .verifyComplete();
+    }
+
+
+    @Test
+    public void testHmget() {
+        operations.opsForHash().put("test1", "1", "1")
+                .then(operations.opsForHash().put("test1", "2", "2"))
+                .then(operations.opsForHash().put("test1", "3", "3"))
+                .then(operations.opsForHash().multiGet("test1", Arrays.asList("1", "5", "2")))
+                .as(StepVerifier::create)
+                .expectNextMatches(list -> {
+                    System.out.println(list);
+                    return true;
+                })
+                .verifyComplete()
+        ;
     }
 
     @Test

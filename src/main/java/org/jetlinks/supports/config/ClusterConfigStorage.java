@@ -26,7 +26,7 @@ public class ClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Value> getConfig(String key) {
-        if(StringUtils.isEmpty(key)){
+        if (StringUtils.isEmpty(key)) {
             return Mono.empty();
         }
         return cache.get(key)
@@ -35,18 +35,20 @@ public class ClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
-        if(CollectionUtils.isEmpty(keys)){
+        if (CollectionUtils.isEmpty(keys)) {
             return Mono.empty();
         }
-        return Flux.fromIterable(keys)
-                .flatMap(key -> Mono.just(key).zipWith(cache.get(key)))
-                .collect(Collectors.toMap(Tuple2::getT1, Tuple2::getT2))
+        return cache.get(keys)
+                .collectList()
+                .map(list -> list.stream()
+                        .filter(e -> e.getValue() != null)
+                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (_1, _2) -> _2)))
                 .map(Values::of);
     }
 
     @Override
     public Mono<Boolean> setConfigs(Map<String, Object> values) {
-        if(CollectionUtils.isEmpty(values)){
+        if (CollectionUtils.isEmpty(values)) {
             return Mono.just(true);
         }
         return cache.putAll(values);

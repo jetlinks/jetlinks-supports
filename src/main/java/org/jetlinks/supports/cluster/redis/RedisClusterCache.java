@@ -7,7 +7,9 @@ import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
@@ -34,9 +36,16 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
     }
 
     @Override
-    public Flux<V> get(Collection<K> key) {
+    public Flux<Map.Entry<K, V>> get(Collection<K> key) {
         return hash.multiGet(redisKey, key)
-                .flatMapMany(Flux::fromIterable);
+                .flatMapIterable(list -> {
+                    Object[] keyArr = key.toArray();
+                    List<Map.Entry<K, V>> entries = new ArrayList<>(keyArr.length);
+                    for (int i = 0; i < list.size(); i++) {
+                        entries.add(new RedisSimpleEntry((K) keyArr[i], list.get(i)));
+                    }
+                    return entries;
+                });
     }
 
     @Override
@@ -81,7 +90,7 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> putAll(Map<? extends K, ? extends V> multi) {
-        if(CollectionUtils.isEmpty(multi)){
+        if (CollectionUtils.isEmpty(multi)) {
             return Mono.just(true);
         }
         return hash.putAll(redisKey, multi);
@@ -104,6 +113,33 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
         return hash
                 .delete(redisKey)
                 .then();
+    }
+
+    class RedisSimpleEntry implements Map.Entry<K, V> {
+        K key;
+        V value;
+
+        RedisSimpleEntry(K key, V value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        @Override
+        public K getKey() {
+            return key;
+        }
+
+        @Override
+        public V getValue() {
+            return value;
+        }
+
+        @Override
+        public V setValue(V value) {
+            V old = getValue();
+            put(getKey(), this.value = value).subscribe();
+            return old;
+        }
     }
 
     class RedisHashEntry implements Map.Entry<K, V> {

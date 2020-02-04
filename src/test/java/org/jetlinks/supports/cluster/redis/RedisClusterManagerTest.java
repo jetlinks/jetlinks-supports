@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -66,8 +67,26 @@ public class RedisClusterManagerTest {
     @Test
     public void testLocalCache() {
         ClusterCache<String, Object> cache = new ClusterLocalCache<>("test", clusterManager);
+        cache.clear().block();
 
         cache.putAll(Collections.singletonMap("test", "123"))
+                .as(StepVerifier::create)
+                .expectNext(true)
+                .verifyComplete();
+
+        cache.putAll(Collections.singletonMap("test2", "456"))
+                .as(StepVerifier::create)
+                .expectNext(true)
+                .verifyComplete();
+
+
+        cache.get(Arrays.asList("test", "aaa", "test2"))
+                .map(e -> e.getKey() + "=" + e.getValue())
+                .as(StepVerifier::create)
+                .expectNext("test=123","aaa=null","test2=456")
+                .verifyComplete();
+
+        cache.remove("test2")
                 .as(StepVerifier::create)
                 .expectNext(true)
                 .verifyComplete();
@@ -108,7 +127,7 @@ public class RedisClusterManagerTest {
     @SneakyThrows
     public void testCache() {
         ClusterCache<String, Object> cache = clusterManager.getCache("test");
-
+        cache.clear().block();
         cache.put("test", "123")
                 .as(StepVerifier::create)
                 .expectNext(true)

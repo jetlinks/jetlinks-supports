@@ -3,6 +3,7 @@ package org.jetlinks.supports.cluster;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.ImmutableMap;
+import lombok.AllArgsConstructor;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.cluster.ClusterTopic;
@@ -61,23 +62,65 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
                 .map(v -> (V) v);
     }
 
+    @AllArgsConstructor
+    class SimpleEntry implements Map.Entry<K, V> {
+
+        private Map.Entry<K, Object> entry;
+
+        @Override
+        public K getKey() {
+            return entry.getKey();
+        }
+
+        @Override
+        public V getValue() {
+            Object v = entry.getValue();
+            return v == NULL_VALUE ? null : (V) v;
+        }
+
+        @Override
+        public V setValue(V value) {
+            Object old = getValue();
+            entry.setValue(value);
+            return (V) old;
+        }
+    }
+
     @Override
-    public Flux<V> get(Collection<K> key) {
+    public Flux<Map.Entry<K, V>> get(Collection<K> key) {
         if (key == null) {
             return Flux.empty();
         }
-        return Mono.justOrEmpty(cache.getAllPresent(key))
-                .map(ImmutableMap::values)
-                .flatMapMany(Flux::fromIterable)
-                .switchIfEmpty(Flux.fromIterable(key)
-                        .flatMap(k -> Mono.just(k)
-                                .zipWith(clusterCache.get(k))
-                                .switchIfEmpty(Mono.fromRunnable(() -> cache.put(k, NULL_VALUE))))
-                        .doOnNext(tuple -> cache.put(tuple.getT1(), tuple.getT2()))
-                        .map(Tuple2::getT2)
-                )
-                .filter(v -> v != NULL_VALUE)
-                .map(v -> (V) v);
+        return Flux.defer(() -> {
+            ImmutableMap<K, Object> all = cache.getAllPresent(key);
+            if (key.size() == all.size()) {
+                return Flux.fromIterable(all.entrySet()).map(SimpleEntry::new);
+            }
+            return clusterCache.get(key)
+                    .doOnNext(kvEntry -> {
+                        K k = kvEntry.getKey();
+                        V v = kvEntry.getValue();
+                        if (v == null) {
+                            cache.put(k, NULL_VALUE);
+                        } else {
+                            cache.put(k, v);
+                        }
+                    });
+        });
+//
+//
+//        return Mono.justOrEmpty(cache.getAllPresent(key))
+//                .map(ImmutableMap::values)
+//                .flatMapMany(Flux::fromIterable)
+//                .switchIfEmpty(Flux.fromIterable(key)
+//                        .flatMap(k -> Mono.just(k)
+//                                .zipWith(clusterCache.get(k))
+//                                .switchIfEmpty(Mono.fromRunnable(() -> cache.put(k, NULL_VALUE))))
+//                        .doOnNext(tuple -> cache.put(tuple.getT1(), tuple.getT2()))
+//                        .map(Tuple2::getT2)
+//                )
+//                .filter(v -> v != NULL_VALUE)
+//                .map(v -> (V) v);
     }
 
     @Override
