@@ -71,50 +71,6 @@ public class DefaultDecodedClientMessageHandlerTest {
     }
 
     @Test
-    public void testOnlineOfflineMessage() {
-
-        DeviceSession session = sessionManager.getSession("test");
-        Assert.assertNotNull(session);
-
-        DeviceOnlineMessage onlineMessage = new DeviceOnlineMessage();
-        onlineMessage.setDeviceId("test-children");
-
-
-        handler.handleMessage(session.getOperator(), onlineMessage)
-                .as(StepVerifier::create)
-                .expectNext(true)
-                .verifyComplete();
-
-        ChildrenDeviceSession deviceSession = sessionManager.getSession("test", "test-children");
-        registry.getDevice("test-children")
-                .flatMap(DeviceOperator::getState)
-                .as(StepVerifier::create)
-                .expectNext(DeviceState.online)
-                .verifyComplete();
-        Assert.assertNotNull(deviceSession);
-
-        DeviceOfflineMessage offlineMessage = new DeviceOfflineMessage();
-        offlineMessage.setDeviceId("test-children");
-
-
-        handler.handleMessage(session.getOperator(), offlineMessage)
-                .as(StepVerifier::create)
-                .expectNext(true)
-                .verifyComplete();
-
-        deviceSession = sessionManager.getSession("test", "test-children");
-
-        Assert.assertNull(deviceSession);
-
-        registry.getDevice("test-children")
-                .flatMap(DeviceOperator::getState)
-                .as(StepVerifier::create)
-                .expectNext(DeviceState.offline)
-                .verifyComplete();
-
-    }
-
-    @Test
     public void testOnlineOfflineChildrenReplyMessage() {
 
         DeviceSession session = sessionManager.getSession("test");
