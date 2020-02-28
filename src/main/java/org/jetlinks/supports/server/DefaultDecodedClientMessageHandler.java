@@ -34,15 +34,15 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     }
 
 
-    protected Mono<Boolean> handleChildrenDeviceMessage(DeviceOperator session, String childrenId, Message message) {
+    protected Mono<Boolean> handleChildrenDeviceMessage(DeviceOperator device, String childrenId, Message message) {
         if (message instanceof DeviceMessageReply) {
             return doReply(((DeviceMessageReply) message));
         } else if (message instanceof DeviceOnlineMessage) {
-            return sessionManager.registerChildren(session.getDeviceId(), childrenId)
+            return sessionManager.registerChildren(device.getDeviceId(), childrenId)
                     .thenReturn(true)
                     .defaultIfEmpty(false);
         } else if (message instanceof DeviceOfflineMessage) {
-            return sessionManager.unRegisterChildren(session.getDeviceId(), childrenId)
+            return sessionManager.unRegisterChildren(device.getDeviceId(), childrenId)
                     .thenReturn(true)
                     .defaultIfEmpty(false);
         }
@@ -86,9 +86,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
                     if (processor.hasDownstreams()) {
                         sink.next(message);
                     }
-                }).onErrorContinue((err, res) -> {
-                    log.error("handle device[{}] message [{}] error", device.getDeviceId(), message, err);
-                });
+                }).onErrorContinue((err, res) -> log.error("handle device[{}] message [{}] error", device.getDeviceId(), message, err));
 
     }
 

@@ -55,13 +55,24 @@ public class RedisClusterManagerTest {
         disposable2.dispose();
         disposable1.dispose();
 
-        notifier1.handleNotify("test-reply", res -> Mono.just("pong"));
 
+        notifier1.handleNotify("test-reply", res -> Mono.just("pong"))
+                .subscribe();
         notifier2.sendNotifyAndReceive("server-1", "test-reply", Mono.just("ping"))
                 .timeout(Duration.ofSeconds(10))
                 .as(StepVerifier::create)
                 .expectNext("pong")
                 .verifyComplete();
+
+        notifier1.handleNotify("test_reply_multi", res -> Flux.just(1, 2, 3, 4).delayElements(Duration.ofMillis(100)))
+                .subscribe();
+        Thread.sleep(1000);
+        notifier2.sendNotifyAndReceive("server-1", "test_reply_multi", Mono.just(1))
+                .timeout(Duration.ofSeconds(10))
+                .as(StepVerifier::create)
+                .expectNext(1, 2, 3, 4)
+                .verifyComplete();
+
     }
 
     @Test
@@ -83,7 +94,7 @@ public class RedisClusterManagerTest {
         cache.get(Arrays.asList("test", "aaa", "test2"))
                 .map(e -> e.getKey() + "=" + e.getValue())
                 .as(StepVerifier::create)
-                .expectNext("test=123","aaa=null","test2=456")
+                .expectNext("test=123", "aaa=null", "test2=456")
                 .verifyComplete();
 
         cache.remove("test2")

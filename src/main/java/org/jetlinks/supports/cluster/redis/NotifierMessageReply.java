@@ -22,11 +22,17 @@ public class NotifierMessageReply implements Serializable {
 
     private String errorMessage;
 
+    private boolean complete;
+
+    public static NotifierMessageReply complete(String address, String messageId) {
+        return of(address, messageId, null, true, null,true);
+    }
+
     public static NotifierMessageReply success(String address, String messageId, Object payload) {
-        return of(address, messageId, payload, true, null);
+        return of(address, messageId, payload, true, null,false);
     }
 
     public static NotifierMessageReply fail(String address, String messageId, Throwable e) {
-        return of(address, messageId, null, false, e.getClass().getName().concat(":").concat(String.valueOf(e.getMessage())));
+        return of(address, messageId, null, false, e.getClass().getName().concat(":").concat(String.valueOf(e.getMessage())),false);
     }
 }

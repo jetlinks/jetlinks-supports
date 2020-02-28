@@ -39,15 +39,19 @@ public class RedisClusterNotifier implements ClusterNotifier {
         clusterManager.<NotifierMessageReply>getTopic(currentServerId.concat(":notify-reply"))
                 .subscribe()
                 .subscribe(reply -> {
-                    EmitterProcessor processor = replyHandlers.remove(reply.getMessageId());
+                    EmitterProcessor processor = replyHandlers.get(reply.getMessageId());
                     if (processor != null && !processor.isCancelled()) {
                         if (reply.isSuccess()) {
-                            if (reply.getPayload() == null) {
+                            if (reply.isComplete()) {
                                 processor.onComplete();
+                                replyHandlers.remove(reply.getMessageId());
+                                log.debug("complete notify reply [{}:{}]", reply.getAddress(), reply.getMessageId());
                             } else {
+                                log.debug("handle notify reply [{}:{}] : {}", reply.getAddress(), reply.getMessageId(), reply.getPayload());
                                 processor.onNext(reply.getPayload());
                             }
                         } else {
+                            replyHandlers.remove(reply.getMessageId());
                             processor.onError(new NotifyException(reply.getAddress(), reply.getErrorMessage()));
                         }
                     } else {
@@ -67,7 +71,7 @@ public class RedisClusterNotifier implements ClusterNotifier {
     }
 
     @Override
-    public <T> Mono<T> sendNotifyAndReceive(String serverNodeId, String address, Mono<?> payload) {
+    public <T> Flux<T> sendNotifyAndReceive(String serverNodeId, String address, Publisher<?> payload) {
         String messageId = UUID.randomUUID().toString();
         EmitterProcessor<T> processor = EmitterProcessor.create(true);
 
@@ -83,7 +87,7 @@ public class RedisClusterNotifier implements ClusterNotifier {
                     }
                     return Mono.just(i);
                 })
-                .then(processor.map(Function.identity()).next())
+                .thenMany(processor.map(Function.identity()))
                 .doOnCancel(() -> log.debug("cancel receive notify [{}] reply [{}]", address, messageId))
                 .doFinally(f -> replyHandlers.remove(messageId))
                 ;
@@ -100,35 +104,45 @@ public class RedisClusterNotifier implements ClusterNotifier {
     }
 
     @Override
-    public <T, R> void handleNotify(String address, Function<T, Mono<R>> replyHandler) {
-        clusterManager.<NotifierMessage>getTopic(getNotifyTopicKey(currentServerId, address)).subscribe()
-                .subscribe(msg -> {
+    public <T, R> Mono<Void> handleNotify(String address, Function<T, Publisher<R>> replyHandler) {
+        return clusterManager
+                .<NotifierMessage>getTopic(getNotifyTopicKey(currentServerId, address))
+                .subscribe()
+                .flatMap(msg -> {
                     String msgId = msg.getMessageId();
                     log.debug("handle notify [{}] from [{}]", address, msg.getFromServer());
                     try {
-                        replyHandler.apply((T) msg.getPayload())
+                        return Flux.from(replyHandler.apply((T) msg.getPayload()))
                                 .map(res -> NotifierMessageReply.success(address, msgId, res))
-                                .doOnError(error -> log.warn("handle notify errpr", error))
+                                .doOnError(error -> log.warn("handle notify error", error))
                                 .onErrorResume(err -> Mono.just(NotifierMessageReply.fail(address, msgId, err)))
                                 .switchIfEmpty(Mono.just(NotifierMessageReply.success(address, msgId, null)))
                                 .flatMap(reply -> {
                                     return clusterManager.<NotifierMessageReply>getTopic(msg.getFromServer().concat(":notify-reply")).publish(Mono.just(reply));
                                 })
-                                .subscribe(len -> {
+                                .doOnComplete(() -> {
+                                    clusterManager.<NotifierMessageReply>getTopic(msg.getFromServer().concat(":notify-reply"))
+                                            .publish(Mono.just(NotifierMessageReply.complete(address, msgId)))
+                                            .subscribe();
+                                })
+                                .doOnNext(len -> {
                                     if (len <= 0) {
                                         log.warn("reply notify [{}] to server[{}] fail ", address, msg.getFromServer());
                                     }
                                 });
                     } catch (Exception e) {
                         log.warn("handle notify error", e);
-                        clusterManager.<NotifierMessageReply>getTopic(msg.getFromServer().concat(":notify-reply"))
+                        return clusterManager.<NotifierMessageReply>getTopic(msg.getFromServer().concat(":notify-reply"))
                                 .publish(Mono.just(NotifierMessageReply.fail(address, msgId, e)))
-                                .subscribe(len -> {
+                                .doOnNext(len -> {
                                     if (len <= 0) {
                                         log.warn("reply notify [{}] to server[{}] fail ", address, msg.getFromServer());
                                     }
                                 });
                     }
-                });
+                })
+                .onErrorContinue((err, val) -> log.error(err.getMessage(), err))
+                .then();
+
     }
 }
