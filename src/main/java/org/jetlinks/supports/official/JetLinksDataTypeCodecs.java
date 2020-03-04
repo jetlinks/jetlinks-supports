@@ -19,6 +19,7 @@ public class JetLinksDataTypeCodecs {
         register(new JetLinksDoubleCodec());
         register(new JetLinksEnumCodec());
         register(new JetLinksFloatCodec());
+        register(new JetLinksGeoPointCodec());
         register(new JetLinksIntCodec());
         register(new JetLinksLongCodec());
         register(new JetLinksObjectCodec());
@@ -31,6 +32,7 @@ public class JetLinksDataTypeCodecs {
         codecMap.put(codec.getTypeId(), codec);
     }
 
+    @SuppressWarnings("all")
     public static Optional<DataTypeCodec<DataType>> getCodec(String typeId) {
 
         return Optional.ofNullable((DataTypeCodec) codecMap.get(typeId));
