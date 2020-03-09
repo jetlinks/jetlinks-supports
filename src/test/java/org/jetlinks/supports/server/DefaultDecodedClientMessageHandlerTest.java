@@ -115,7 +115,7 @@ public class DefaultDecodedClientMessageHandlerTest {
         registry.getDevice("test-children")
                 .flatMap(DeviceOperator::getState)
                 .as(StepVerifier::create)
-                .expectNext(DeviceState.offline)
+                .expectNext(DeviceState.online)
                 .verifyComplete();
 
     }
