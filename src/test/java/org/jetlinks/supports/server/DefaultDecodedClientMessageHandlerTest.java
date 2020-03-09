@@ -61,7 +61,7 @@ public class DefaultDecodedClientMessageHandlerTest {
                 .build())
                 .block();
 
-        children.setConfig(DeviceConfigKey.parentMeshDeviceId, "test").block();
+        children.setConfig(DeviceConfigKey.parentGatewayId, "test").block();
 
         sessionManager.register(new TestDeviceSession("test", device, message -> {
 

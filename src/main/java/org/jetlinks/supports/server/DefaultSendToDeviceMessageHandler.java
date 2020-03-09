@@ -58,7 +58,7 @@ public class DefaultSendToDeviceMessageHandler {
                     .flatMap(deviceOperator -> {
                         //获取上级设备
                         return deviceOperator
-                                .getSelfConfig(DeviceConfigKey.parentMeshDeviceId)
+                                .getSelfConfig(DeviceConfigKey.parentGatewayId)
                                 .flatMap(registry::getDevice);
                     })
                     .flatMap(operator -> {
