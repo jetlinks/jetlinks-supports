@@ -61,7 +61,7 @@ public class DefaultDecodedClientMessageHandlerTest {
                 .build())
                 .block();
 
-        children.setConfig(DeviceConfigKey.parentMeshDeviceId, "test").block();
+        children.setConfig(DeviceConfigKey.parentGatewayId, "test").block();
 
         sessionManager.register(new TestDeviceSession("test", device, message -> {
 
@@ -115,7 +115,7 @@ public class DefaultDecodedClientMessageHandlerTest {
         registry.getDevice("test-children")
                 .flatMap(DeviceOperator::getState)
                 .as(StepVerifier::create)
-                .expectNext(DeviceState.offline)
+                .expectNext(DeviceState.online)
                 .verifyComplete();
 
     }

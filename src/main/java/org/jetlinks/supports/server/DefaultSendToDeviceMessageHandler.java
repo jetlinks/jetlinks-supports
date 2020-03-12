@@ -58,7 +58,7 @@ public class DefaultSendToDeviceMessageHandler {
                     .flatMap(deviceOperator -> {
                         //获取上级设备
                         return deviceOperator
-                                .getSelfConfig(DeviceConfigKey.parentMeshDeviceId)
+                                .getSelfConfig(DeviceConfigKey.parentGatewayId)
                                 .flatMap(registry::getDevice);
                     })
                     .flatMap(operator -> {
@@ -151,6 +151,7 @@ public class DefaultSendToDeviceMessageHandler {
                         log.error(error.getMessage(), error);
                         doReply(reply.error(error)).subscribe();
                     })
+                    .switchIfEmpty(Mono.defer(() -> doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE))))
                     .subscribe();
         }
     }
