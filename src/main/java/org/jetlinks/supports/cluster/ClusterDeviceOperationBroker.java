@@ -130,16 +130,18 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
-        message.addHeader(Headers.replyFrom, serverId);
-        if (replyProcessor.containsKey(message.getMessageId())) {
-            handleReply(message);
-            return Mono.just(true);
-        }
-        return clusterManager
-                .getTopic("device:msg:reply")
-                .publish(Mono.just(message))
-                .map(l -> l > 0)
-                .switchIfEmpty(Mono.just(false));
+       return Mono.defer(()->{
+           message.addHeader(Headers.replyFrom, serverId);
+           if (replyProcessor.containsKey(message.getMessageId())) {
+               handleReply(message);
+               return Mono.just(true);
+           }
+           return clusterManager
+                   .getTopic("device:msg:reply")
+                   .publish(Mono.just(message))
+                   .map(l -> l > 0)
+                   .switchIfEmpty(Mono.just(false));
+       });
     }
 
     private void handleReply(DeviceMessageReply message) {
