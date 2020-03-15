@@ -42,7 +42,7 @@ public class TestDeviceRegistry implements DeviceRegistry {
     }
 
     @Override
-    public Mono<DeviceOperator> registry(DeviceInfo deviceInfo) {
+    public Mono<DeviceOperator> register(DeviceInfo deviceInfo) {
         DefaultDeviceOperator operator = new DefaultDeviceOperator(
                 deviceInfo.getId(),
                 supports, manager, handler, interceptor, this
@@ -55,7 +55,7 @@ public class TestDeviceRegistry implements DeviceRegistry {
     }
 
     @Override
-    public Mono<DeviceProductOperator> registry(ProductInfo productInfo) {
+    public Mono<DeviceProductOperator> register(ProductInfo productInfo) {
         DefaultDeviceProductOperator operator = new DefaultDeviceProductOperator(productInfo.getId(), supports, manager);
         productOperatorMap.put(operator.getId(), operator);
         return operator.setConfigs(
@@ -65,9 +65,16 @@ public class TestDeviceRegistry implements DeviceRegistry {
     }
 
     @Override
-    public Mono<Void> unRegistry(String deviceId) {
+    public Mono<Void> unregisterDevice(String deviceId) {
         return Mono.justOrEmpty(deviceId)
                 .map(operatorMap::remove)
+                .then();
+    }
+
+    @Override
+    public Mono<Void> unregisterProduct(String productId) {
+        return Mono.justOrEmpty(productId)
+                .map(productOperatorMap::remove)
                 .then();
     }
 }
