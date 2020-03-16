@@ -29,6 +29,8 @@ class JetlinksTopicMessageCodec {
         private boolean functionInvokeReply;
         private boolean reportProperties;
         private boolean derivedMetadata;
+        private boolean register;
+        private boolean unregister;
 
         public DecodeResult(String topic) {
             this.topic = topic;
@@ -43,7 +45,8 @@ class JetlinksTopicMessageCodec {
             }
             derivedMetadata = topic.endsWith("metadata/derived");
 
-            event = event || derivedMetadata;
+            register = topic.endsWith("register");
+            unregister = topic.endsWith("unregister");
 
             reportProperties = topic.endsWith("properties/report");
             readPropertyReply = topic.endsWith("properties/read/reply");
@@ -120,6 +123,10 @@ class JetlinksTopicMessageCodec {
             message = decodeWritePropertyReply(result, object);
         } else if (result.isFunctionInvokeReply()) {
             message = decodeInvokeReply(result, object);
+        } else if (result.isRegister()) {
+            message = decodeRegister(result, object);
+        } else if (result.isUnregister()) {
+            message = decodeUnregister(result, object);
         }
 
         if (result.isChild()) {
@@ -186,6 +193,14 @@ class JetlinksTopicMessageCodec {
 
     private Message decodeInvokeReply(DecodeResult result, JSONObject data) {
         return data.toJavaObject(FunctionInvokeMessageReply.class);
+    }
+
+    private Message decodeRegister(DecodeResult result, JSONObject data) {
+        return data.toJavaObject(DeviceRegisterMessage.class);
+    }
+
+    private Message decodeUnregister(DecodeResult result, JSONObject data) {
+        return data.toJavaObject(DeviceUnRegisterMessage.class);
     }
 
     private void applyCommons(Message message, DecodeResult result, JSONObject data) {
