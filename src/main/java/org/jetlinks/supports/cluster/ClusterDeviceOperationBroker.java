@@ -69,7 +69,7 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
             checkRequests.put(uid, processor);
 
-            return clusterManager.getTopic("device:state:checker:".concat(serverId))
+            return clusterManager.getTopic("device:state:checker:".concat(deviceGatewayServerId))
                     .publish(Mono.just(request))
                     .flatMapMany(m -> processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
                     .timeout(Duration.ofSeconds(5), Flux.empty());

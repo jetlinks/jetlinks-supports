@@ -40,7 +40,7 @@ public class JetLinksCoapDeviceMessageCodecTest {
     @Before
     public void init() {
         TestDeviceRegistry registry = new TestDeviceRegistry(new CompositeProtocolSupports(), new StandaloneDeviceMessageBroker());
-        device = registry.registry(DeviceInfo.builder()
+        device = registry.register(DeviceInfo.builder()
                 .id("test")
                 .protocol("jetlinks")
                 .build())

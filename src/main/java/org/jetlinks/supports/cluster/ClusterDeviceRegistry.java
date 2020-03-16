@@ -111,7 +111,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     }
 
     @Override
-    public Mono<DeviceOperator> registry(DeviceInfo deviceInfo) {
+    public Mono<DeviceOperator> register(DeviceInfo deviceInfo) {
         return Mono.defer(() -> {
             DefaultDeviceOperator operator = new DefaultDeviceOperator(
                     deviceInfo.getId(),
@@ -135,7 +135,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     }
 
     @Override
-    public Mono<DeviceProductOperator> registry(ProductInfo productInfo) {
+    public Mono<DeviceProductOperator> register(ProductInfo productInfo) {
         return Mono.defer(() -> {
             DefaultDeviceProductOperator operator = new DefaultDeviceProductOperator(productInfo.getId(), supports, manager);
             productOperatorMap.put(operator.getId(), operator);
@@ -153,11 +153,18 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     }
 
     @Override
-    public Mono<Void> unRegistry(String deviceId) {
+    public Mono<Void> unregisterDevice(String deviceId) {
         return manager.getStorage("device:" + deviceId)
                 .flatMap(ConfigStorage::clear)
                 .doOnSuccess(r -> operatorCache.invalidate(deviceId))
                 .then();
     }
 
+    @Override
+    public Mono<Void> unregisterProduct(String productId) {
+        return manager.getStorage("device-product:" + productId)
+                .flatMap(ConfigStorage::clear)
+                .doOnSuccess(r -> productOperatorMap.remove(productId))
+                .then();
+    }
 }

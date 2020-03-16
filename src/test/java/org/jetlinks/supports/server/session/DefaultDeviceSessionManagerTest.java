@@ -51,7 +51,7 @@ public class DefaultDeviceSessionManagerTest {
                         .protocol("test")
                         .build())
                 .publishOn(Schedulers.parallel())
-                .flatMap(registry::registry)
+                .flatMap(registry::register)
                 .doOnNext(deviceOperator -> {
                     sessionManager.register(new TestDeviceSession(DefaultTransport.MQTT, deviceOperator.getDeviceId(), deviceOperator.getDeviceId(), deviceOperator));
 

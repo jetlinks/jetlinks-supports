@@ -49,13 +49,13 @@ public class DefaultDecodedClientMessageHandlerTest {
                 sessionManager
         );
 
-        DeviceOperator device = registry.registry(DeviceInfo.builder()
+        DeviceOperator device = registry.register(DeviceInfo.builder()
                 .id("test")
                 .protocol("jetlinks-v1.0")
                 .build())
                 .block();
 
-        DeviceOperator children = registry.registry(DeviceInfo.builder()
+        DeviceOperator children = registry.register(DeviceInfo.builder()
                 .id("test-children")
                 .protocol("jetlinks-v1.0")
                 .build())

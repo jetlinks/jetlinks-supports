@@ -35,11 +35,11 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void init() {
         registry = new TestDeviceRegistry(new CompositeProtocolSupports(), new StandaloneDeviceMessageBroker());
 
-        registry.registry(ProductInfo.builder()
+        registry.register(ProductInfo.builder()
                 .id("product1")
                 .protocol("jetlinks")
                 .build())
-                .flatMap(product -> registry.registry(DeviceInfo.builder()
+                .flatMap(product -> registry.register(DeviceInfo.builder()
                         .id("device1")
                         .productId("product1")
                         .build()))
