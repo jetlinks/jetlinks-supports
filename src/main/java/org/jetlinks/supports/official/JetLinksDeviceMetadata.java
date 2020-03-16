@@ -22,6 +22,8 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
 
     private volatile List<EventMetadata> events;
 
+    private volatile List<PropertyMetadata> tags;
+
     @Getter
     @Setter
     private String id;
@@ -96,6 +98,24 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     }
 
     @Override
+    public List<PropertyMetadata> getTags() {
+        if (tags == null && jsonObject != null) {
+            tags = Optional.ofNullable(jsonObject.getJSONArray("tags"))
+                    .map(Collection::stream)
+                    .map(stream -> stream
+                            .map(JSONObject.class::cast)
+                            .map(JetLinksPropertyMetadata::new)
+                            .map(PropertyMetadata.class::cast)
+                            .collect(Collectors.toList()))
+                    .orElse(Collections.emptyList());
+        }
+        if (tags == null) {
+            this.tags = new ArrayList<>();
+        }
+        return tags;
+    }
+
+    @Override
     public List<EventMetadata> getEvents() {
         if (events == null && jsonObject != null) {
             events = Optional.ofNullable(jsonObject.getJSONArray("events"))
@@ -134,6 +154,14 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         return getFunctions()
                 .stream()
                 .filter(function -> function.getId().equals(id))
+                .findFirst();
+    }
+
+    @Override
+    public Optional<PropertyMetadata> getTag(String id) {
+        return getTags()
+                .stream()
+                .filter(tag -> tag.getId().equals(id))
                 .findFirst();
     }
 
