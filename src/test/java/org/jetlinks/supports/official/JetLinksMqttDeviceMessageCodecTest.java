@@ -6,10 +6,7 @@ import org.jetlinks.core.device.DeviceInfo;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.ProductInfo;
 import org.jetlinks.core.device.StandaloneDeviceMessageBroker;
-import org.jetlinks.core.message.ChildDeviceMessage;
-import org.jetlinks.core.message.ChildDeviceMessageReply;
-import org.jetlinks.core.message.Headers;
-import org.jetlinks.core.message.Message;
+import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.*;
 import org.jetlinks.core.message.event.EventMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessage;
@@ -316,15 +313,14 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testMetadataDerived() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/metadata/derived")
-                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"functions\":[]}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"metadata\":\"1\"}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof EventMessage);
-        EventMessage reply = ((EventMessage) message);
-        Assert.assertTrue(reply.getHeader(Headers.reportDerivedMetadata).orElse(false));
+        Assert.assertTrue(message instanceof DerivedMetadataMessage);
+        DerivedMetadataMessage reply = ((DerivedMetadataMessage) message);
         Assert.assertEquals(reply.getDeviceId(), "device1");
         Assert.assertEquals(reply.getMessageId(), "test");
-        Assert.assertEquals(reply.getData(), Collections.singletonMap("functions", Collections.emptyList()));
+        Assert.assertEquals(reply.getMetadata(), "1");
         System.out.println(reply);
     }
 
@@ -332,16 +328,15 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public void testChildMetadataDerived() {
         Message message = codec.decode(createMessageContext(SimpleMqttMessage.builder()
                 .topic("/product1/device1/child/test/metadata/derived")
-                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":{\"functions\":[]}}".getBytes()))
+                .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"metadata\":\"1\"}".getBytes()))
                 .build())).block();
 
         Assert.assertTrue(message instanceof ChildDeviceMessageReply);
 
-        EventMessage reply = ((EventMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
-        Assert.assertTrue(reply.getHeader(Headers.reportDerivedMetadata).orElse(false));
+        DerivedMetadataMessage reply = ((DerivedMetadataMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
         Assert.assertEquals(reply.getDeviceId(), "test");
         Assert.assertEquals(reply.getMessageId(), "test");
-        Assert.assertEquals(reply.getData(), Collections.singletonMap("functions", Collections.emptyList()));
+        Assert.assertEquals(reply.getMetadata(), "1");
         System.out.println(reply);
     }
 

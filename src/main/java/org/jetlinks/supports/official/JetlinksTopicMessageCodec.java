@@ -127,6 +127,8 @@ class JetlinksTopicMessageCodec {
             message = decodeRegister(result, object);
         } else if (result.isUnregister()) {
             message = decodeUnregister(result, object);
+        } else if (result.isDerivedMetadata()) {
+           message = decodeDerivedMetadata(result, object);
         }
 
         if (result.isChild()) {
@@ -162,15 +164,6 @@ class JetlinksTopicMessageCodec {
         EventMessage message = event.toJavaObject(EventMessage.class);
         message.setData(event.get("data"));
         message.setEvent(result.args.get("eventId"));
-
-        if (result.isDerivedMetadata()) {
-            message.addHeader(Headers.reportDerivedMetadata, true);
-        }
-        if (result.isChild()) {
-            message.setDeviceId(result.getChildDeviceId());
-        } else {
-            message.setDeviceId(result.getDeviceId());
-        }
         return message;
     }
 
@@ -201,6 +194,10 @@ class JetlinksTopicMessageCodec {
 
     private Message decodeUnregister(DecodeResult result, JSONObject data) {
         return data.toJavaObject(DeviceUnRegisterMessage.class);
+    }
+
+    private Message decodeDerivedMetadata(DecodeResult result, JSONObject data) {
+        return data.toJavaObject(DerivedMetadataMessage.class);
     }
 
     private void applyCommons(Message message, DecodeResult result, JSONObject data) {
