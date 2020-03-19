@@ -96,9 +96,9 @@ public class DefaultSendToDeviceMessageHandler {
     protected DeviceMessageReply createReply(String deviceId, DeviceMessage message) {
         DeviceMessageReply reply;
         if (message instanceof RepayableDeviceMessage) {
-            reply = ((RepayableDeviceMessage) message).newReply();
+            reply = ((RepayableDeviceMessage<?>) message).newReply();
         } else {
-            reply = new CommonDeviceMessageReply();
+            reply = new CommonDeviceMessageReply<>();
         }
         reply.messageId(message.getMessageId()).deviceId(deviceId);
         return reply;
@@ -106,54 +106,64 @@ public class DefaultSendToDeviceMessageHandler {
 
     protected void doSend(DeviceMessage message, DeviceSession session) {
         String deviceId = message.getDeviceId();
-
         DeviceMessageReply reply = createReply(deviceId, message);
-        if (message instanceof DisconnectDeviceMessage) {
-            sessionManager.unregister(session.getDeviceId());
-            doReply(reply.success()).subscribe();
-        } else {
-            session.getOperator()
-                    .getProtocol()
-                    .flatMap(protocolSupport -> protocolSupport.getMessageCodec(session.getTransport()))
-                    .flatMapMany(codec -> codec.encode(new ToDeviceMessageContext() {
-                        @Override
-                        public Mono<Boolean> sendToDevice(EncodedMessage message) {
-                            return session.send(message);
-                        }
+        session.getOperator()
+                .getProtocol()
+                .flatMap(protocolSupport -> protocolSupport.getMessageCodec(session.getTransport()))
+                .flatMapMany(codec -> codec.encode(new ToDeviceMessageContext() {
+                    @Override
+                    public Mono<Boolean> sendToDevice(EncodedMessage message) {
+                        return session.send(message);
+                    }
 
-                        @Override
-                        public Mono<Void> disconnect() {
+                    @Override
+                    public Mono<Void> disconnect() {
+                        return Mono.fromRunnable(() -> {
                             session.close();
-                            return Mono.empty();
-                        }
+                            sessionManager.unregister(session.getId());
+                        });
+                    }
 
-                        @Override
-                        public Message getMessage() {
-                            return message;
-                        }
+                    @Override
+                    public DeviceSession getSession() {
+                        return session;
+                    }
 
-                        @Override
-                        public DeviceOperator getDevice() {
-                            return session.getOperator();
-                        }
-                    }))
-                    .flatMap(session::send)
-                    .all(Boolean.TRUE::equals)
-                    .flatMap(success -> {
-                        if (message.getHeader(Headers.async).orElse(false)) {
-                            return doReply(reply.message(ErrorCode.REQUEST_HANDLING.getText())
-                                    .code(ErrorCode.REQUEST_HANDLING.name())
-                                    .success());
-                        }
-                        return Mono.just(true);
-                    })
-                    .doOnError(error -> {
-                        log.error(error.getMessage(), error);
-                        doReply(reply.error(error)).subscribe();
-                    })
-                    .switchIfEmpty(Mono.defer(() -> doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE))))
-                    .subscribe();
-        }
+                    @Override
+                    public Message getMessage() {
+                        return message;
+                    }
+
+                    @Override
+                    public DeviceOperator getDevice() {
+                        return session.getOperator();
+                    }
+                }))
+                .flatMap(session::send)
+                .all(Boolean.TRUE::equals)
+                .flatMap(success -> {
+                    if (message.getHeader(Headers.async).orElse(false)) {
+                        return doReply(reply.message(ErrorCode.REQUEST_HANDLING.getText())
+                                .code(ErrorCode.REQUEST_HANDLING.name())
+                                .success());
+                    }
+                    return Mono.just(true);
+                })
+                .doOnError(error -> {
+                    log.error(error.getMessage(), error);
+                    doReply(reply.error(error)).subscribe();
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    //协议没处理断开连接消息
+                    if (message instanceof DisconnectDeviceMessage) {
+                        session.close();
+                        sessionManager.unregister(session.getId());
+                        return doReply(createReply(deviceId, message).success());
+                    } else {
+                        return doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE));
+                    }
+                }))
+                .subscribe();
     }
 
 
