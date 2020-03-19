@@ -140,7 +140,7 @@ public class DefaultSendToDeviceMessageHandler {
                     }
                 }))
                 .flatMap(session::send)
-                .all(Boolean.TRUE::equals)
+                .reduce((r1, r2) -> r1 && r2)
                 .flatMap(success -> {
                     if (message.getHeader(Headers.async).orElse(false)) {
                         return doReply(reply.message(ErrorCode.REQUEST_HANDLING.getText())
