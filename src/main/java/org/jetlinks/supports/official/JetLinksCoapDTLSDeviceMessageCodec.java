@@ -11,6 +11,7 @@ import org.jetlinks.core.message.codec.*;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Mono;
 
+import javax.annotation.Nonnull;
 import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
@@ -80,8 +81,9 @@ public class JetLinksCoapDTLSDeviceMessageCodec extends JetlinksTopicMessageCode
 
     }
 
+    @Nonnull
     @Override
-    public Mono<? extends Message> decode(MessageDecodeContext context) {
+    public Mono<? extends Message> decode(@Nonnull MessageDecodeContext context) {
         if (context.getMessage() instanceof CoapExchangeMessage) {
             CoapExchangeMessage exchangeMessage = ((CoapExchangeMessage) context.getMessage());
             return decode(exchangeMessage, context, resp -> {
@@ -111,8 +113,9 @@ public class JetLinksCoapDTLSDeviceMessageCodec extends JetlinksTopicMessageCode
         return true;
     }
 
+    @Nonnull
     @Override
-    public Mono<? extends EncodedMessage> encode(MessageEncodeContext context) {
+    public Mono<? extends EncodedMessage> encode(@Nonnull MessageEncodeContext context) {
         return Mono.empty();
     }
 }

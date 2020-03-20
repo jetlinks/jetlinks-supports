@@ -17,6 +17,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import javax.annotation.Nonnull;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
@@ -343,6 +344,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public MessageEncodeContext createMessageContext(Message message) {
 
         return new MessageEncodeContext() {
+            @Nonnull
             @Override
             public Message getMessage() {
                 return message;
@@ -359,6 +361,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     public MessageDecodeContext createMessageContext(EncodedMessage message) {
 
         return new MessageDecodeContext() {
+            @Nonnull
             @Override
             public EncodedMessage getMessage() {
                 return message;

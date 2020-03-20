@@ -26,6 +26,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import javax.annotation.Nonnull;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class JetLinksCoapDeviceMessageCodecTest {
@@ -61,6 +62,7 @@ public class JetLinksCoapDeviceMessageCodecTest {
                     @Override
                     public void handlePOST(CoapExchange exchange) {
                         codec.decode(new MessageDecodeContext() {
+                            @Nonnull
                             @Override
                             public EncodedMessage getMessage() {
                                 return new CoapExchangeMessage(exchange);

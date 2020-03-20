@@ -14,6 +14,8 @@ import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import javax.annotation.Nonnull;
+
 @Slf4j
 @AllArgsConstructor
 public class DefaultSendToDeviceMessageHandler {
@@ -112,7 +114,7 @@ public class DefaultSendToDeviceMessageHandler {
                 .flatMap(protocolSupport -> protocolSupport.getMessageCodec(session.getTransport()))
                 .flatMapMany(codec -> codec.encode(new ToDeviceMessageContext() {
                     @Override
-                    public Mono<Boolean> sendToDevice(EncodedMessage message) {
+                    public Mono<Boolean> sendToDevice(@Nonnull EncodedMessage message) {
                         return session.send(message);
                     }
 
@@ -124,11 +126,13 @@ public class DefaultSendToDeviceMessageHandler {
                         });
                     }
 
+                    @Nonnull
                     @Override
                     public DeviceSession getSession() {
                         return session;
                     }
 
+                    @Nonnull
                     @Override
                     public Message getMessage() {
                         return message;

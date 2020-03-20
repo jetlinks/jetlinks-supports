@@ -12,6 +12,8 @@ import org.jetlinks.core.message.codec.*;
 import org.jetlinks.supports.official.cipher.Ciphers;
 import reactor.core.publisher.Mono;
 
+import javax.annotation.Nonnull;
+
 @Slf4j
 public class JetLinksCoapDeviceMessageCodec extends JetlinksTopicMessageCodec implements DeviceMessageCodec {
 
@@ -59,8 +61,9 @@ public class JetLinksCoapDeviceMessageCodec extends JetlinksTopicMessageCodec im
                 });
     }
 
+    @Nonnull
     @Override
-    public Mono<? extends Message> decode(MessageDecodeContext context) {
+    public Mono<? extends Message> decode(@Nonnull MessageDecodeContext context) {
         return Mono.defer(() -> {
             if (context.getMessage() instanceof CoapExchangeMessage) {
                 return decode(((CoapExchangeMessage) context.getMessage()), context);
@@ -73,8 +76,9 @@ public class JetLinksCoapDeviceMessageCodec extends JetlinksTopicMessageCodec im
         });
     }
 
+    @Nonnull
     @Override
-    public Mono<? extends EncodedMessage> encode(MessageEncodeContext context) {
+    public Mono<? extends EncodedMessage> encode(@Nonnull MessageEncodeContext context) {
         return Mono.empty();
     }
 }

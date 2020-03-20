@@ -10,6 +10,7 @@ import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.codec.*;
 import reactor.core.publisher.Mono;
 
+import javax.annotation.Nonnull;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -66,7 +67,8 @@ public class JetLinksMqttDeviceMessageCodec extends JetlinksTopicMessageCodec im
         return transport;
     }
 
-    public Mono<MqttMessage> encode(MessageEncodeContext context) {
+    @Nonnull
+    public Mono<MqttMessage> encode(@Nonnull MessageEncodeContext context) {
         return Mono.defer(() -> {
             Message message = context.getMessage();
             if (message instanceof DeviceMessage) {
@@ -87,8 +89,9 @@ public class JetLinksMqttDeviceMessageCodec extends JetlinksTopicMessageCodec im
         });
     }
 
+    @Nonnull
     @Override
-    public Mono<Message> decode(MessageDecodeContext context) {
+    public Mono<Message> decode(@Nonnull MessageDecodeContext context) {
         return Mono.fromSupplier(() -> {
             MqttMessage message = (MqttMessage) context.getMessage();
             String topic = message.getTopic();
