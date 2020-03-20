@@ -74,7 +74,7 @@ public class JetLinksMqttDeviceMessageCodec extends JetlinksTopicMessageCodec im
                 EncodedTopic convertResult = encode(deviceMessage.getDeviceId(), deviceMessage);
                 return context.getDevice()
                         .getConfig(DeviceConfigKey.productId)
-                        .switchIfEmpty(Mono.just("null"))
+                        .defaultIfEmpty("null")
                         .map(productId -> SimpleMqttMessage.builder()
                                 .clientId(deviceMessage.getDeviceId())
                                 .topic("/".concat(productId).concat(convertResult.topic))
