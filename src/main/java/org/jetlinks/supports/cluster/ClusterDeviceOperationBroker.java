@@ -34,6 +34,9 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
     private Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = new ConcurrentHashMap<>();
     private Map<String, FluxProcessor<DeviceCheckResponse, DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
 
+
+    private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
+
     public ClusterDeviceOperationBroker(ClusterManager clusterManager) {
         this.clusterManager = clusterManager;
         this.serverId = clusterManager.getCurrentServerId();
@@ -62,6 +65,10 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
     @Override
     public Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId, Collection<String> deviceIdList) {
         return Flux.defer(() -> {
+            //本地检查
+            if (serverId.equals(deviceGatewayServerId) && localStateChecker != null) {
+                return localStateChecker.apply(Flux.fromIterable(deviceIdList));
+            }
             String uid = UUID.randomUUID().toString();
 
             DeviceCheckRequest request = new DeviceCheckRequest(serverId, uid, new ArrayList<>(deviceIdList));
@@ -78,6 +85,7 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
     @Override
     public void handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
+        localStateChecker = stateMapper;
         clusterManager.<DeviceCheckRequest>getTopic("device:state:checker:".concat(serverId))
                 .subscribe()
                 .subscribe(request ->
@@ -97,7 +105,10 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
         return replyProcessor
                 .computeIfAbsent(messageId, ignore -> UnicastProcessor.create())
                 .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
-                .doFinally(signal -> replyProcessor.remove(messageId));
+                .doFinally(signal -> {
+                    replyProcessor.remove(messageId);
+                    fragmentCounter.remove(messageId);
+                });
     }
 
     @Override
@@ -130,18 +141,18 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
-       return Mono.defer(()->{
-           message.addHeader(Headers.replyFrom, serverId);
-           if (replyProcessor.containsKey(message.getMessageId())) {
-               handleReply(message);
-               return Mono.just(true);
-           }
-           return clusterManager
-                   .getTopic("device:msg:reply")
-                   .publish(Mono.just(message))
-                   .map(l -> l > 0)
-                   .switchIfEmpty(Mono.just(false));
-       });
+        return Mono.defer(() -> {
+            message.addHeader(Headers.replyFrom, serverId);
+            if (replyProcessor.containsKey(message.getMessageId())) {
+                handleReply(message);
+                return Mono.just(true);
+            }
+            return clusterManager
+                    .getTopic("device:msg:reply")
+                    .publish(Mono.just(message))
+                    .map(l -> l > 0)
+                    .switchIfEmpty(Mono.just(false));
+        });
     }
 
     private void handleReply(DeviceMessageReply message) {
@@ -162,7 +173,7 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
                 try {
                     processor.onNext(message);
                 } finally {
-                    if (counter.decrementAndGet() <= 0) {
+                    if (counter.decrementAndGet() <= 0 || message.getHeader(Headers.fragmentLast).orElse(false)) {
                         try {
                             processor.onComplete();
                         } finally {
