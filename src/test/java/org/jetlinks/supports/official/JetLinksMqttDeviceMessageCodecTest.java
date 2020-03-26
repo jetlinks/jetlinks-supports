@@ -342,7 +342,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
     }
 
     public MessageEncodeContext createMessageContext(Message message) {
-
+        System.out.println(message.toString());
         return new MessageEncodeContext() {
             @Nonnull
             @Override
@@ -359,7 +359,7 @@ public class JetLinksMqttDeviceMessageCodecTest {
 
 
     public MessageDecodeContext createMessageContext(EncodedMessage message) {
-
+        System.out.println(message.toString());
         return new MessageDecodeContext() {
             @Nonnull
             @Override

@@ -47,7 +47,7 @@ public class JetLinksCoapDeviceMessageCodec extends JetlinksTopicMessageCodec im
 
     protected Mono<? extends Message> decode(CoapExchangeMessage message, MessageDecodeContext context) {
         CoapExchange exchange = message.getExchange();
-        return decode((CoapMessage) message,context)
+        return decode((CoapMessage) message, context)
                 .doOnSuccess(msg -> {
                     exchange.respond(CoAP.ResponseCode.CREATED);
                     exchange.accept();
@@ -65,6 +65,7 @@ public class JetLinksCoapDeviceMessageCodec extends JetlinksTopicMessageCodec im
     @Override
     public Mono<? extends Message> decode(@Nonnull MessageDecodeContext context) {
         return Mono.defer(() -> {
+            log.debug("handle coap message:\n{}", context.getMessage());
             if (context.getMessage() instanceof CoapExchangeMessage) {
                 return decode(((CoapExchangeMessage) context.getMessage()), context);
             }

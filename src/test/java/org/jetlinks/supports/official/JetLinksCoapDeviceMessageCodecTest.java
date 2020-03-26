@@ -5,7 +5,6 @@ import org.eclipse.californium.core.CoapClient;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapResponse;
 import org.eclipse.californium.core.CoapServer;
-import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.network.Endpoint;
@@ -100,7 +99,7 @@ public class JetLinksCoapDeviceMessageCodecTest {
 
         request.setURI("coap://localhost:12345/test/test/event/event1");
         request.setPayload(Ciphers.AES.encrypt(payload.getBytes(),key));
-        request.getOptions().setContentFormat(MediaTypeRegistry.APPLICATION_JSON);
+//        request.getOptions().setContentFormat(MediaTypeRegistry.APPLICATION_JSON);
 
         CoapResponse response = coapClient.advanced(request);
         Assert.assertTrue(response.isSuccess());
