@@ -25,7 +25,15 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
     public ArrayType decode(ArrayType type, Map<String, Object> config) {
         super.decode(type, config);
         JSONObject jsonObject = new JSONObject(config);
-        ofNullable(jsonObject.getJSONObject("elementType"))
+        ofNullable(jsonObject.get("elementType"))
+                .map(v -> {
+                    if (v instanceof JSONObject) {
+                        return ((JSONObject) v);
+                    }
+                    JSONObject eleType = new JSONObject();
+                    eleType.put("type", v);
+                    return eleType;
+                })
                 .map(eleType -> {
                     DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
 
