@@ -81,6 +81,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     @Override
     public Mono<DeviceOperator> getDevice(String deviceId) {
+        if(StringUtils.isEmpty(deviceId)){
+            return Mono.empty();
+        }
         return Mono.justOrEmpty(operatorCache.getIfPresent(deviceId))
                 .switchIfEmpty(Mono.defer(() -> {
                     DeviceOperator deviceOperator = createOperator(deviceId);
@@ -92,6 +95,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     @Override
     public Mono<DeviceProductOperator> getProduct(String productId) {
+        if(StringUtils.isEmpty(productId)){
+            return Mono.empty();
+        }
         return Mono.justOrEmpty(productOperatorMap.get(productId))
                 .switchIfEmpty(Mono.defer(() -> {
                     DeviceProductOperator deviceOperator = createProductOperator(productId);
