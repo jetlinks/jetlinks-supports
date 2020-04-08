@@ -16,6 +16,7 @@ import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.supports.cluster.redis.DeviceCheckRequest;
 import org.jetlinks.supports.cluster.redis.DeviceCheckResponse;
 import org.reactivestreams.Publisher;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.*;
 
 import java.time.Duration;
@@ -158,6 +159,10 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
     private void handleReply(DeviceMessageReply message) {
         try {
             String messageId = message.getMessageId();
+            if (StringUtils.isEmpty(messageId)) {
+                log.warn("reply message messageId is empty: {}", message);
+                return;
+            }
 
             String partMsgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(null);
             if (partMsgId != null) {
