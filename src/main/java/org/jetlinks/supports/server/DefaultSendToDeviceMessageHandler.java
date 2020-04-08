@@ -11,10 +11,13 @@ import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
+import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import javax.annotation.Nonnull;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @AllArgsConstructor
@@ -28,6 +31,8 @@ public class DefaultSendToDeviceMessageHandler {
 
     private DeviceRegistry registry;
 
+    private DecodedClientMessageHandler decodedClientMessageHandler;
+
     public void startup() {
 
         //处理发往设备的消息
@@ -35,9 +40,6 @@ public class DefaultSendToDeviceMessageHandler {
                 .subscribe(message -> {
                     if (message instanceof DeviceMessage) {
                         handleDeviceMessage(((DeviceMessage) message));
-                    }
-                    if (message instanceof BroadcastMessage) {
-                        // TODO: 2019-10-20
                     }
                 });
 
@@ -109,6 +111,7 @@ public class DefaultSendToDeviceMessageHandler {
     protected void doSend(DeviceMessage message, DeviceSession session) {
         String deviceId = message.getDeviceId();
         DeviceMessageReply reply = createReply(deviceId, message);
+        AtomicBoolean alreadyReply = new AtomicBoolean(false);
         session.getOperator()
                 .getProtocol()
                 .flatMap(protocolSupport -> protocolSupport.getMessageCodec(session.getTransport()))
@@ -142,6 +145,15 @@ public class DefaultSendToDeviceMessageHandler {
                     public DeviceOperator getDevice() {
                         return session.getOperator();
                     }
+
+                    @Nonnull
+                    @Override
+                    public Mono<Void> reply(@Nonnull Publisher<? extends DeviceMessage> replyMessage) {
+                        alreadyReply.set(true);
+                        return Flux.from(replyMessage)
+                                .flatMap(msg -> decodedClientMessageHandler.handleMessage(session.getOperator(), msg))
+                                .then();
+                    }
                 }))
                 .flatMap(session::send)
                 .reduce((r1, r2) -> r1 && r2)
@@ -162,9 +174,10 @@ public class DefaultSendToDeviceMessageHandler {
                     if (message instanceof DisconnectDeviceMessage) {
                         session.close();
                         sessionManager.unregister(session.getId());
-                        return doReply(createReply(deviceId, message).success());
+                        return alreadyReply.get() ? Mono.empty() : doReply(createReply(deviceId, message).success());
                     } else {
-                        return doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE));
+
+                        return alreadyReply.get() ? Mono.empty() : doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE));
                     }
                 }))
                 .subscribe();

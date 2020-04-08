@@ -53,7 +53,7 @@ public class DefaultSendToDeviceMessageHandlerTest {
 
         decodedHandler = new DefaultDecodedClientMessageHandler(broker, sessionManager);
 
-        handler = new DefaultSendToDeviceMessageHandler("test", sessionManager, broker, registry);
+        handler = new DefaultSendToDeviceMessageHandler("test", sessionManager, broker, registry, decodedHandler);
         sessionManager.init();
         handler.startup();
     }
