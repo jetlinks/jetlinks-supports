@@ -36,6 +36,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     private DeviceOperationBroker handler;
 
+    private ClusterManager clusterManager;
+
     public ClusterDeviceRegistry(ProtocolSupports supports,
                                  ClusterManager clusterManager,
                                  DeviceOperationBroker handler) {
@@ -54,6 +56,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.handler = handler;
         this.manager = new ClusterConfigStorageManager(clusterManager);
         this.operatorCache = cache;
+        this.clusterManager = clusterManager;
     }
 
     @Override
@@ -81,7 +84,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     @Override
     public Mono<DeviceOperator> getDevice(String deviceId) {
-        if(StringUtils.isEmpty(deviceId)){
+        if (StringUtils.isEmpty(deviceId)) {
             return Mono.empty();
         }
         return Mono.justOrEmpty(operatorCache.getIfPresent(deviceId))
@@ -95,7 +98,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     @Override
     public Mono<DeviceProductOperator> getProduct(String productId) {
-        if(StringUtils.isEmpty(productId)){
+        if (StringUtils.isEmpty(productId)) {
             return Mono.empty();
         }
         return Mono.justOrEmpty(productOperatorMap.get(productId))
@@ -109,20 +112,20 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
 
     private DefaultDeviceOperator createOperator(String deviceId) {
-        return new DefaultDeviceOperator(deviceId, supports, manager, handler, interceptor, this);
+        return new DefaultDeviceOperator(deviceId, supports, manager, handler, this);
     }
 
     private DefaultDeviceProductOperator createProductOperator(String id) {
-        return new DefaultDeviceProductOperator(id, supports, manager);
+        return new DefaultDeviceProductOperator(id, supports, manager, () -> clusterManager
+                .<String>getSet("device-product-bind:" + id)
+                .values()
+                .flatMap(this::getDevice));
     }
 
     @Override
     public Mono<DeviceOperator> register(DeviceInfo deviceInfo) {
         return Mono.defer(() -> {
-            DefaultDeviceOperator operator = new DefaultDeviceOperator(
-                    deviceInfo.getId(),
-                    supports, manager, handler, interceptor, this
-            );
+            DefaultDeviceOperator operator = createOperator(deviceInfo.getId());
             operatorCache.put(operator.getDeviceId(), operator);
 
             Map<String, Object> configs = new HashMap<>();
@@ -136,14 +139,17 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             Optional.ofNullable(deviceInfo.getConfiguration())
                     .ifPresent(configs::putAll);
 
-            return operator.setConfigs(configs).thenReturn(operator);
+            return operator.setConfigs(configs)
+                    //绑定设备到产品
+                    .then(clusterManager.<String>getSet("device-product-bind:" + deviceInfo.getProductId()).add(deviceInfo.getId()))
+                    .thenReturn(operator);
         });
     }
 
     @Override
     public Mono<DeviceProductOperator> register(ProductInfo productInfo) {
         return Mono.defer(() -> {
-            DefaultDeviceProductOperator operator = new DefaultDeviceProductOperator(productInfo.getId(), supports, manager);
+            DefaultDeviceProductOperator operator = createProductOperator(productInfo.getId());
             productOperatorMap.put(operator.getId(), operator);
             Map<String, Object> configs = new HashMap<>();
             Optional.ofNullable(productInfo.getMetadata())

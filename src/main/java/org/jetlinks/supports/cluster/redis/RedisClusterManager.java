@@ -16,6 +16,7 @@ public class RedisClusterManager implements ClusterManager {
     private Map<String, ClusterQueue> queues = new ConcurrentHashMap<>();
     private Map<String, ClusterTopic> topics = new ConcurrentHashMap<>();
     private Map<String, ClusterCache> caches = new ConcurrentHashMap<>();
+    private Map<String, ClusterSet> sets = new ConcurrentHashMap<>();
 
     private ReactiveRedisOperations<?, ?> commonOperations;
 
@@ -81,5 +82,10 @@ public class RedisClusterManager implements ClusterManager {
     @Override
     public <K, V> ClusterCache<K, V> getCache(String cache) {
         return caches.computeIfAbsent(cache, id -> new RedisClusterCache<K, V>(cache, this.getRedis()));
+    }
+
+    @Override
+    public <V> ClusterSet<V> getSet(String name) {
+        return sets.computeIfAbsent(name, id -> new RedisClusterSet<V>(name, this.getRedis()));
     }
 }

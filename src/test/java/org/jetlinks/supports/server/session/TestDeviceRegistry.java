@@ -45,7 +45,7 @@ public class TestDeviceRegistry implements DeviceRegistry {
     public Mono<DeviceOperator> register(DeviceInfo deviceInfo) {
         DefaultDeviceOperator operator = new DefaultDeviceOperator(
                 deviceInfo.getId(),
-                supports, manager, handler, interceptor, this
+                supports, manager, handler, this
         );
         operatorMap.put(operator.getDeviceId(), operator);
         return operator.setConfigs(
