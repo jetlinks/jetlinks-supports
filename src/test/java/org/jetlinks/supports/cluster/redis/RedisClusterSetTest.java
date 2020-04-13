@@ -5,8 +5,6 @@ import org.junit.Test;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import reactor.test.StepVerifier;
 
-import static org.junit.Assert.*;
-
 public class RedisClusterSetTest {
 
     private ReactiveRedisTemplate<Object, Object> operations = RedisHelper.getRedisTemplate();
@@ -14,7 +12,7 @@ public class RedisClusterSetTest {
 
     @Test
     public void test() {
-        RedisClusterSet<String> set = new RedisClusterSet<>("test", operations);
+        RedisClusterSet<String> set = new RedisClusterSet<>("test-set", operations);
 
         set.add("1")
                 .then(set.add("2"))
