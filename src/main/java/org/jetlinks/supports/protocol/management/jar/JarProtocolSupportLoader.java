@@ -21,7 +21,9 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
     @Setter
     private ServiceContext serviceContext;
 
-    private Map<String, ProtocolClassLoader> protocolLoaders = new ConcurrentHashMap<>();
+    private final Map<String, ProtocolClassLoader> protocolLoaders = new ConcurrentHashMap<>();
+
+    private final Map<String, ProtocolSupportProvider> loaded = new ConcurrentHashMap<>();
 
     @Override
     public String getProvider() {
@@ -58,6 +60,15 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 } else {
                     supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
                 }
+                ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
+                try {
+                    if (null != oldProvider) {
+                        oldProvider.close();
+                    }
+                } catch (Exception e) {
+                    log.error(e.getMessage(), e);
+                }
+
                 return supportProvider.create(serviceContext);
             } catch (Exception e) {
                 return Mono.error(e);
