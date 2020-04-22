@@ -9,11 +9,14 @@ import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 
 @Slf4j
 public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
@@ -73,6 +76,8 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
             } catch (Exception e) {
                 return Mono.error(e);
             }
-        });
+        })
+                .subscribeOn(Schedulers.elastic())
+                .timeout(Duration.ofSeconds(10), Mono.error(TimeoutException::new));
     }
 }
