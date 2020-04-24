@@ -24,19 +24,26 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ClusterDeviceRegistry implements DeviceRegistry {
-    private DeviceMessageSenderInterceptor interceptor = new CompositeDeviceMessageSenderInterceptor();
+    //全局拦截器
+    private final CompositeDeviceMessageSenderInterceptor interceptor = new CompositeDeviceMessageSenderInterceptor();
 
-    private ConfigStorageManager manager;
+    //配置管理器
+    private final ConfigStorageManager manager;
 
-    private Cache<String, DeviceOperator> operatorCache;
+    //缓存
+    private final Cache<String, DeviceOperator> operatorCache;
 
-    private Map<String, DeviceProductOperator> productOperatorMap = new ConcurrentHashMap<>();
+    //产品
+    private final Map<String, DeviceProductOperator> productOperatorMap = new ConcurrentHashMap<>();
 
-    private ProtocolSupports supports;
+    //协议支持
+    private final ProtocolSupports supports;
 
-    private DeviceOperationBroker handler;
+    //设备操作
+    private final DeviceOperationBroker handler;
 
-    private ClusterManager clusterManager;
+    //集群管理
+    private final ClusterManager clusterManager;
 
     public ClusterDeviceRegistry(ProtocolSupports supports,
                                  ClusterManager clusterManager,
@@ -112,7 +119,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
 
     private DefaultDeviceOperator createOperator(String deviceId) {
-        return new DefaultDeviceOperator(deviceId, supports, manager, handler, this);
+        return new DefaultDeviceOperator(deviceId, supports, manager, handler, this, interceptor);
     }
 
     private DefaultDeviceProductOperator createProductOperator(String id) {
@@ -178,5 +185,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                 .flatMap(ConfigStorage::clear)
                 .doOnSuccess(r -> productOperatorMap.remove(productId))
                 .then();
+    }
+
+    public void addInterceptor(DeviceMessageSenderInterceptor interceptor) {
+        this.interceptor.addInterceptor(interceptor);
     }
 }
