@@ -17,7 +17,6 @@ import reactor.core.publisher.Mono;
 
 import javax.annotation.Nonnull;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @AllArgsConstructor
@@ -72,6 +71,9 @@ public class DefaultSendToDeviceMessageHandler {
                         children.setTimestamp(message.getTimestamp());
                         children.setChildDeviceId(deviceId);
                         children.setChildDeviceMessage(message);
+                        // 没有传递header
+                        // https://github.com/jetlinks/jetlinks-pro/issues/19
+                        children.setHeaders(message.getHeaders());
 
                         ChildrenDeviceSession childrenDeviceSession = sessionManager.getSession(deviceId, operator.getDeviceId());
                         if (null != childrenDeviceSession) {
@@ -176,8 +178,10 @@ public class DefaultSendToDeviceMessageHandler {
                         sessionManager.unregister(session.getId());
                         return alreadyReply.get() ? Mono.empty() : doReply(createReply(deviceId, message).success());
                     } else {
-
-                        return alreadyReply.get() ? Mono.empty() : doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE));
+                        return alreadyReply.get() ?
+                                Mono.empty() :
+                                doReply(createReply(deviceId, message)
+                                        .error(ErrorCode.UNSUPPORTED_MESSAGE));
                     }
                 }))
                 .subscribe();
