@@ -24,7 +24,7 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
         super.decode(type,config);
         JSONObject jsonObject = new JSONObject(config);
 
-        ofNullable(jsonObject.getJSONArray("enums"))
+        ofNullable(jsonObject.getJSONArray("elements"))
                 .map(list -> list.stream()
                         .map(JSONObject.class::cast)
                         .map(e -> EnumType.Element.of(e.getString("value"), e.getString("text"),e.getString("description")))
@@ -37,7 +37,7 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
     @Override
     protected void doEncode(Map<String, Object> encoded, EnumType type) {
         super.doEncode(encoded, type);
-        encoded.put("enums", type.getElements()
+        encoded.put("elements", type.getElements()
                 .stream()
                 .map(EnumType.Element::toMap).collect(Collectors.toList()));
 
