@@ -9,6 +9,7 @@ import org.jetlinks.core.device.StandaloneDeviceMessageBroker;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.*;
 import org.jetlinks.core.message.event.EventMessage;
+import org.jetlinks.core.message.firmware.UpgradeFirmwareMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessageReply;
 import org.jetlinks.core.message.property.*;
@@ -205,6 +206,22 @@ public class JetLinksMqttDeviceMessageCodecTest {
 
         Assert.assertNotNull(encodedMessage);
         Assert.assertEquals(encodedMessage.getTopic(), "/product1/device1/function/invoke");
+        System.out.println(encodedMessage.getPayload().toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void testFirmwareUpgrade() {
+        UpgradeFirmwareMessage message = new UpgradeFirmwareMessage();
+        message.setDeviceId("device1");
+        message.setMessageId("test");
+        message.setVersion("1.0");
+        message.setUrl("http://baidu.com/1.mp3");
+
+        MqttMessage encodedMessage = codec.encode(createMessageContext(message)).block();
+
+
+        Assert.assertNotNull(encodedMessage);
+        Assert.assertEquals(encodedMessage.getTopic(), "/product1/device1/firmware/upgrade");
         System.out.println(encodedMessage.getPayload().toString(StandardCharsets.UTF_8));
     }
 

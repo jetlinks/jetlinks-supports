@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.event.EventMessage;
+import org.jetlinks.core.message.firmware.*;
 import org.jetlinks.core.message.function.FunctionInvokeMessage;
 import org.jetlinks.core.message.function.FunctionInvokeMessageReply;
 import org.jetlinks.core.message.property.*;
@@ -32,6 +33,12 @@ class JetlinksTopicMessageCodec {
         private boolean register;
         private boolean unregister;
 
+        private boolean requestFirmware;
+        private boolean reportFirmware;
+        private boolean upgradeFirmwareProgress;
+        private boolean readFirmwareReply;
+
+
         public DecodeResult(String topic) {
             this.topic = topic;
             args = MqttTopicUtils.getPathVariables("/{productId}/{deviceId}/**", topic);
@@ -44,18 +51,22 @@ class JetlinksTopicMessageCodec {
                 args.putAll(MqttTopicUtils.getPathVariables("/**/event/{eventId}", topic));
             }
             derivedMetadata = topic.endsWith("metadata/derived");
-
-            register = topic.endsWith("register");
-            unregister = topic.endsWith("unregister");
-
-            reportProperties = topic.endsWith("properties/report");
-            readPropertyReply = topic.endsWith("properties/read/reply");
-            writePropertyReply = topic.endsWith("properties/write/reply");
-            functionInvokeReply = topic.endsWith("function/invoke/reply");
-
+            if (event) {
+            } else if (reportProperties = topic.endsWith("properties/report")) {
+            } else if (unregister = topic.endsWith("unregister")) {
+            } else if (register = topic.endsWith("register")) {
+            } else if (readPropertyReply = topic.endsWith("properties/read/reply")) {
+            } else if (writePropertyReply = topic.endsWith("properties/write/reply")) {
+            } else if (functionInvokeReply = topic.endsWith("function/invoke/reply")) {
+            } else if (upgradeFirmwareProgress = topic.endsWith("firmware/upgrade/progress")) {
+            } else if (requestFirmware = topic.endsWith("firmware/pull")) {
+            } else if (reportFirmware = topic.endsWith("firmware/report")) {
+            } else if (readFirmwareReply = topic.endsWith("firmware/read/reply")) {
+            } else if (derivedMetadata = topic.endsWith("metadata/derived")) {
+            }
         }
 
-        private String topic;
+        private final String topic;
 
         public String getDeviceId() {
             return args.get("deviceId");
@@ -74,7 +85,7 @@ class JetlinksTopicMessageCodec {
         Assert.notNull(message, "message can not be null");
 
         if (message instanceof ReadPropertyMessage) {
-            String topic = "/".concat(deviceId).concat("/properties/read");
+            String topic = "/" .concat(deviceId).concat("/properties/read");
             JSONObject mqttData = new JSONObject();
             mqttData.put("messageId", message.getMessageId());
             mqttData.put("properties", ((ReadPropertyMessage) message).getProperties());
@@ -82,7 +93,7 @@ class JetlinksTopicMessageCodec {
 
             return new EncodedTopic(topic, mqttData);
         } else if (message instanceof WritePropertyMessage) {
-            String topic = "/".concat(deviceId).concat("/properties/write");
+            String topic = "/" .concat(deviceId).concat("/properties/write");
             JSONObject mqttData = new JSONObject();
             mqttData.put("messageId", message.getMessageId());
             mqttData.put("properties", ((WritePropertyMessage) message).getProperties());
@@ -90,7 +101,7 @@ class JetlinksTopicMessageCodec {
 
             return new EncodedTopic(topic, mqttData);
         } else if (message instanceof FunctionInvokeMessage) {
-            String topic = "/".concat(deviceId).concat("/function/invoke");
+            String topic = "/" .concat(deviceId).concat("/function/invoke");
             FunctionInvokeMessage invokeMessage = ((FunctionInvokeMessage) message);
             JSONObject mqttData = new JSONObject();
             mqttData.put("messageId", message.getMessageId());
@@ -99,15 +110,46 @@ class JetlinksTopicMessageCodec {
             mqttData.put("deviceId", deviceId);
 
             return new EncodedTopic(topic, mqttData);
+        } else if (message instanceof UpgradeFirmwareMessage) {
+            String topic = "/" .concat(deviceId).concat("/firmware/upgrade");
+            UpgradeFirmwareMessage firmwareMessage = ((UpgradeFirmwareMessage) message);
+            JSONObject mqttData = new JSONObject();
+            mqttData.put("messageId", message.getMessageId());
+            mqttData.put("url", firmwareMessage.getUrl());
+            mqttData.put("sign", firmwareMessage.getSign());
+            mqttData.put("version", firmwareMessage.getVersion());
+            mqttData.put("signMethod", firmwareMessage.getSignMethod());
+            mqttData.put("parameters", firmwareMessage.getParameters());
+            mqttData.put("deviceId", deviceId);
+
+            return new EncodedTopic(topic, mqttData);
+        } else if (message instanceof ReadFirmwareMessage) {
+            String topic = "/" .concat(deviceId).concat("/firmware/read");
+            JSONObject mqttData = new JSONObject();
+            mqttData.put("messageId", message.getMessageId());
+            mqttData.put("deviceId", deviceId);
+            return new EncodedTopic(topic, mqttData);
+        } else if (message instanceof RequestFirmwareMessageReply) {
+            String topic = "/" .concat(deviceId).concat("/firmware/pull/reply");
+            RequestFirmwareMessageReply firmwareMessage = ((RequestFirmwareMessageReply) message);
+            JSONObject mqttData = new JSONObject();
+            mqttData.put("messageId", message.getMessageId());
+            mqttData.put("url", firmwareMessage.getUrl());
+            mqttData.put("sign", firmwareMessage.getSign());
+            mqttData.put("version", firmwareMessage.getVersion());
+            mqttData.put("signMethod", firmwareMessage.getSignMethod());
+            mqttData.put("parameters", firmwareMessage.getParameters());
+            mqttData.put("deviceId", deviceId);
+            return new EncodedTopic(topic, mqttData);
         } else if (message instanceof ChildDeviceMessage) {
             ChildDeviceMessage childDeviceMessage = ((ChildDeviceMessage) message);
             EncodedTopic result = encode(childDeviceMessage.getChildDeviceId(), childDeviceMessage.getChildDeviceMessage());
-            String topic = "/".concat(deviceId).concat("/child").concat(result.topic);
+            String topic = "/" .concat(deviceId).concat("/child").concat(result.topic);
             result.payload.put("deviceId", childDeviceMessage.getChildDeviceId());
 
             return new EncodedTopic(topic, result.payload);
         }
-        throw new UnsupportedOperationException("unsupported message type :" + message.getClass());
+        return null;
     }
 
     protected DecodeResult decode(String topic, JSONObject object) {
@@ -128,7 +170,15 @@ class JetlinksTopicMessageCodec {
         } else if (result.isUnregister()) {
             message = decodeUnregister(result, object);
         } else if (result.isDerivedMetadata()) {
-           message = decodeDerivedMetadata(result, object);
+            message = decodeDerivedMetadata(result, object);
+        } else if (result.isReadFirmwareReply()) {
+            message = object.toJavaObject(ReadFirmwareMessageReply.class);
+        } else if (result.isRequestFirmware()) {
+            message = object.toJavaObject(RequestFirmwareMessage.class);
+        } else if (result.isReportFirmware()) {
+            message = object.toJavaObject(ReportFirmwareMessage.class);
+        } else if (result.isUpgradeFirmwareProgress()) {
+            message = object.toJavaObject(UpgradeFirmwareProgressMessage.class);
         }
 
         if (result.isChild()) {
