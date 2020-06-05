@@ -10,7 +10,6 @@ import org.jetlinks.core.cluster.ClusterTopic;
 import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.util.function.Tuple2;
 
 import java.time.Duration;
 import java.util.Collection;
@@ -18,16 +17,16 @@ import java.util.Map;
 
 public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
-    private Cache<K, Object> cache;
+    private final Cache<K, Object> cache;
 
-    private ClusterCache<K, V> clusterCache;
+    private final ClusterCache<K, V> clusterCache;
 
-    private ClusterTopic<K> clearTopic;
+    private final ClusterTopic<K> clearTopic;
 
     public ClusterLocalCache(String name, ClusterManager clusterManager) {
         this(name, clusterManager, clusterManager.getCache(name), CacheBuilder.newBuilder()
                 .expireAfterAccess(Duration.ofMinutes(30))
-                .expireAfterWrite(Duration.ofMinutes(30))
+//                .expireAfterWrite(Duration.ofMinutes(30))
 //                .softValues()
                 .build());
     }
