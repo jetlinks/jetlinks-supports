@@ -51,7 +51,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 String provider = Optional.ofNullable(config.get("provider"))
                         .map(String::valueOf).orElse(null);
 
-                if (!location.contains(":")) {
+                if (!location.contains("://")) {
                     location = "file:" + location;
                 }
                 location = "jar:" + location + "!/";
