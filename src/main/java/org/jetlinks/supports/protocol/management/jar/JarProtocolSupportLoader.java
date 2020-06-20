@@ -33,9 +33,13 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
         return "jar";
     }
 
+    @SneakyThrows
+    protected ProtocolClassLoader createClassLoader(String location) {
+        return new ProtocolClassLoader(location, this.getClass().getClassLoader());
+    }
+
     @Override
     @SneakyThrows
-
     public Mono<? extends ProtocolSupport> load(ProtocolSupportDefinition definition) {
         return Mono.defer(() -> {
             try {
@@ -46,13 +50,13 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 String provider = Optional.ofNullable(config.get("provider"))
                         .map(String::valueOf).orElse(null);
 
-                if (!location.contains("://")) {
-                    location = "file://" + location;
+                if (!location.contains(":")) {
+                    location = "file:" + location;
                 }
                 location = "jar:" + location + "!/";
                 log.debug("load protocol support from : {}", location);
                 ProtocolClassLoader loader;
-                ProtocolClassLoader old = protocolLoaders.put(definition.getId(), loader = new ProtocolClassLoader(location, this.getClass().getClassLoader()));
+                ProtocolClassLoader old = protocolLoaders.put(definition.getId(), loader = createClassLoader(location));
                 if (null != old) {
                     old.close();
                 }
