@@ -48,7 +48,8 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                         .map(String::valueOf).orElseThrow(() -> new IllegalArgumentException("location"));
 
                 String provider = Optional.ofNullable(config.get("provider"))
-                        .map(String::valueOf).orElse(null);
+                        .map(String::valueOf)
+                        .map(String::trim).orElse(null);
 
                 if (!location.contains("://")) {
                     location = "file:" + location;
