@@ -8,7 +8,7 @@ import java.util.Map;
 
 
 public class MqttTopicUtils {
-    private static PathMatcher pathMatcher = new AntPathMatcher();
+    private final static PathMatcher pathMatcher = new AntPathMatcher();
 
     public static boolean match(String topic, String target) {
 
@@ -16,7 +16,7 @@ public class MqttTopicUtils {
             return true;
         }
 
-        if (!topic.contains("#") && !topic.contains("+")) {
+        if (!topic.contains("#") && !topic.contains("+") && !topic.contains("{")) {
             return false;
         }
 
@@ -27,7 +27,7 @@ public class MqttTopicUtils {
     public static Map<String, String> getPathVariables(String template, String topic) {
         try {
             return pathMatcher.extractUriTemplateVariables(template, topic);
-        }catch (Exception e){
+        } catch (Exception e) {
             return new HashMap<>();
         }
     }
