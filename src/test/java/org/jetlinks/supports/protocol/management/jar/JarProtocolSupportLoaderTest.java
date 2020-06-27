@@ -7,6 +7,8 @@ import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.junit.Assert;
 import org.junit.Test;
+import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import java.util.*;
 
@@ -52,7 +54,7 @@ public class JarProtocolSupportLoaderTest {
         loader.setServiceContext(context);
         String location = this.getClass().getResource("/protocol-test-1.0-SNAPSHOT.jar").getPath();
 
-        Map<String,Object> config = new HashMap<>();
+        Map<String, Object> config = new HashMap<>();
         config.put("location", location);
         config.put("provider", "org.jetlinks.demo.TestProtocolSupportProvider");
 
@@ -62,8 +64,20 @@ public class JarProtocolSupportLoaderTest {
                 .build())
                 .block();
 
+        Flux.concat(Flux.range(0, 100)
+                .<ProtocolSupport>flatMap(ignore -> {
+                    return loader.load(ProtocolSupportDefinition.builder()
+                            .id("test")
+                            .configuration(config)
+                            .build());
+                }))
+                .as(StepVerifier::create)
+                .expectNextCount(100)
+                .verifyComplete();
+
+
         Assert.assertNotNull(support);
-        Assert.assertEquals(support.getId(),"test");
+        Assert.assertEquals(support.getId(), "test");
 
     }
 }

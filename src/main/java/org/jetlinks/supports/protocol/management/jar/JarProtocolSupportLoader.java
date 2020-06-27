@@ -55,29 +55,36 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                     location = "file:" + location;
                 }
                 location = "jar:" + location + "!/";
-                log.debug("load protocol support from : {}", location);
                 ProtocolClassLoader loader;
-                ProtocolClassLoader old = protocolLoaders.put(definition.getId(), loader = createClassLoader(location));
-                if (null != old) {
-                    old.close();
-                }
-                ProtocolSupportProvider supportProvider;
+                String fLocation = location;
+                synchronized (this) {
+                    loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
+                        if (null != old) {
+                            try {
+                                old.close();
+                            } catch (Exception ignore) {
+                            }
+                        }
+                        return createClassLoader(fLocation);
+                    });
 
-                if (provider != null) {
-                    supportProvider = (ProtocolSupportProvider) loader.loadClass(provider).newInstance();
-                } else {
-                    supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
-                }
-                ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
-                try {
-                    if (null != oldProvider) {
-                        oldProvider.close();
+                    ProtocolSupportProvider supportProvider;
+                    log.debug("load protocol support from : {}", location);
+                    if (provider != null) {
+                        supportProvider = (ProtocolSupportProvider) loader.loadClass(provider).newInstance();
+                    } else {
+                        supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
                     }
-                } catch (Exception e) {
-                    log.error(e.getMessage(), e);
+                    ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
+                    try {
+                        if (null != oldProvider) {
+                            oldProvider.close();
+                        }
+                    } catch (Exception e) {
+                        log.error(e.getMessage(), e);
+                    }
+                    return supportProvider.create(serviceContext);
                 }
-
-                return supportProvider.create(serviceContext);
             } catch (Exception e) {
                 return Mono.error(e);
             }
