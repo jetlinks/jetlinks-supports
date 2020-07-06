@@ -1,17 +1,19 @@
 package org.jetlinks.supports.protocol.management.jar;
 
+import lombok.Getter;
+
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 
 public class ProtocolClassLoader extends URLClassLoader {
 
-    public ProtocolClassLoader(String location, ClassLoader parent) throws Exception {
-        this(new URL[]{new URL(location)}, parent);
-    }
+    @Getter
+    private final URL[] urls;
 
     public ProtocolClassLoader(URL[] urls, ClassLoader parent) {
         super(urls, parent);
+        this.urls = urls;
     }
 
     @Override

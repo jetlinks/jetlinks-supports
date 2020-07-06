@@ -13,12 +13,10 @@ import reactor.core.scheduler.Schedulers;
 
 import java.io.File;
 import java.net.URL;
-import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeoutException;
 
 @Slf4j
 public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
@@ -39,6 +37,11 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
         return new ProtocolClassLoader(new URL[]{location}, this.getClass().getClassLoader());
     }
 
+    @SneakyThrows
+    protected void closeLoader(ProtocolClassLoader loader) {
+        loader.close();
+    }
+
     @Override
     @SneakyThrows
     public Mono<? extends ProtocolSupport> load(ProtocolSupportDefinition definition) {
@@ -54,47 +57,42 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 URL url;
 
                 if (!location.contains("://")) {
-//                    location = "file:" + location;
                     url = new File(location).toURI().toURL();
-                }else {
-                    url=new URL( "jar:" + location + "!/");
+                } else {
+                    url = new URL("jar:" + location + "!/");
                 }
 
                 ProtocolClassLoader loader;
                 URL fLocation = url;
-                synchronized (this) {
-                    loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
-                        if (null != old) {
-                            try {
-                                old.close();
-                            } catch (Exception ignore) {
-                            }
+                loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
+                    if (null != old) {
+                        try {
+                            closeLoader(old);
+                        } catch (Exception ignore) {
                         }
-                        return createClassLoader(fLocation);
-                    });
+                    }
+                    return createClassLoader(fLocation);
+                });
 
-                    ProtocolSupportProvider supportProvider;
-                    log.debug("load protocol support from : {}", location);
-                    if (provider != null) {
-                        supportProvider = (ProtocolSupportProvider)  Class.forName(provider,true,loader).newInstance();
-                    } else {
-                        supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
-                    }
-                    ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
-                    try {
-                        if (null != oldProvider) {
-                            oldProvider.close();
-                        }
-                    } catch (Exception e) {
-                        log.error(e.getMessage(), e);
-                    }
-                    return supportProvider.create(serviceContext);
+                ProtocolSupportProvider supportProvider;
+                log.debug("load protocol support from : {}", location);
+                if (provider != null) {
+                    supportProvider = (ProtocolSupportProvider) Class.forName(provider, true, loader).newInstance();
+                } else {
+                    supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
                 }
+                ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
+                try {
+                    if (null != oldProvider) {
+                        oldProvider.close();
+                    }
+                } catch (Exception e) {
+                    log.error(e.getMessage(), e);
+                }
+                return supportProvider.create(serviceContext);
             } catch (Exception e) {
                 return Mono.error(e);
             }
-        })
-                .subscribeOn(Schedulers.elastic())
-                .timeout(Duration.ofSeconds(10), Mono.error(TimeoutException::new));
+        }).subscribeOn(Schedulers.elastic());
     }
 }

@@ -7,12 +7,8 @@ import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.junit.Assert;
 import org.junit.Test;
-import reactor.core.publisher.Flux;
-import reactor.test.StepVerifier;
 
 import java.util.*;
-
-import static org.junit.Assert.*;
 
 public class JarProtocolSupportLoaderTest {
 
@@ -63,17 +59,6 @@ public class JarProtocolSupportLoaderTest {
                 .configuration(config)
                 .build())
                 .block();
-
-        Flux.concat(Flux.range(0, 100)
-                .<ProtocolSupport>flatMap(ignore -> {
-                    return loader.load(ProtocolSupportDefinition.builder()
-                            .id("test")
-                            .configuration(config)
-                            .build());
-                }))
-                .as(StepVerifier::create)
-                .expectNextCount(100)
-                .verifyComplete();
 
 
         Assert.assertNotNull(support);
