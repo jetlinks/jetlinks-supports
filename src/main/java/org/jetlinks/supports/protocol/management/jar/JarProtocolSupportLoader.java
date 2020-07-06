@@ -8,6 +8,7 @@ import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
+import org.springframework.util.ClassUtils;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -76,7 +77,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                     ProtocolSupportProvider supportProvider;
                     log.debug("load protocol support from : {}", location);
                     if (provider != null) {
-                        supportProvider = (ProtocolSupportProvider) loader.loadClass(provider).newInstance();
+                        supportProvider = (ProtocolSupportProvider)  Class.forName(provider,true,loader).newInstance();
                     } else {
                         supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
                     }
