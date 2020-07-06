@@ -8,7 +8,6 @@ import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
-import org.springframework.util.ClassUtils;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
