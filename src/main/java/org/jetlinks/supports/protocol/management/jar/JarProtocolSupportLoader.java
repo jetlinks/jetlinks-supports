@@ -11,6 +11,8 @@ import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.io.File;
+import java.net.URL;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
@@ -33,9 +35,8 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
         return "jar";
     }
 
-    @SneakyThrows
-    protected ProtocolClassLoader createClassLoader(String location) {
-        return new ProtocolClassLoader(location, this.getClass().getClassLoader());
+    protected ProtocolClassLoader createClassLoader(URL location) {
+        return new ProtocolClassLoader(new URL[]{location}, this.getClass().getClassLoader());
     }
 
     @Override
@@ -50,13 +51,17 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 String provider = Optional.ofNullable(config.get("provider"))
                         .map(String::valueOf)
                         .map(String::trim).orElse(null);
+                URL url;
 
                 if (!location.contains("://")) {
-                    location = "file:" + location;
+//                    location = "file:" + location;
+                    url = new File(location).toURI().toURL();
+                }else {
+                    url=new URL( "jar:" + location + "!/");
                 }
-                location = "jar:" + location + "!/";
+
                 ProtocolClassLoader loader;
-                String fLocation = location;
+                URL fLocation = url;
                 synchronized (this) {
                     loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
                         if (null != old) {

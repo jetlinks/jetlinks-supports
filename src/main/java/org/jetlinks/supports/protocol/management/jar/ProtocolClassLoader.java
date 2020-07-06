@@ -7,7 +7,11 @@ import java.net.URLClassLoader;
 public class ProtocolClassLoader extends URLClassLoader {
 
     public ProtocolClassLoader(String location, ClassLoader parent) throws Exception {
-        super(new URL[]{new URL(location)}, parent);
+        this(new URL[]{new URL(location)}, parent);
+    }
+
+    public ProtocolClassLoader(URL[] urls, ClassLoader parent) {
+        super(urls, parent);
     }
 
     @Override
