@@ -6,10 +6,7 @@ import org.springframework.data.redis.connection.ReactiveSubscription;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import org.springframework.data.redis.core.script.RedisScript;
 import reactor.core.Disposable;
-import reactor.core.publisher.EmitterProcessor;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxProcessor;
-import reactor.core.publisher.Mono;
+import reactor.core.publisher.*;
 
 import javax.annotation.Nonnull;
 import java.time.Duration;
@@ -27,6 +24,8 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     private ReactiveRedisOperations<String, T> operations;
 
     private FluxProcessor<T, T> processor = EmitterProcessor.create(512, false);
+
+    private FluxSink<T> sink = processor.sink(FluxSink.OverflowStrategy.BUFFER);
 
     private AtomicBoolean polling = new AtomicBoolean(false);
 
@@ -87,7 +86,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                         if (!processor.hasDownstreams()) {
                             operations.opsForList().leftPush(id, v).subscribe();
                         } else {
-                            processor.onNext(v);
+                            sink.next(v);
                         }
                     })
                     .count()
@@ -156,7 +155,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
         return Flux.from(publisher)
                 .flatMap(v -> {
                     if (processor.hasDownstreams() && Math.random() < localConsumerPercent) {
-                        processor.onNext(v);
+                        sink.next(v);
                         return Mono.just(1);
                     } else {
                         return getOperations().execute(pushAndPublish, Arrays.asList(id), Arrays.asList(v, "1"));
@@ -170,7 +169,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
         return Flux.from(publisher)
                 .flatMap(v -> {
                             if (processor.hasDownstreams() && Math.random() < localConsumerPercent) {
-                                v.forEach(processor::onNext);
+                                v.forEach(sink::next);
                                 return Mono.just(1);
                             }
                             return this.operations
