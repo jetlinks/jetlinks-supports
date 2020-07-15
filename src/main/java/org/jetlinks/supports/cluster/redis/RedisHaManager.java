@@ -14,6 +14,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,26 +24,26 @@ import java.util.stream.Collectors;
 
 @Slf4j
 public class RedisHaManager implements HaManager {
-    private ServerNode current;
+    private final ServerNode current;
 
-    private String haName;
+    private final String haName;
 
-    private ClusterTopic<ServerNode> offlineTopic;
+    private final ClusterTopic<ServerNode> offlineTopic;
 
     private ClusterManager clusterManager;
 
-    private Map<String, ServerNode> allNode = new ConcurrentHashMap<>();
+    private final Map<String, ServerNode> allNode = new ConcurrentHashMap<>();
 
-    private ReactiveRedisOperations<String, ServerNode> operations;
+    private final ReactiveRedisOperations<String, ServerNode> operations;
 
-    private ClusterTopic<ServerNode> keepalive;
+    private final ClusterTopic<ServerNode> keepalive;
 
-    private ReactiveHashOperations<String, String, ServerNode> inRedisNode;
-    private String allNodeHashKey;
+    private final ReactiveHashOperations<String, String, ServerNode> inRedisNode;
+    private final String allNodeHashKey;
 
 
-    private FluxProcessor<ServerNode, ServerNode> onlineProcessor = EmitterProcessor.create(false);
-    private FluxProcessor<ServerNode, ServerNode> offlineProcessor = EmitterProcessor.create(false);
+    private final FluxProcessor<ServerNode, ServerNode> onlineProcessor = EmitterProcessor.create(false);
+    private final FluxProcessor<ServerNode, ServerNode> offlineProcessor = EmitterProcessor.create(false);
     private volatile boolean started = false;
 
     public RedisHaManager(String name,
@@ -50,7 +51,9 @@ public class RedisHaManager implements HaManager {
                           ClusterManager clusterManager,
                           ReactiveRedisOperations<String, ServerNode> operations) {
         this.haName = name;
-        this.current = current;
+        this.current = current.copy();
+        this.current.setUptime(System.currentTimeMillis());
+        this.current.setLeader(false);
         this.clusterManager = clusterManager;
         this.operations = operations;
         this.inRedisNode = this.operations.opsForHash();
@@ -64,7 +67,7 @@ public class RedisHaManager implements HaManager {
         current.setLastKeepAlive(System.currentTimeMillis());
 
         inRedisNode.put(allNodeHashKey, current.getId(), current)
-        .subscribe();
+                .subscribe();
 
         keepalive.publish(Mono.just(current)).subscribe();
 
@@ -83,13 +86,24 @@ public class RedisHaManager implements HaManager {
                 .flatMapMany(list -> inRedisNode
                         .remove(allNodeHashKey, list.stream().map(ServerNode::getId).toArray())
                         .thenMany(Flux.fromIterable(list))
-                ).as(offlineTopic::publish)
+                )
+                .as(offlineTopic::publish)
                 .subscribe();
     }
 
+    private void electionLeader() {
+        allNode.values()
+                .stream()
+                .peek(serverNode -> serverNode.setLeader(false))
+                .min(Comparator.comparing(ServerNode::getUptime))
+                .ifPresent(serverNode -> serverNode.setLeader(true));
+    }
+
     public void shutdown() {
-        offlineTopic
-                .publish(Mono.just(current))
+        inRedisNode
+                .remove(allNodeHashKey, current.getId())
+                .then(offlineTopic
+                        .publish(Mono.just(current)))
                 .block();
     }
 
@@ -103,9 +117,13 @@ public class RedisHaManager implements HaManager {
         //注册自己
         inRedisNode.put(allNodeHashKey, current.getId(), current)
                 .flatMapMany(r -> inRedisNode.values(allNodeHashKey))
+                .collectList()
                 .subscribe(node -> {
-                    node.setLastKeepAlive(System.currentTimeMillis());
-                    allNode.put(node.getId(), node);
+                    for (ServerNode serverNode : node) {
+                        serverNode.setLastKeepAlive(System.currentTimeMillis());
+                        allNode.put(serverNode.getId(), serverNode);
+                    }
+                    electionLeader();
                     Flux.interval(Duration.ZERO, Duration.ofSeconds(5))
                             .doOnNext(i -> this.checkAlive())
                             .subscribe();
@@ -123,7 +141,10 @@ public class RedisHaManager implements HaManager {
                         inRedisNode
                                 .remove(allNodeHashKey, serverNode.getId())
                                 .subscribe();
-                        onlineProcessor.onNext(serverNode);
+                        electionLeader();
+                        if (offlineProcessor.hasDownstreams()) {
+                            offlineProcessor.onNext(serverNode);
+                        }
                     }
                 });
         //其他节点定时发布
@@ -135,11 +156,15 @@ public class RedisHaManager implements HaManager {
                         return;
                     }
                     if (!allNode.containsKey(serverNode.getId())) {
+                        allNode.put(serverNode.getId(), serverNode);
+                        electionLeader();
                         log.debug("[{}]:server node [{}] online", haName, serverNode.getId());
                         //node join
-                        onlineProcessor.onNext(serverNode);
+                        if (onlineProcessor.hasDownstreams()) {
+                            onlineProcessor.onNext(serverNode);
+                        }
                     }
-                    allNode.put(serverNode.getId(), serverNode);
+
                 });
 
 

@@ -6,21 +6,19 @@ import org.jetlinks.core.message.*;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.*;
-import reactor.extra.processor.TopicProcessor;
 
-import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 
 @Slf4j
 public class DefaultDecodedClientMessageHandler implements DecodedClientMessageHandler {
 
-    private MessageHandler messageHandler;
+    private final MessageHandler messageHandler;
 
-    private FluxProcessor<Message, Message> processor;
+    private final FluxProcessor<Message, Message> processor;
 
-    private FluxSink<Message> sink;
+    private final FluxSink<Message> sink;
 
-    private DeviceSessionManager sessionManager;
+    private final DeviceSessionManager sessionManager;
 
     public DefaultDecodedClientMessageHandler(MessageHandler handler, DeviceSessionManager sessionManager) {
         this(handler, sessionManager, EmitterProcessor.create(false));
@@ -30,7 +28,7 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         this.messageHandler = handler;
         this.processor = processor;
         this.sessionManager = sessionManager;
-        this.sink = processor.sink();
+        this.sink = processor.sink(FluxSink.OverflowStrategy.BUFFER);
     }
 
 

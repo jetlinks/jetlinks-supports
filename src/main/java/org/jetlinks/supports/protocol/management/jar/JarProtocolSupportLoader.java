@@ -11,12 +11,12 @@ import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.time.Duration;
+import java.io.File;
+import java.net.URL;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeoutException;
 
 @Slf4j
 public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
@@ -33,14 +33,17 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
         return "jar";
     }
 
+    protected ProtocolClassLoader createClassLoader(URL location) {
+        return new ProtocolClassLoader(new URL[]{location}, this.getClass().getClassLoader());
+    }
+
     @SneakyThrows
-    protected ProtocolClassLoader createClassLoader(String location) {
-        return new ProtocolClassLoader(location, this.getClass().getClassLoader());
+    protected void closeLoader(ProtocolClassLoader loader) {
+        loader.close();
     }
 
     @Override
     @SneakyThrows
-
     public Mono<? extends ProtocolSupport> load(ProtocolSupportDefinition definition) {
         return Mono.defer(() -> {
             try {
@@ -49,22 +52,32 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                         .map(String::valueOf).orElseThrow(() -> new IllegalArgumentException("location"));
 
                 String provider = Optional.ofNullable(config.get("provider"))
-                        .map(String::valueOf).orElse(null);
+                        .map(String::valueOf)
+                        .map(String::trim).orElse(null);
+                URL url;
 
                 if (!location.contains("://")) {
-                    location = "file:" + location;
+                    url = new File(location).toURI().toURL();
+                } else {
+                    url = new URL("jar:" + location + "!/");
                 }
-                location = "jar:" + location + "!/";
-                log.debug("load protocol support from : {}", location);
-                ProtocolClassLoader loader;
-                ProtocolClassLoader old = protocolLoaders.put(definition.getId(), loader = createClassLoader(location));
-                if (null != old) {
-                    old.close();
-                }
-                ProtocolSupportProvider supportProvider;
 
+                ProtocolClassLoader loader;
+                URL fLocation = url;
+                loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
+                    if (null != old) {
+                        try {
+                            closeLoader(old);
+                        } catch (Exception ignore) {
+                        }
+                    }
+                    return createClassLoader(fLocation);
+                });
+
+                ProtocolSupportProvider supportProvider;
+                log.debug("load protocol support from : {}", location);
                 if (provider != null) {
-                    supportProvider = (ProtocolSupportProvider) loader.loadClass(provider).newInstance();
+                    supportProvider = (ProtocolSupportProvider) Class.forName(provider, true, loader).newInstance();
                 } else {
                     supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
                 }
@@ -76,13 +89,10 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 } catch (Exception e) {
                     log.error(e.getMessage(), e);
                 }
-
                 return supportProvider.create(serviceContext);
             } catch (Exception e) {
                 return Mono.error(e);
             }
-        })
-                .subscribeOn(Schedulers.elastic())
-                .timeout(Duration.ofSeconds(10), Mono.error(TimeoutException::new));
+        }).subscribeOn(Schedulers.elastic());
     }
 }

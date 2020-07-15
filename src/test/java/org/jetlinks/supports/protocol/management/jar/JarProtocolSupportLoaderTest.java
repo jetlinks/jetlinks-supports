@@ -10,8 +10,6 @@ import org.junit.Test;
 
 import java.util.*;
 
-import static org.junit.Assert.*;
-
 public class JarProtocolSupportLoaderTest {
 
     @Test
@@ -52,7 +50,7 @@ public class JarProtocolSupportLoaderTest {
         loader.setServiceContext(context);
         String location = this.getClass().getResource("/protocol-test-1.0-SNAPSHOT.jar").getPath();
 
-        Map<String,Object> config = new HashMap<>();
+        Map<String, Object> config = new HashMap<>();
         config.put("location", location);
         config.put("provider", "org.jetlinks.demo.TestProtocolSupportProvider");
 
@@ -62,8 +60,9 @@ public class JarProtocolSupportLoaderTest {
                 .build())
                 .block();
 
+
         Assert.assertNotNull(support);
-        Assert.assertEquals(support.getId(),"test");
+        Assert.assertEquals(support.getId(), "test");
 
     }
 }
