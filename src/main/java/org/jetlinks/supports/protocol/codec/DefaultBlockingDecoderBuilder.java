@@ -51,7 +51,7 @@ class DefaultBlockingDecoderBuilder implements BlockingDecoderBuilder {
             BlockingDecoderStatement<CommonDeviceMessage>,
             BlockingDecoderDeclaration {
 
-        MessagePartPredicate predicate;
+        CodecPredicate predicate;
 
         BinaryDecoder<String> deviceIdDecoder;
 
@@ -77,7 +77,7 @@ class DefaultBlockingDecoderBuilder implements BlockingDecoderBuilder {
         }
 
         @Override
-        public BlockingDecoderDeclaration match(MessagePartPredicate predicate) {
+        public BlockingDecoderDeclaration match(CodecPredicate predicate) {
 
             this.predicate = this.predicate == null ? predicate : this.predicate.and(predicate);
 

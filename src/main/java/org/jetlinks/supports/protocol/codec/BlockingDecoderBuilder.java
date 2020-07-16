@@ -44,7 +44,7 @@ public interface BlockingDecoderBuilder {
 
     interface BlockingDecoderDeclaration {
 
-        BlockingDecoderDeclaration match(MessagePartPredicate predicate);
+        BlockingDecoderDeclaration match(CodecPredicate predicate);
 
         BlockingDecoderDeclaration deviceId(BinaryDecoder<String> decoder);
 

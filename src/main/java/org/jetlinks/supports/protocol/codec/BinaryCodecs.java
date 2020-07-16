@@ -51,7 +51,7 @@ public interface BinaryCodecs {
     }
 
     /**
-     * 有指定的编码解码器组成的编解码器
+     * 由指定的编码解码器组成的编解码器
      *
      * @param encoder 编码器
      * @param decoder 解码器
