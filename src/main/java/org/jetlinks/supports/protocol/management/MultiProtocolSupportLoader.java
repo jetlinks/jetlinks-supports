@@ -6,9 +6,9 @@ import reactor.core.publisher.Mono;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class MuiltiProtocolSupportLoader implements ProtocolSupportLoader {
+public class MultiProtocolSupportLoader implements ProtocolSupportLoader {
 
-    private Map<String, ProtocolSupportLoaderProvider> providers = new ConcurrentHashMap<>();
+    private final Map<String, ProtocolSupportLoaderProvider> providers = new ConcurrentHashMap<>();
 
     @Override
     public Mono<? extends ProtocolSupport> load(ProtocolSupportDefinition definition) {

@@ -1,0 +1,23 @@
+package org.jetlinks.supports.event;
+
+import reactor.core.publisher.Flux;
+
+/**
+ * 事件代理
+ *
+ * @author zhouhao
+ * @since 1.1.1
+ */
+public interface EventBroker {
+
+    /**
+     * @return ID
+     */
+    String getId();
+
+    /**
+     * @return 从代理中接收连接
+     */
+    Flux<EventConnection> accept();
+
+}
