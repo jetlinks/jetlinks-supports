@@ -5,7 +5,7 @@ import org.junit.Test;
 
 import static org.jetlinks.supports.protocol.codec.BinaryCodecs.*;
 import static org.jetlinks.supports.protocol.codec.BinaryCodecs.Decoder.*;
-import static org.jetlinks.supports.protocol.codec.MessagePartPredicate.eq;
+import static org.jetlinks.supports.protocol.codec.CodecPredicate.eq;
 
 public class BinaryMessageCodecTest {
 
