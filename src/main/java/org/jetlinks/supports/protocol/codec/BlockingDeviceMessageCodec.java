@@ -9,13 +9,13 @@ import reactor.core.publisher.Mono;
 import javax.annotation.Nonnull;
 
 @AllArgsConstructor
-public class SynchronousCodec implements DeviceMessageCodec {
+public class BlockingDeviceMessageCodec implements DeviceMessageCodec {
 
     private final Transport transport;
 
-    private final SynchronousDecoder decoder;
+    private final BlockingDecoder decoder;
 
-    private final SynchronousEncoder encoder;
+    private final BlockingEncoder encoder;
 
     @Override
     public Transport getSupportTransport() {

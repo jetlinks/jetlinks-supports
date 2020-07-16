@@ -7,6 +7,9 @@ import java.nio.charset.StandardCharsets;
 
 public interface BinaryCodecs {
 
+    /**
+     * 解码器
+     */
     interface Decoder {
 
         /**
@@ -16,7 +19,7 @@ public interface BinaryCodecs {
          * @param <T>   值类型
          * @return decoder
          */
-        static <T> BinaryPartDecoder<T> fixed(T value) {
+        static <T> BinaryDecoder<T> fixed(T value) {
             return FixedValueDecoder.of(value);
         }
 
@@ -29,7 +32,7 @@ public interface BinaryCodecs {
          * @see MapDecoderBuilder
          */
         static <K, V> MapDecoderBuilder<K, V> map() {
-            return new MapBinaryPartDecoder<>();
+            return new MapBinaryDecoder<>();
         }
 
         /**
@@ -41,10 +44,32 @@ public interface BinaryCodecs {
          * @param decoders decoder列表
          * @return decoder
          */
-        static AppendBinaryPartDecoder append(BinaryPartDecoder<?>... decoders) {
-            return AppendBinaryPartDecoder.of(decoders);
+        static AppendBinaryDecoder append(BinaryDecoder<?>... decoders) {
+            return AppendBinaryDecoder.of(decoders);
         }
 
+    }
+
+    /**
+     * 有指定的编码解码器组成的编解码器
+     *
+     * @param encoder 编码器
+     * @param decoder 解码器
+     * @param <T>     编解码数据类型
+     * @return codec
+     */
+    static <T> BinaryCodec<T> of(BinaryEncoder<T> encoder, BinaryDecoder<T> decoder) {
+        return new BinaryCodec<T>() {
+            @Override
+            public T decode(byte[] payload, int offset) {
+                return decoder.decode(payload, offset);
+            }
+
+            @Override
+            public void encode(T part, byte[] payload, int offset) {
+                encoder.encode(part, payload, offset);
+            }
+        };
     }
 
     /**

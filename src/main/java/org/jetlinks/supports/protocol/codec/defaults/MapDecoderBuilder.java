@@ -1,12 +1,13 @@
 package org.jetlinks.supports.protocol.codec.defaults;
 
-import org.jetlinks.supports.protocol.codec.BinaryPartDecoder;
+import org.jetlinks.supports.protocol.codec.BinaryDecoder;
 
 import java.util.Map;
 
 public interface MapDecoderBuilder<K, V> {
 
-    MapDecoderBuilder<K, V> add(BinaryPartDecoder<? extends K> keyDecoder, BinaryPartDecoder<? extends V> valueDecoder);
+    MapDecoderBuilder<K, V> add(BinaryDecoder<? extends K> keyDecoder,
+                                BinaryDecoder<? extends V> valueDecoder);
 
-    BinaryPartDecoder<Map<K, V>> build();
+    BinaryDecoder<Map<K, V>> build();
 }

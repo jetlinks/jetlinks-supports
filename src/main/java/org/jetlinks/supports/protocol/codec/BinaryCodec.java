@@ -2,7 +2,7 @@ package org.jetlinks.supports.protocol.codec;
 
 import java.util.function.Function;
 
-public interface BinaryCodec<T> extends BinaryPartDecoder<T>, BinaryPartEncoder<T> {
+public interface BinaryCodec<T> extends BinaryDecoder<T>, BinaryEncoder<T> {
 
     default <V> BinaryCodec<V> transfer(Function<T, V> decodeMapper, Function<V, T> encodeMapper) {
 

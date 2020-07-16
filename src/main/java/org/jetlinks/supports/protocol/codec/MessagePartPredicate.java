@@ -15,8 +15,8 @@ public interface MessagePartPredicate {
         throw new UnsupportedOperationException();
     }
 
-    static MessagePartPredicate of(BinaryPartDecoder<?> leftDecoder,
-                                   BinaryPartDecoder<?> rightDecoder,
+    static MessagePartPredicate of(BinaryDecoder<?> leftDecoder,
+                                   BinaryDecoder<?> rightDecoder,
                                    BiPredicate<Object, Object> predicate) {
 
         return (body, offset) ->
@@ -26,15 +26,15 @@ public interface MessagePartPredicate {
                 );
     }
 
-    static <L,R extends L> MessagePartPredicate eq(BinaryPartDecoder<L> leftDecoder, BinaryPartDecoder<R> rightDecoder) {
+    static <L,R extends L> MessagePartPredicate eq(BinaryDecoder<L> leftDecoder, BinaryDecoder<R> rightDecoder) {
         return of(leftDecoder, rightDecoder, Objects::deepEquals);
     }
 
-    static MessagePartPredicate gt(BinaryPartDecoder<?> leftDecoder, BinaryPartDecoder<?> rightDecoder) {
+    static MessagePartPredicate gt(BinaryDecoder<?> leftDecoder, BinaryDecoder<?> rightDecoder) {
         throw new UnsupportedOperationException();
     }
 
-    static MessagePartPredicate lt(BinaryPartDecoder<?> leftDecoder, BinaryPartDecoder<?> rightDecoder) {
+    static MessagePartPredicate lt(BinaryDecoder<?> leftDecoder, BinaryDecoder<?> rightDecoder) {
         throw new UnsupportedOperationException();
     }
 }

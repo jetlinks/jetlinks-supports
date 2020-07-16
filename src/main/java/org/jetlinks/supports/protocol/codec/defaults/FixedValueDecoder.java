@@ -1,8 +1,8 @@
 package org.jetlinks.supports.protocol.codec.defaults;
 
-import org.jetlinks.supports.protocol.codec.BinaryPartDecoder;
+import org.jetlinks.supports.protocol.codec.BinaryDecoder;
 
-public class FixedValueDecoder<T> implements BinaryPartDecoder<T> {
+public class FixedValueDecoder<T> implements BinaryDecoder<T> {
 
     private final T fixed;
 

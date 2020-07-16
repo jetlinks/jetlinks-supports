@@ -1,6 +1,6 @@
 package org.jetlinks.supports.protocol.codec;
 
-public interface BinaryPartEncoder<T> {
+public interface BinaryEncoder<T> {
 
     void encode(T part,
                 byte[] payload,

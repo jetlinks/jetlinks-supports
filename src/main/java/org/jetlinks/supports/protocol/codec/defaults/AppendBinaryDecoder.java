@@ -1,19 +1,19 @@
 package org.jetlinks.supports.protocol.codec.defaults;
 
 import lombok.AllArgsConstructor;
-import org.jetlinks.supports.protocol.codec.BinaryPartDecoder;
+import org.jetlinks.supports.protocol.codec.BinaryDecoder;
 
 @AllArgsConstructor(staticName = "of")
-public class AppendBinaryPartDecoder implements BinaryPartDecoder<String> {
+public class AppendBinaryDecoder implements BinaryDecoder<String> {
 
-    private final BinaryPartDecoder<?>[] decoders;
+    private final BinaryDecoder<?>[] decoders;
 
     @Override
     public String decode(byte[] payload, int offset) {
 
         StringBuilder builder = new StringBuilder();
 
-        for (BinaryPartDecoder<?> decoder : decoders) {
+        for (BinaryDecoder<?> decoder : decoders) {
             builder.append(decoder.decode(payload, offset));
         }
 

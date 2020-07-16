@@ -138,7 +138,7 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
                 .cast(Message.class);
     }
 
-    private Map<String, AtomicInteger> fragmentCounter = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> fragmentCounter = new ConcurrentHashMap<>();
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {

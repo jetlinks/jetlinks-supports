@@ -9,27 +9,27 @@ import org.jetlinks.core.message.property.ReportPropertyMessage;
 import java.util.*;
 import java.util.function.BiFunction;
 
-public class DefaultBinaryMessageEncodeBuilder implements BinaryMessageEncodeBuilder {
+class DefaultBlockingDecoderBuilder implements BlockingDecoderBuilder {
 
-    private final Set<SynchronousDecoderStatement<? extends DeviceMessage>> statements = new HashSet<>();
+    private final Set<BlockingDecoderStatement<?>> statements = new HashSet<>();
 
     @Override
-    public BinaryMessageDecodeStatement decode() {
-        return new DefaultBinaryMessageDecodeStatement();
+    public BlockingDecoderDeclaration declare() {
+        return new DefaultBlockingDecoderDeclaration();
     }
 
     @Override
-    public SynchronousDecoder build() {
-        return new DefaultSynchronousDecoder();
+    public BlockingDecoder build() {
+        return new DefaultBlockingDecoder();
     }
 
     @AllArgsConstructor
-    private class DefaultSynchronousDecoder implements SynchronousDecoder {
+    private class DefaultBlockingDecoder implements BlockingDecoder {
 
         @Override
         public DeviceMessage decode(byte[] message, int offset) {
 
-            for (SynchronousDecoderStatement<? extends DeviceMessage> statement : statements) {
+            for (BlockingDecoderStatement<?> statement : statements) {
                 if (statement.test(message, offset)) {
                     return statement.decode(message, offset);
                 }
@@ -39,7 +39,7 @@ public class DefaultBinaryMessageEncodeBuilder implements BinaryMessageEncodeBui
         }
     }
 
-    private interface SynchronousDecoderStatement<M extends DeviceMessage> extends SynchronousDecoder {
+    private interface BlockingDecoderStatement<M extends DeviceMessage> extends BlockingDecoder {
 
         boolean test(byte[] message, int offset);
 
@@ -47,13 +47,15 @@ public class DefaultBinaryMessageEncodeBuilder implements BinaryMessageEncodeBui
 
     }
 
-    private class DefaultBinaryMessageDecodeStatement implements SynchronousDecoderStatement<CommonDeviceMessage>, BinaryMessageDecodeStatement {
+    private class DefaultBlockingDecoderDeclaration implements
+            BlockingDecoderStatement<CommonDeviceMessage>,
+            BlockingDecoderDeclaration {
 
         MessagePartPredicate predicate;
 
-        BinaryPartDecoder<String> deviceIdDecoder;
+        BinaryDecoder<String> deviceIdDecoder;
 
-        BinaryPartDecoder<Long> timestampDecoder;
+        BinaryDecoder<Long> timestampDecoder;
 
         BiFunction<byte[], Integer, ? extends CommonDeviceMessage> messageSupplier;
 
@@ -75,7 +77,7 @@ public class DefaultBinaryMessageEncodeBuilder implements BinaryMessageEncodeBui
         }
 
         @Override
-        public BinaryMessageDecodeStatement match(MessagePartPredicate predicate) {
+        public BlockingDecoderDeclaration match(MessagePartPredicate predicate) {
 
             this.predicate = this.predicate == null ? predicate : this.predicate.and(predicate);
 
@@ -83,57 +85,57 @@ public class DefaultBinaryMessageEncodeBuilder implements BinaryMessageEncodeBui
         }
 
         @Override
-        public BinaryMessageDecodeStatement deviceId(BinaryPartDecoder<String> part) {
+        public BlockingDecoderDeclaration deviceId(BinaryDecoder<String> part) {
             this.deviceIdDecoder = part;
             return this;
         }
 
         @Override
-        public BinaryMessageDecodeStatement timestamp(BinaryPartDecoder<Long> decoder) {
+        public BlockingDecoderDeclaration timestamp(BinaryDecoder<Long> decoder) {
             this.timestampDecoder = decoder;
             return this;
         }
 
         @Override
         @SuppressWarnings("all")
-        public PropertyMessageDecodeStatement isReportProperty() {
-            return (PropertyMessageDecodeStatement) (
-                    this.messageSupplier = (BiFunction) new ReportPropertyBinaryMessageDecodeStatement(this)
+        public PropertyMessageDecoderDeclaration isReportProperty() {
+            return (PropertyMessageDecoderDeclaration) (
+                    this.messageSupplier = (BiFunction) new ReportPropertyBinaryMessageDecoderDeclaration(this)
             );
         }
 
         @Override
         @SuppressWarnings("all")
-        public EventMessageDecodeStatement isEvent() {
-            return (EventMessageDecodeStatement) (
-                    this.messageSupplier = (BiFunction) new EventBinaryMessageDecodeStatement(this)
+        public EventMessageDecoderDeclaration isEvent() {
+            return (EventMessageDecoderDeclaration) (
+                    this.messageSupplier = (BiFunction) new EventBinaryMessageDecoderDeclaration(this)
             );
         }
 
-        public BinaryMessageDecodeStatement next() {
+        public BlockingDecoderDeclaration next() {
             statements.add(this);
-            return new DefaultBinaryMessageDecodeStatement();
+            return new DefaultBlockingDecoderDeclaration();
         }
 
         @Override
-        public BinaryMessageEncodeBuilder end() {
+        public BlockingDecoderBuilder end() {
             statements.add(this);
-            return DefaultBinaryMessageEncodeBuilder.this;
+            return DefaultBlockingDecoderBuilder.this;
         }
 
     }
 
-    private static class ReportPropertyBinaryMessageDecodeStatement
-            implements PropertyMessageDecodeStatement,
+    private static class ReportPropertyBinaryMessageDecoderDeclaration
+            implements PropertyMessageDecoderDeclaration,
             BiFunction<byte[], Integer, ReportPropertyMessage> {
 
-        private final Map<String, BinaryPartDecoder<?>> decoders = new HashMap<>();
+        private BinaryDecoder<Map<String, Object>> decoder;
 
-        private final DefaultBinaryMessageDecodeStatement creator;
+        private final DefaultBlockingDecoderDeclaration creator;
 
-        private BinaryPartDecoder<?> messageIdDecoder;
+        private BinaryDecoder<?> messageIdDecoder;
 
-        public ReportPropertyBinaryMessageDecodeStatement(DefaultBinaryMessageDecodeStatement creator) {
+        public ReportPropertyBinaryMessageDecoderDeclaration(DefaultBlockingDecoderDeclaration creator) {
             this.creator = creator;
         }
 
@@ -143,48 +145,47 @@ public class DefaultBinaryMessageEncodeBuilder implements BinaryMessageEncodeBui
             if (messageIdDecoder != null) {
                 msg.setMessageId(String.valueOf(messageIdDecoder.decode(message, offset)));
             }
-            Map<String, Object> properties = new HashMap<>();
-            for (Map.Entry<String, BinaryPartDecoder<?>> entry : decoders.entrySet()) {
-                properties.put(entry.getKey(), entry.getValue().decode(message, offset));
-            }
-            msg.setProperties(properties);
+            msg.setProperties(decoder.decode(message, offset));
             return msg;
         }
 
         @Override
-        public PropertyMessageDecodeStatement property(String property, BinaryPartDecoder<?> decoder) {
-            decoders.put(property, decoder);
+        public PropertyMessageDecoderDeclaration properties(BinaryDecoder<Map<String, Object>> decoder) {
+            this.decoder = decoder;
             return this;
         }
 
         @Override
-        public PropertyMessageDecodeStatement messageId(BinaryPartDecoder<?> decoder) {
+        public PropertyMessageDecoderDeclaration messageId(BinaryDecoder<?> decoder) {
             this.messageIdDecoder = decoder;
             return this;
         }
 
         @Override
-        public BinaryMessageDecodeStatement next() {
+        public BlockingDecoderDeclaration next() {
+            Objects.requireNonNull(decoder, "please call properties(..) method before");
             return creator.next();
         }
 
         @Override
-        public BinaryMessageEncodeBuilder end() {
+        public BlockingDecoderBuilder end() {
+            Objects.requireNonNull(decoder, "please call properties(..) method before");
             return creator.end();
         }
     }
 
 
-    private static class EventBinaryMessageDecodeStatement
-            implements EventMessageDecodeStatement,
+    private static class EventBinaryMessageDecoderDeclaration
+            implements EventMessageDecoderDeclaration,
             BiFunction<byte[], Integer, EventMessage> {
 
-        private BinaryPartDecoder<?> decoder;
-        private BinaryPartDecoder<String> eventIdDecoder;
+        private BinaryDecoder<?> decoder;
 
-        private final DefaultBinaryMessageDecodeStatement creator;
+        private BinaryDecoder<String> eventIdDecoder;
 
-        public EventBinaryMessageDecodeStatement(DefaultBinaryMessageDecodeStatement creator) {
+        private final DefaultBlockingDecoderDeclaration creator;
+
+        public EventBinaryMessageDecoderDeclaration(DefaultBlockingDecoderDeclaration creator) {
             this.creator = creator;
         }
 
@@ -197,25 +198,25 @@ public class DefaultBinaryMessageEncodeBuilder implements BinaryMessageEncodeBui
         }
 
         @Override
-        public BinaryMessageDecodeStatement next() {
+        public BlockingDecoderDeclaration next() {
             check();
             return creator.next();
         }
 
         @Override
-        public EventMessageDecodeStatement eventId(BinaryPartDecoder<String> decoder) {
+        public EventMessageDecoderDeclaration eventId(BinaryDecoder<String> decoder) {
             this.eventIdDecoder = decoder;
             return this;
         }
 
         @Override
-        public EventMessageDecodeStatement data(BinaryPartDecoder<?> decoder) {
+        public EventMessageDecoderDeclaration data(BinaryDecoder<?> decoder) {
             this.decoder = decoder;
             return this;
         }
 
         @Override
-        public BinaryMessageEncodeBuilder end() {
+        public BlockingDecoderBuilder end() {
             check();
             return creator.end();
         }
