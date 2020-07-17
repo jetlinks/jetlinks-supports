@@ -2,6 +2,8 @@ package org.jetlinks.supports.cluster.redis;
 
 import org.jetlinks.core.cluster.*;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.serializer.RedisSerializationContext;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,15 +26,18 @@ public class RedisClusterManager implements ClusterManager {
 
     private RedisClusterNotifier notifier;
 
-    public RedisClusterManager(String name, ServerNode serverNode, ReactiveRedisOperations<?, ?> operations) {
+    private ReactiveRedisOperations<String, String> stringOperations;
+
+    public RedisClusterManager(String name, ServerNode serverNode, ReactiveRedisTemplate<?, ?> operations) {
         this.clusterName = name;
         this.commonOperations = operations;
         this.notifier = new RedisClusterNotifier(name, serverNode.getId(), this);
         this.serverId = serverNode.getId();
-        this.haManager = new RedisHaManager(name, serverNode, this, (ReactiveRedisOperations) operations);
+        this.haManager = new RedisHaManager(name, serverNode, this, (ReactiveRedisTemplate) operations);
+        this.stringOperations = new ReactiveRedisTemplate<>(operations.getConnectionFactory(), RedisSerializationContext.string());
     }
 
-    public RedisClusterManager(String name, String serverId, ReactiveRedisOperations<?, ?> operations) {
+    public RedisClusterManager(String name, String serverId, ReactiveRedisTemplate<?, ?> operations) {
         this(name, ServerNode.builder().id(serverId).build(), operations);
     }
 
@@ -87,5 +92,10 @@ public class RedisClusterManager implements ClusterManager {
     @Override
     public <V> ClusterSet<V> getSet(String name) {
         return sets.computeIfAbsent(name, id -> new RedisClusterSet<V>(name, this.getRedis()));
+    }
+
+    @Override
+    public ClusterCounter getCounter(String name) {
+        return new RedisClusterCounter(stringOperations, clusterName + ":counter:" + name);
     }
 }
