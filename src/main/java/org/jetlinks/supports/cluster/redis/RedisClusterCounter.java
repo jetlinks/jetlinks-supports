@@ -26,7 +26,8 @@ public class RedisClusterCounter implements ClusterCounter {
         return redis.opsForValue()
                 .get(redisKey)
                 .cast(Number.class)
-                .map(Number::doubleValue);
+                .map(Number::doubleValue)
+                .defaultIfEmpty(0D);
     }
 
     @Override
@@ -48,6 +49,7 @@ public class RedisClusterCounter implements ClusterCounter {
                 .opsForValue()
                 .getAndSet(redisKey, String.valueOf(value))
                 .map(BigDecimal::new)
-                .map(Number::doubleValue);
+                .map(Number::doubleValue)
+                .defaultIfEmpty(0D);
     }
 }
