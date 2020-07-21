@@ -25,7 +25,7 @@ public class RedisClusterCounter implements ClusterCounter {
     public Mono<Double> get() {
         return redis.opsForValue()
                 .get(redisKey)
-                .cast(Number.class)
+                .map(BigDecimal::new)
                 .map(Number::doubleValue)
                 .defaultIfEmpty(0D);
     }
