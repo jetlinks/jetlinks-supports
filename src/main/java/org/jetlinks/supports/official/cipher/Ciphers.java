@@ -7,6 +7,7 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.Optional;
 
+@Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
 public enum Ciphers {
     AES {
         @SneakyThrows

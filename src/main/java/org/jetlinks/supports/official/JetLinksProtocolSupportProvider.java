@@ -10,6 +10,7 @@ import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import reactor.core.publisher.Mono;
 
+@Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
 public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider {
 
     private static final DefaultConfigMetadata mqttConfig = new DefaultConfigMetadata(

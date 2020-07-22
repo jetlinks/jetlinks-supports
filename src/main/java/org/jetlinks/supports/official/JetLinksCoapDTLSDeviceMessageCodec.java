@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
 @Slf4j
+@Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
 public class JetLinksCoapDTLSDeviceMessageCodec extends JetlinksTopicMessageCodec implements DeviceMessageCodec {
 
     @Override

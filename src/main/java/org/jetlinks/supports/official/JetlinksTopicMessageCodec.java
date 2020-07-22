@@ -16,6 +16,7 @@ import org.springframework.util.Assert;
 import java.util.Map;
 import java.util.Optional;
 
+@Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
 class JetlinksTopicMessageCodec {
 
     @Getter

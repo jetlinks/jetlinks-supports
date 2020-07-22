@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 import javax.annotation.Nonnull;
 
 @Slf4j
+@Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
 public class JetLinksCoapDeviceMessageCodec extends JetlinksTopicMessageCodec implements DeviceMessageCodec {
 
 

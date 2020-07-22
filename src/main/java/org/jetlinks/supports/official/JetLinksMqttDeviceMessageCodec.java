@@ -49,6 +49,7 @@ import java.nio.charset.StandardCharsets;
  * @since 1.0.0
  */
 @Slf4j
+@Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
 public class JetLinksMqttDeviceMessageCodec extends JetlinksTopicMessageCodec implements DeviceMessageCodec {
 
     private Transport transport;

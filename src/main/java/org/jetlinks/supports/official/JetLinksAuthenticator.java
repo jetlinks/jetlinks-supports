@@ -12,6 +12,7 @@ import reactor.core.publisher.Mono;
 import javax.annotation.Nonnull;
 import java.util.concurrent.TimeUnit;
 
+@Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
 public class JetLinksAuthenticator implements Authenticator {
 
     @Override
