@@ -18,8 +18,6 @@ public interface EventConsumer extends EventConnection {
 
     Flux<Subscription> handleUnSubscribe();
 
-    Mono<Void> publish(TopicPayload payload);
-
     FluxSink<TopicPayload> sink();
 
 }

@@ -16,7 +16,7 @@ public interface EventBroker {
     String getId();
 
     /**
-     * @return 从代理中接收连接
+     * @return 从代理中接收事件连接
      */
     Flux<EventConnection> accept();
 
