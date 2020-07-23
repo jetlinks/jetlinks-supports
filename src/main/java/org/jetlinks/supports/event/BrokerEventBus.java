@@ -218,7 +218,8 @@ public class BrokerEventBus implements EventBus {
         for (String topic : subscription.getTopics()) {
             root.append(topic).subscribe(info);
         }
-        if (!info.hasConnectionFeature(EventConnection.Feature.consumeAnotherBroker)) {
+        if (subscription.hasFeature(Subscription.Feature.broker)
+                && !info.hasConnectionFeature(EventConnection.Feature.consumeAnotherBroker)) {
             return;
         }
 
