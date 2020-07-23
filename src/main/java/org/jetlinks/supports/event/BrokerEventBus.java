@@ -223,7 +223,8 @@ public class BrokerEventBus implements EventBus {
             return;
         }
 
-        //从其他broker订阅
+        //从其他broker订阅时,去掉broker标识
+        //todo 还有更好到处理方式？
         Subscription sub = subscription.hasFeature(Subscription.Feature.queue)
                 ? subscription.copy(Subscription.Feature.queue, Subscription.Feature.local)
                 : subscription.copy(Subscription.Feature.local);
@@ -242,23 +243,40 @@ public class BrokerEventBus implements EventBus {
                 .subscribe(eventProducer -> eventProducer.subscribe(sub));
     }
 
+    private void doPublish(SubscriptionInfo info, TopicPayload payload) {
+        try {
+            info.sink.next(payload);
+            log.debug("publish [{}] to [{}] complete", payload.getTopic(), info.subscriber);
+        } catch (Throwable error) {
+            log.error("publish [{}] to [{}] event error", info.subscriber, payload.getTopic(), error);
+        }
+    }
+
     private Mono<Long> doPublish(String topic, Predicate<SubscriptionInfo> predicate, Function<Flux<SubscriptionInfo>, Mono<Long>> subscriberConsumer) {
         return root
                 .findTopic(topic)
                 .flatMapIterable(Topic::getSubscribers)
                 .filter(sub -> {
+                    //订阅者来自代理,但是代理已经挂了,应该自动取消订阅?
                     if (sub.isBroker() && !sub.getEventConnection().isAlive()) {
                         return false;
                     }
                     return predicate.test(sub);
                 })
+                //根据订阅者标识进行分组,以进行订阅模式判断
                 .groupBy(SubscriptionInfo::getSubscriber, Integer.MAX_VALUE)
                 .publishOn(publishScheduler)
                 .flatMap(group -> group
                                 .index()
+                                //如果同一个订阅者指定了队列模式,则只推送给其中一个
+                                //注意:需要在订阅时,都指定queue模式.
                                 .takeUntil(tp2 -> tp2.getT1() > 0 && tp2.getT2().hasFeature(Subscription.Feature.queue))
                                 .map(Tuple2::getT2),
                         Integer.MAX_VALUE)
+                // 防止多次推送给同一个消费者,
+                // 比如同一个消费者订阅了: /device/1/2 和/device/1/*/
+                // 推送 /device/1/2,会获取到2个相同到订阅者
+                .distinct(SubscriptionInfo::getSink)
                 .as(subscriberConsumer);
 
     }
@@ -308,14 +326,6 @@ public class BrokerEventBus implements EventBus {
 
     }
 
-    private void doPublish(SubscriptionInfo info, TopicPayload payload) {
-        try {
-            info.sink.next(payload);
-            log.debug("publish [{}] to [{}] complete", payload.getTopic(), info.subscriber);
-        } catch (Throwable error) {
-            log.error("publish [{}] to [{}] event error", info.subscriber, payload.getTopic(), error);
-        }
-    }
 
     @AllArgsConstructor(staticName = "of")
     @Getter
