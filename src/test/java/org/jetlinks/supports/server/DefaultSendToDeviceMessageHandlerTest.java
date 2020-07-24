@@ -15,9 +15,11 @@ import org.jetlinks.supports.server.monitor.MicrometerGatewayServerMetrics;
 import org.jetlinks.supports.server.session.DefaultDeviceSessionManager;
 import org.jetlinks.supports.server.session.TestDeviceRegistry;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import reactor.test.StepVerifier;
 
+@Ignore
 public class DefaultSendToDeviceMessageHandlerTest {
     private StandaloneDeviceMessageBroker broker;
 
