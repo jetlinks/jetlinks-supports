@@ -59,7 +59,7 @@ public class BrokerEventBusTest extends TestCase {
         Flux
                 .merge(
                         eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}), String.class),
-                        eventBus.subscribe(Subscription.of("test2", new String[]{"/test/1/2/3"}), String.class)
+                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}), String.class)
                 )
                 .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))

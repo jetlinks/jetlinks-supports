@@ -1,7 +1,6 @@
 package org.jetlinks.supports.event;
 
 import lombok.AllArgsConstructor;
-import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -26,9 +25,10 @@ import reactor.core.scheduler.Schedulers;
 import reactor.util.function.Tuple2;
 
 import javax.validation.constraints.NotNull;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -204,7 +204,7 @@ public class BrokerEventBus implements EventBus {
 
     private void handleBrokerUnsubscription(Subscription subscription, SubscriptionInfo info, EventConnection connection) {
         if (log.isDebugEnabled()) {
-            log.debug("broker [{}] unsubscribe : {}", info.subscriber, subscription.getTopics());
+            log.debug("broker [{}] unsubscribe : {}", info, subscription.getTopics());
         }
         for (String topic : subscription.getTopics()) {
             root.append(topic).unsubscribe(info).forEach(SubscriptionInfo::dispose);
@@ -213,7 +213,7 @@ public class BrokerEventBus implements EventBus {
 
     private void handleBrokerSubscription(Subscription subscription, SubscriptionInfo info, EventConnection connection) {
         if (log.isDebugEnabled()) {
-            log.debug("broker [{}] subscribe : {}", info.subscriber, subscription.getTopics());
+            log.debug("broker [{}] subscribe : {}", info, subscription.getTopics());
         }
         for (String topic : subscription.getTopics()) {
             root.append(topic).subscribe(info);
@@ -246,9 +246,9 @@ public class BrokerEventBus implements EventBus {
     private void doPublish(SubscriptionInfo info, TopicPayload payload) {
         try {
             info.sink.next(payload);
-            log.debug("publish [{}] to [{}] complete", payload.getTopic(), info.subscriber);
+            log.debug("publish [{}] to [{}] complete", payload.getTopic(), info);
         } catch (Throwable error) {
-            log.error("publish [{}] to [{}] event error", info.subscriber, payload.getTopic(), error);
+            log.error("publish [{}] to [{}] event error", payload.getTopic(), info, error);
         }
     }
 
@@ -288,10 +288,10 @@ public class BrokerEventBus implements EventBus {
                             try {
                                 subscriptionInfo.sink.next(payload);
                                 if (log.isDebugEnabled()) {
-                                    log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), subscriptionInfo.subscriber);
+                                    log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), subscriptionInfo);
                                 }
                             } catch (Exception e) {
-                                log.warn("broker publish [{}] to [{}] error", payload.getTopic(), subscriptionInfo.subscriber, e);
+                                log.warn("broker publish [{}] to [{}] error", payload.getTopic(), subscriptionInfo, e);
                             }
                         })
                         .count()
@@ -330,7 +330,6 @@ public class BrokerEventBus implements EventBus {
     @AllArgsConstructor(staticName = "of")
     @Getter
     @Setter
-    @EqualsAndHashCode(of = "subscriber")
     private static class SubscriptionInfo implements Disposable {
         String subscriber;
         long features;
@@ -345,6 +344,11 @@ public class BrokerEventBus implements EventBus {
         EventConnection eventConnection;
 
         long connectionFeatures;
+
+        @Override
+        public String toString() {
+            return isLocal() ? subscriber + "@local" : subscriber + "@" + eventBroker.getId() + ":" + eventConnection.getId();
+        }
 
         public SubscriptionInfo connection(EventBroker broker, EventConnection connection) {
             this.eventConnection = connection;
