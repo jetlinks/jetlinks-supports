@@ -76,22 +76,22 @@ public class RedisClusterManager implements ClusterManager {
 
     @Override
     public <T> ClusterQueue<T> getQueue(String queueId) {
-        return queues.computeIfAbsent(queueId, id -> new RedisClusterQueue<>(queueId, this.getRedis()));
+        return queues.computeIfAbsent(queueId, id -> new RedisClusterQueue<>(id, this.getRedis()));
     }
 
     @Override
     public <T> ClusterTopic<T> getTopic(String topic) {
-        return topics.computeIfAbsent(topic, id -> new RedisClusterTopic(topic, this.getRedis()));
+        return topics.computeIfAbsent(topic, id -> new RedisClusterTopic(id, this.getRedis()));
     }
 
     @Override
     public <K, V> ClusterCache<K, V> getCache(String cache) {
-        return caches.computeIfAbsent(cache, id -> new RedisClusterCache<K, V>(cache, this.getRedis()));
+        return caches.computeIfAbsent(cache, id -> new RedisClusterCache<K, V>(id, this.getRedis()));
     }
 
     @Override
     public <V> ClusterSet<V> getSet(String name) {
-        return sets.computeIfAbsent(name, id -> new RedisClusterSet<V>(name, this.getRedis()));
+        return sets.computeIfAbsent(name, id -> new RedisClusterSet<V>(id, this.getRedis()));
     }
 
     @Override

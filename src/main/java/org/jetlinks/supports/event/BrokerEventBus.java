@@ -1,5 +1,6 @@
 package org.jetlinks.supports.event;
 
+import io.netty.util.internal.ThreadLocalRandom;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
@@ -22,10 +23,10 @@ import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
-import reactor.util.function.Tuple2;
 
 import javax.validation.constraints.NotNull;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -146,6 +147,18 @@ public class BrokerEventBus implements EventBus {
                     //从生产者订阅消息并推送到本地
                     connection
                             .asProducer()
+                            .flatMap(eventProducer -> root
+                                    .getAllSubscriber()
+                                    .doOnNext(sub -> {
+                                        for (SubscriptionInfo subscriber : sub.getSubscribers()) {
+                                            if (subscriber.isLocal()) {
+                                                if (subscriber.hasFeature(Subscription.Feature.broker)) {
+                                                    eventProducer.subscribe(subscriber.toSubscription(sub.getTopic()));
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .then(Mono.just(eventProducer)))
                             .flatMapMany(EventProducer::subscribe)
                             .flatMap(payload ->
                                     doPublishFromBroker(payload, sub -> {
@@ -166,6 +179,9 @@ public class BrokerEventBus implements EventBus {
                                         return false;
 
                                     }), Integer.MAX_VALUE)
+                            .onErrorContinue((err, obj) -> {
+                                log.error(err.getMessage(), err);
+                            })
                             .subscribe();
 
                     //从消费者订阅获取订阅消息请求
@@ -186,6 +202,9 @@ public class BrokerEventBus implements EventBus {
                                                                 .connection(broker, connection),
                                                         connection
                                                 ))
+                                        .onErrorContinue((err, obj) -> {
+                                            log.error(err.getMessage(), err);
+                                        })
                                         .subscribe();
 
                                 //接收取消订阅请求
@@ -197,6 +216,9 @@ public class BrokerEventBus implements EventBus {
                                                         SubscriptionInfo.of(subscription.getSubscriber()),
                                                         connection
                                                 ))
+                                        .onErrorContinue((err, obj) -> {
+                                            log.error(err.getMessage(), err);
+                                        })
                                         .subscribe();
                             });
                 });
@@ -211,22 +233,11 @@ public class BrokerEventBus implements EventBus {
         }
     }
 
-    private void handleBrokerSubscription(Subscription subscription, SubscriptionInfo info, EventConnection connection) {
-        if (log.isDebugEnabled()) {
-            log.debug("broker [{}] subscribe : {}", info, subscription.getTopics());
-        }
-        for (String topic : subscription.getTopics()) {
-            root.append(topic).subscribe(info);
-        }
-        if (subscription.hasFeature(Subscription.Feature.broker)
-                && !info.hasConnectionFeature(EventConnection.Feature.consumeAnotherBroker)) {
-            return;
-        }
-
+    private void subAnotherBroker(Subscription subscription, SubscriptionInfo info, EventConnection connection) {
         //从其他broker订阅时,去掉broker标识
         //todo 还有更好到处理方式？
-        Subscription sub = subscription.hasFeature(Subscription.Feature.queue)
-                ? subscription.copy(Subscription.Feature.queue, Subscription.Feature.local)
+        Subscription sub = subscription.hasFeature(Subscription.Feature.atMostOnce)
+                ? subscription.copy(Subscription.Feature.atMostOnce, Subscription.Feature.local)
                 : subscription.copy(Subscription.Feature.local);
 
         Flux.fromIterable(connections.values())
@@ -241,6 +252,20 @@ public class BrokerEventBus implements EventBus {
                 })
                 .flatMap(EventConnection::asProducer)
                 .subscribe(eventProducer -> eventProducer.subscribe(sub));
+    }
+
+    private void handleBrokerSubscription(Subscription subscription, SubscriptionInfo info, EventConnection connection) {
+        if (log.isDebugEnabled()) {
+            log.debug("broker [{}] subscribe : {}", info, subscription.getTopics());
+        }
+        for (String topic : subscription.getTopics()) {
+            root.append(topic).subscribe(info);
+        }
+        if (subscription.hasFeature(Subscription.Feature.broker)
+                && !info.hasConnectionFeature(EventConnection.Feature.consumeAnotherBroker)) {
+            return;
+        }
+        subAnotherBroker(subscription, info, connection);
     }
 
     private void doPublish(SubscriptionInfo info, TopicPayload payload) {
@@ -267,11 +292,19 @@ public class BrokerEventBus implements EventBus {
                 .groupBy(SubscriptionInfo::getSubscriber, Integer.MAX_VALUE)
                 .publishOn(publishScheduler)
                 .flatMap(group -> group
-                                .index()
-                                //如果同一个订阅者指定了队列模式,则只推送给其中一个
-                                //注意:需要在订阅时,都指定queue模式.
-                                .takeUntil(tp2 -> tp2.getT1() > 0 && tp2.getT2().hasFeature(Subscription.Feature.queue))
-                                .map(Tuple2::getT2),
+                        .collectSortedList(Comparator.comparing(SubscriptionInfo::isLocal).reversed())
+                        .flatMapMany(allSubs -> {
+                            SubscriptionInfo first = allSubs.get(0);
+                            if (first.hasFeature(Subscription.Feature.atMostOnce)) {
+                                //本地优先
+                                if (first.hasFeature(Subscription.Feature.local) && (first.isLocal() || allSubs.size() == 1)) {
+                                    return Flux.just(first);
+                                }
+                                //随机
+                                return Flux.just(allSubs.get(ThreadLocalRandom.current().nextInt(0, allSubs.size())));
+                            }
+                            return Flux.fromIterable(allSubs);
+                        }),
                         Integer.MAX_VALUE)
                 // 防止多次推送给同一个消费者,
                 // 比如同一个消费者订阅了: /device/1/2 和/device/1/*/
@@ -283,18 +316,25 @@ public class BrokerEventBus implements EventBus {
 
     private Mono<Long> doPublishFromBroker(TopicPayload payload, Predicate<SubscriptionInfo> predicate) {
         return this
-                .doPublish(payload.getTopic(), predicate, flux -> flux
-                        .doOnNext(subscriptionInfo -> {
-                            try {
-                                subscriptionInfo.sink.next(payload);
-                                if (log.isDebugEnabled()) {
-                                    log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), subscriptionInfo);
-                                }
-                            } catch (Exception e) {
-                                log.warn("broker publish [{}] to [{}] error", payload.getTopic(), subscriptionInfo, e);
-                            }
-                        })
-                        .count()
+                .doPublish(
+                        payload.getTopic(),
+                        predicate,
+                        flux -> flux
+                                .collectList()
+                                .map(subscriptionInfo -> {
+                                    for (SubscriptionInfo info : subscriptionInfo) {
+                                        try {
+                                            info.sink.next(payload);
+                                            if (log.isDebugEnabled()) {
+                                                log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), subscriptionInfo);
+                                            }
+                                        } catch (Exception e) {
+                                            log.warn("broker publish [{}] to [{}] error", payload.getTopic(), subscriptionInfo, e);
+                                        }
+                                    }
+                                    return (long) subscriptionInfo.size();
+                                })
+                                .defaultIfEmpty(0L)
                 );
     }
 
@@ -321,8 +361,14 @@ public class BrokerEventBus implements EventBus {
                                             }
                                         })
                                         .then(Mono.just((long) subs.size()))
-                                )
-                );
+                                ).defaultIfEmpty(0L)
+                )
+
+                .doOnNext(subs -> {
+//                    if (subs == 0) {
+                    log.debug("topic [{}] has {} subscriber", topic, subs);
+//                    }
+                });
 
     }
 
@@ -348,6 +394,10 @@ public class BrokerEventBus implements EventBus {
         @Override
         public String toString() {
             return isLocal() ? subscriber + "@local" : subscriber + "@" + eventBroker.getId() + ":" + eventConnection.getId();
+        }
+
+        public Subscription toSubscription(String topic) {
+            return Subscription.of(subscriber, new String[]{topic}, EnumDict.getByMask(Subscription.Feature.class, features).toArray(new Subscription.Feature[0]));
         }
 
         public SubscriptionInfo connection(EventBroker broker, EventConnection connection) {

@@ -1,6 +1,5 @@
 package org.jetlinks.supports.event;
 
-import junit.framework.TestCase;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import org.junit.Test;
@@ -14,7 +13,7 @@ import reactor.test.StepVerifier;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class BrokerEventBusTest extends TestCase {
+public class BrokerEventBusTest {
 
 
     @Test
@@ -38,8 +37,8 @@ public class BrokerEventBusTest extends TestCase {
         BrokerEventBus eventBus = new BrokerEventBus();
 
         Flux.merge(
-                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.queue), String.class),
-                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.queue), String.class)
+                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.atMostOnce), String.class),
+                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.atMostOnce), String.class)
         )
                 .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))

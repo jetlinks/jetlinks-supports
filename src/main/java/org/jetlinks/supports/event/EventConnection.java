@@ -21,7 +21,7 @@ public interface EventConnection {
     EventBroker getBroker();
 
     default Feature[] features() {
-        return new Feature[]{Feature.consumeSameBroker};
+        return new Feature[0];
     }
 
     /**
@@ -58,7 +58,7 @@ public interface EventConnection {
         //消费同一个connection的消息
         consumeSameConnection,
         //订阅其他broker的消息
-        consumeAnotherBroker
+        consumeAnotherBroker,
         ;
 
         @Override
