@@ -1,5 +1,6 @@
 package org.jetlinks.supports.official;
 
+import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.defaults.CompositeProtocolSupport;
 import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.metadata.DefaultConfigMetadata;
@@ -11,6 +12,7 @@ import org.jetlinks.core.spi.ServiceContext;
 import reactor.core.publisher.Mono;
 
 @Deprecated // https://github.com/jetlinks/jetlinks-official-protocol
+@Slf4j
 public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider {
 
     private static final DefaultConfigMetadata mqttConfig = new DefaultConfigMetadata(
@@ -41,7 +43,7 @@ public class JetLinksProtocolSupportProvider implements ProtocolSupportProvider 
 
     @Override
     public Mono<CompositeProtocolSupport> create(ServiceContext context) {
-
+        log.warn("内置官方协议支持即将弃用,请使用 https://github.com/jetlinks/jetlinks-official-protocol");
         return Mono.defer(() -> {
             CompositeProtocolSupport support = new CompositeProtocolSupport();
 
