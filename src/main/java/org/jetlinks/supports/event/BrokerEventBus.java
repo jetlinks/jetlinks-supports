@@ -236,8 +236,8 @@ public class BrokerEventBus implements EventBus {
     private void subAnotherBroker(Subscription subscription, SubscriptionInfo info, EventConnection connection) {
         //从其他broker订阅时,去掉broker标识
         //todo 还有更好到处理方式？
-        Subscription sub = subscription.hasFeature(Subscription.Feature.atMostOnce)
-                ? subscription.copy(Subscription.Feature.atMostOnce, Subscription.Feature.local)
+        Subscription sub = subscription.hasFeature(Subscription.Feature.shared)
+                ? subscription.copy(Subscription.Feature.shared, Subscription.Feature.local)
                 : subscription.copy(Subscription.Feature.local);
 
         Flux.fromIterable(connections.values())
@@ -295,7 +295,7 @@ public class BrokerEventBus implements EventBus {
                         .collectSortedList(Comparator.comparing(SubscriptionInfo::isLocal).reversed())
                         .flatMapMany(allSubs -> {
                             SubscriptionInfo first = allSubs.get(0);
-                            if (first.hasFeature(Subscription.Feature.atMostOnce)) {
+                            if (first.hasFeature(Subscription.Feature.shared)) {
                                 //本地优先
                                 if (first.hasFeature(Subscription.Feature.local) && (first.isLocal() || allSubs.size() == 1)) {
                                     return Flux.just(first);

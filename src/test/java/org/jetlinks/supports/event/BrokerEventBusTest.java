@@ -37,8 +37,8 @@ public class BrokerEventBusTest {
         BrokerEventBus eventBus = new BrokerEventBus();
 
         Flux.merge(
-                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.atMostOnce), String.class),
-                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.atMostOnce), String.class)
+                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class),
+                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class)
         )
                 .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))

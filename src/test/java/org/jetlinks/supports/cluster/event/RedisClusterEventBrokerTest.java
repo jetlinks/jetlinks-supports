@@ -54,7 +54,7 @@ public class RedisClusterEventBrokerTest {
                 new String[]{"/test/topic1"}
                 , Subscription.Feature.broker
                 , Subscription.Feature.local
-                , Subscription.Feature.atMostOnce
+                , Subscription.Feature.shared
         );
 
          Flux.merge(
