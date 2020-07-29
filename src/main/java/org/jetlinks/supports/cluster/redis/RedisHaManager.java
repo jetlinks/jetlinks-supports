@@ -150,11 +150,18 @@ public class RedisHaManager implements HaManager {
         //其他节点定时发布
         keepalive.subscribe()
                 .subscribe(serverNode -> {
-                    serverNode.setLastKeepAlive(System.currentTimeMillis());
                     //自己
-                    if (currentServer().getId().equals(serverNode.getId())) {
+                    if (currentServer().isSame(serverNode)) {
                         return;
                     }
+                    serverNode.setLastKeepAlive(System.currentTimeMillis());
+                    allNode.compute(serverNode.getId(), (id, node) -> {
+                        if (node != null) {
+                            node.setLastKeepAlive(System.currentTimeMillis());
+                            return node;
+                        }
+                        return null;
+                    });
                     if (!allNode.containsKey(serverNode.getId())) {
                         allNode.put(serverNode.getId(), serverNode);
                         electionLeader();

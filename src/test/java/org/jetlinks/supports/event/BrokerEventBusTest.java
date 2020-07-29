@@ -57,8 +57,8 @@ public class BrokerEventBusTest {
 
         Flux
                 .merge(
-                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}), String.class),
-                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}), String.class)
+                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"},Subscription.Feature.local), String.class),
+                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"},Subscription.Feature.local), String.class)
                 )
                 .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))
@@ -140,6 +140,11 @@ public class BrokerEventBusTest {
             @Override
             public FluxSink<TopicPayload> sink() {
                 return processor.sink(FluxSink.OverflowStrategy.BUFFER);
+            }
+
+            @Override
+            public void dispose() {
+
             }
         }
     }

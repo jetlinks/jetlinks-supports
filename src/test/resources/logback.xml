@@ -4,7 +4,7 @@
     　
     <logger name="org.apache" level="warn"/>
     <logger name="io.lettuce" level="warn"/>
-    　 <logger name="org.jetlinks" level="warn"/>
+<!--    　 <logger name="org.jetlinks" level="trace"/>-->
     　
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>

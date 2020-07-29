@@ -7,6 +7,7 @@ import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import reactor.core.publisher.*;
 
+import javax.annotation.Nonnull;
 import java.util.function.Function;
 
 @Slf4j
@@ -66,13 +67,15 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
     }
 
     @Override
-    public Mono<Boolean> handleMessage(DeviceOperator device, Message message) {
+    public Mono<Boolean> handleMessage(DeviceOperator device, @Nonnull Message message) {
         return Mono
                 .defer(() -> {
-                    if (message instanceof ChildDeviceMessageReply) {
-                        return handleChildrenDeviceMessageReply(device, ((ChildDeviceMessageReply) message));
-                    } else if (message instanceof ChildDeviceMessage) {
-                        return handleChildrenDeviceMessageReply(device, ((ChildDeviceMessage) message));
+                    if (device != null) {
+                        if (message instanceof ChildDeviceMessageReply) {
+                            return handleChildrenDeviceMessageReply(device, ((ChildDeviceMessageReply) message));
+                        } else if (message instanceof ChildDeviceMessage) {
+                            return handleChildrenDeviceMessageReply(device, ((ChildDeviceMessage) message));
+                        }
                     }
                     if (message instanceof DeviceMessageReply) {
                         return doReply(((DeviceMessageReply) message));

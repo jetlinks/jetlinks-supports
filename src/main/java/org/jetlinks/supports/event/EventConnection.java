@@ -10,7 +10,7 @@ import reactor.core.publisher.Mono;
  * @author zhouhao
  * @since 1.1.1
  */
-public interface EventConnection {
+public interface EventConnection extends Disposable {
 
     String getId();
 
