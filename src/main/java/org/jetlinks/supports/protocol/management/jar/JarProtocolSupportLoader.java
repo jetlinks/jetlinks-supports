@@ -37,6 +37,12 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
         return new ProtocolClassLoader(new URL[]{location}, this.getClass().getClassLoader());
     }
 
+    protected void closeAll() {
+        protocolLoaders.values().forEach(this::closeLoader);
+        protocolLoaders.clear();
+        loaded.clear();
+    }
+
     @SneakyThrows
     protected void closeLoader(ProtocolClassLoader loader) {
         loader.close();
