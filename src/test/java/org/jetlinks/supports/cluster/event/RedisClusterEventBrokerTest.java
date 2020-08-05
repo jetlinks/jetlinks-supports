@@ -86,7 +86,7 @@ public class RedisClusterEventBrokerTest {
                             .subscribe();
                 })
                 .take(Duration.ofSeconds(3))
-                .map(payload -> payload.getPayload().bodyAsString())
+                .map(payload -> payload.getPayload().bodyToString())
                 .publishOn(Schedulers.single())
                 .as(StepVerifier::create)
                 .expectNextCount(200L)

@@ -1,5 +1,6 @@
 package org.jetlinks.supports.utils;
 
+import org.jetlinks.core.utils.TopicUtils;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.util.PathMatcher;
 
@@ -7,6 +8,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 
+/**
+ * 已弃用,使用 {@link TopicUtils}代替
+ */
+@Deprecated
 public class MqttTopicUtils {
     private final static PathMatcher pathMatcher = new AntPathMatcher();
 

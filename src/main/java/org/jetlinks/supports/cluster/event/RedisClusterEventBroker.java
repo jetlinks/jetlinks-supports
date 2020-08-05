@@ -188,7 +188,7 @@ public class RedisClusterEventBroker implements EventBroker {
 
             disposable.add(Flux.<TopicPayload>create(sink -> this.output = sink)
                     .flatMap(payload -> {
-                        byte[] body = topicPayloadCodec.encode(payload).bodyAsBytes();
+                        byte[] body = topicPayloadCodec.encode(payload).getBytes();
                         return operations.convertAndSend("/broker/bus/" + localId + "/" + brokerId, body);
                     })
                     .onErrorContinue((err, res) -> {
@@ -198,7 +198,7 @@ public class RedisClusterEventBroker implements EventBroker {
 
         @Override
         public Mono<Void> subscribe(Subscription subscription) {
-            byte[] sub = subscriptionCodec.encode(subscription).bodyAsBytes(true);
+            byte[] sub = subscriptionCodec.encode(subscription).getBytes(true);
             String topic = "/broker/" + localId + "/" + brokerId + "/sub";
 
             return operations.opsForSet()
@@ -209,7 +209,7 @@ public class RedisClusterEventBroker implements EventBroker {
 
         @Override
         public Mono<Void> unsubscribe(Subscription subscription) {
-            byte[] sub = subscriptionCodec.encode(subscription).bodyAsBytes(true);
+            byte[] sub = subscriptionCodec.encode(subscription).getBytes(true);
             String topic = "/broker/" + localId + "/" + brokerId + "/unsub";
             return operations
                     .opsForSet()
