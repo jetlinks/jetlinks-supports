@@ -80,9 +80,7 @@ public class RedisClusterEventBrokerTest {
                 .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))
                             .thenMany(Flux.range(0, 100)
-                                    .flatMap(l -> {
-                                        return eventBus2.publish("/test/topic1", new ReadPropertyMessage());
-                                    }))
+                                    .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                             .subscribe();
                 })
                 .take(Duration.ofSeconds(3))

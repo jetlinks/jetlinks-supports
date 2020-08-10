@@ -1,32 +1,39 @@
 package org.jetlinks.supports.cluster.redis;
 
+import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cluster.*;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
+import org.springframework.data.redis.serializer.RedisSerializer;
+import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("all")
+@Slf4j
 public class RedisClusterManager implements ClusterManager {
 
     private String clusterName;
 
     private String serverId;
 
-    private Map<String, ClusterQueue> queues = new ConcurrentHashMap<>();
+    private Map<String, RedisClusterQueue> queues = new ConcurrentHashMap<>();
     private Map<String, ClusterTopic> topics = new ConcurrentHashMap<>();
     private Map<String, ClusterCache> caches = new ConcurrentHashMap<>();
     private Map<String, ClusterSet> sets = new ConcurrentHashMap<>();
 
-    private ReactiveRedisOperations<?, ?> commonOperations;
+    private ReactiveRedisTemplate<?, ?> commonOperations;
 
     private RedisHaManager haManager;
 
     private RedisClusterNotifier notifier;
 
     private ReactiveRedisOperations<String, String> stringOperations;
+
+    private ReactiveRedisTemplate<String, ?> queueRedisTemplate;
 
     public RedisClusterManager(String name, ServerNode serverNode, ReactiveRedisTemplate<?, ?> operations) {
         this.clusterName = name;
@@ -35,6 +42,14 @@ public class RedisClusterManager implements ClusterManager {
         this.serverId = serverNode.getId();
         this.haManager = new RedisHaManager(name, serverNode, this, (ReactiveRedisTemplate) operations);
         this.stringOperations = new ReactiveRedisTemplate<>(operations.getConnectionFactory(), RedisSerializationContext.string());
+
+        this.queueRedisTemplate = new ReactiveRedisTemplate<>(operations.getConnectionFactory(),
+                RedisSerializationContext.<String, Object>newSerializationContext()
+                        .key(RedisSerializer.string())
+                        .value((RedisSerializationContext.SerializationPair<Object>) operations.getSerializationContext().getValueSerializationPair())
+                        .hashKey(RedisSerializer.string())
+                        .hashValue(operations.getSerializationContext().getHashValueSerializationPair())
+                        .build());
     }
 
     public RedisClusterManager(String name, String serverId, ReactiveRedisTemplate<?, ?> operations) {
@@ -49,6 +64,23 @@ public class RedisClusterManager implements ClusterManager {
     public void startup() {
         this.notifier.startup();
         this.haManager.startup();
+
+        //定时尝试拉取队列数据
+        Flux.interval(Duration.ofSeconds(5))
+                .flatMap(i -> Flux.fromIterable(queues.values()))
+                .subscribe(RedisClusterQueue::tryPoll);
+
+        this.queueRedisTemplate
+                .<String>listenToPattern("queue:data:produced")
+                .doOnError(err->{
+                    log.error(err.getMessage(),err);
+                })
+                .subscribe(sub -> {
+                    RedisClusterQueue queue = queues.get(sub.getMessage());
+                    if (queue != null) {
+                        queue.tryPoll();
+                    }
+                });
     }
 
     public void shutdown() {
@@ -61,8 +93,8 @@ public class RedisClusterManager implements ClusterManager {
     }
 
     @SuppressWarnings("all")
-    protected <K, V> ReactiveRedisOperations<K, V> getRedis() {
-        return (ReactiveRedisOperations<K, V>) commonOperations;
+    protected <K, V> ReactiveRedisTemplate<K, V> getRedis() {
+        return (ReactiveRedisTemplate<K, V>) commonOperations;
     }
 
     @Override
@@ -76,7 +108,7 @@ public class RedisClusterManager implements ClusterManager {
 
     @Override
     public <T> ClusterQueue<T> getQueue(String queueId) {
-        return queues.computeIfAbsent(queueId, id -> new RedisClusterQueue<>(id, this.getRedis()));
+        return queues.computeIfAbsent(queueId, id -> new RedisClusterQueue<>(id, this.queueRedisTemplate));
     }
 
     @Override

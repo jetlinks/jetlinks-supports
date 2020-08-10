@@ -135,20 +135,21 @@ public class RedisClusterEventBroker implements EventBroker {
             this.brokerId = brokerId;
             this.localId = localId;
             //本地->其他节点的订阅信息
-            allSubsInfoKey = "/broker/" + localId  + "/" + brokerId + "/subs";
+            allSubsInfoKey = "/broker/" + localId + "/" + brokerId + "/subs";
 
 
             disposable.add(subProcessor::onComplete);
             disposable.add(unsubProcessor::onComplete);
             disposable.add(processor::onComplete);
 
-            disposable.add(operations
-                    .listenToChannel("/broker/bus/" + brokerId + "/" + localId)
+            disposable.add(clusterManager
+                    .<byte[]>getQueue("/broker/bus/" + brokerId + "/" + localId)
+                    .subscribe()
                     .doOnNext(msg -> {
                         if (!processor.hasDownstreams()) {
                             return;
                         }
-                        TopicPayload payload = topicPayloadCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg.getMessage())));
+                        TopicPayload payload = topicPayloadCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg)));
                         log.trace("{} handle redis [{}] event {}", localId, brokerId, payload.getTopic());
                         input.next(payload);
                     })
@@ -181,19 +182,19 @@ public class RedisClusterEventBroker implements EventBroker {
                         Subscription subscription = subscriptionCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg)));
                         subSink.next(subscription);
                     })
-                    .onErrorContinue((err, v) -> {
-                        log.warn(err.getMessage(), err);
-                    })
+                    .onErrorContinue((err, v) -> log.warn(err.getMessage(), err))
                     .subscribe());
 
             disposable.add(Flux.<TopicPayload>create(sink -> this.output = sink)
                     .flatMap(payload -> {
                         byte[] body = topicPayloadCodec.encode(payload).getBytes();
-                        return operations.convertAndSend("/broker/bus/" + localId + "/" + brokerId, body);
+//                        return operations.convertAndSend("/broker/bus/" + localId + "/" + brokerId, body);
+                        return clusterManager
+                                .getQueue("/broker/bus/" + localId + "/" + brokerId)
+                                .add(Mono.just(body));
                     })
-                    .onErrorContinue((err, res) -> {
-                        log.error(err.getMessage(), err);
-                    }).subscribe());
+                    .onErrorContinue((err, res) -> log.error(err.getMessage(), err))
+                    .subscribe());
         }
 
         @Override
@@ -201,9 +202,10 @@ public class RedisClusterEventBroker implements EventBroker {
             byte[] sub = subscriptionCodec.encode(subscription).getBytes(true);
             String topic = "/broker/" + localId + "/" + brokerId + "/sub";
 
-            return operations.opsForSet()
+            return operations
+                    .opsForSet()
                     .add(allSubsInfoKey, sub)
-                    .then(operations.convertAndSend(topic,sub))
+                    .then(operations.convertAndSend(topic, sub))
                     .then();
         }
 
@@ -214,7 +216,7 @@ public class RedisClusterEventBroker implements EventBroker {
             return operations
                     .opsForSet()
                     .remove(allSubsInfoKey, new Object[]{sub})
-                    .then(operations.convertAndSend(topic,sub))
+                    .then(operations.convertAndSend(topic, sub))
                     .then();
         }
 

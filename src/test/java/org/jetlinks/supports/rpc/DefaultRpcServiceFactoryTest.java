@@ -52,6 +52,16 @@ public class DefaultRpcServiceFactoryTest {
                 .verifyComplete();
 
 
+        service.getBoolean(true)
+                .as(StepVerifier::create)
+                .expectNext(true)
+                .verifyComplete();
+
+        service.getBoolean(false)
+                .as(StepVerifier::create)
+                .expectNext(false)
+                .verifyComplete();
+
 
         disposable.dispose();
     }
@@ -67,6 +77,8 @@ public class DefaultRpcServiceFactoryTest {
         Mono<List<TestObj>> getObjs();
 
         Flux<Integer> genericNumber(int numbers);
+
+        Mono<Boolean> getBoolean(boolean numbers);
     }
 
     @Getter
@@ -83,6 +95,11 @@ public class DefaultRpcServiceFactoryTest {
         public Flux<Integer> genericNumber(int numbers) {
 
             return Flux.range(0, numbers).delayElements(Duration.ofMillis(100));
+        }
+
+        @Override
+        public Mono<Boolean> getBoolean(boolean bool) {
+            return Mono.just(bool);
         }
 
         @Override
