@@ -118,7 +118,7 @@ public class RedisHaManager implements HaManager {
         inRedisNode.put(allNodeHashKey, current.getId(), current)
                 .flatMapMany(r -> inRedisNode.values(allNodeHashKey))
                 .collectList()
-                .subscribe(node -> {
+                .doOnNext(node -> {
                     for (ServerNode serverNode : node) {
                         serverNode.setLastKeepAlive(System.currentTimeMillis());
                         allNode.put(serverNode.getId(), serverNode);
@@ -127,7 +127,8 @@ public class RedisHaManager implements HaManager {
                     Flux.interval(Duration.ZERO, Duration.ofSeconds(5))
                             .doOnNext(i -> this.checkAlive())
                             .subscribe();
-                });
+                })
+                .block();
 
         offlineTopic.subscribe()
                 .subscribe(serverNode -> {
