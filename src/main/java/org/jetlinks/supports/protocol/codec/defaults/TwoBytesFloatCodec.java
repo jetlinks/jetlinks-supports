@@ -25,11 +25,11 @@ public class TwoBytesFloatCodec implements BinaryCodec<Float> {
 
     @Override
     public Float decode(byte[] payload, int offset) {
-        int high = payload[offset + this.offset] & 0xFF;
-        int low = payload[offset + this.offset + 1] & 0xFF;
+        int high = payload[offset + this.offset] ;
+        int low = payload[offset + this.offset + 1];
         //默认大端.小端时,低字节在前.
         if (endian == Endian.Little) {
-            int tmp = high;
+            int tmp = low;
             low = high;
             high = tmp;
         }

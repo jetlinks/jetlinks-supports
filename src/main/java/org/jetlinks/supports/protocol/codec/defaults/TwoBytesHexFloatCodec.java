@@ -25,16 +25,16 @@ public class TwoBytesHexFloatCodec implements BinaryCodec<Float> {
 
     @Override
     public Float decode(byte[] payload, int offset) {
-        int high = payload[offset + this.offset] & 0xff;
+        int high = payload[offset + this.offset];
         int low = payload[offset + this.offset + 1] & 0xff;
         //默认大端.小端时,低字节在前.
         if (endian == Endian.Little) {
-            int tmp = high;
+            int tmp = low;
             low = high;
             high = tmp;
         }
 
-        int fistValue = high<<8;
+        int fistValue = high << 8;
         int secondValue = low;
 
         return (fistValue + secondValue) / 10F;

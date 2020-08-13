@@ -11,7 +11,7 @@ public class TwoBytesFloatCodecTest {
     public void test() {
         TwoBytesFloatCodec codec = TwoBytesFloatCodec.of(Endian.BIG, 0);
 
-        for (int i = 0; i < 255; i++) {
+        for (int i = -127; i < 127; i++) {
             float val = (float) (i + Math.random());
             byte[] payload = new byte[2];
             codec.encode(val, payload, 0);
@@ -20,4 +20,8 @@ public class TwoBytesFloatCodecTest {
         }
 
     }
+
+
+
+
 }
