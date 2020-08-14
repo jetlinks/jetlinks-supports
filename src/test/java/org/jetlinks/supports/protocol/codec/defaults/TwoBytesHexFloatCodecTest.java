@@ -6,8 +6,6 @@ import org.jetlinks.supports.protocol.codec.Endian;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.math.BigInteger;
-
 public class TwoBytesHexFloatCodecTest {
 
 
@@ -31,8 +29,6 @@ public class TwoBytesHexFloatCodecTest {
         TwoBytesHexFloatCodec codec = TwoBytesHexFloatCodec.of(Endian.BIG, 0);
 
         byte[] data = Hex.decodeHex("FF9B");
-
-        System.out.println(new BigInteger("FFFFFF9B",16).intValue());
 
         System.out.println(codec.decode(data,0));
 

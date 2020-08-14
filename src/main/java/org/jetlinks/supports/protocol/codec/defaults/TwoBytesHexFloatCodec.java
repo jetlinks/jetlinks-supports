@@ -12,6 +12,8 @@ import org.jetlinks.supports.protocol.codec.Endian;
  * e.g.
  * <pre>
  *     [02,22] = 0x222 = 546 , 546/10 = 54.6
+ *
+ *     [-1,-101] = 0xFF9B = -101 , -101/10 = -10.1
  * </pre>
  *
  * @since 1.1.1
