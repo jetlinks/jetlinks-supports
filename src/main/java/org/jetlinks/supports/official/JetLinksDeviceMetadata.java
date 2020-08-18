@@ -6,6 +6,7 @@ import lombok.Setter;
 import org.jetlinks.core.metadata.*;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -16,13 +17,13 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
 
     private JSONObject jsonObject;
 
-    private volatile List<PropertyMetadata> properties;
+    private volatile Map<String, PropertyMetadata> properties;
 
-    private volatile List<FunctionMetadata> functions;
+    private volatile Map<String, FunctionMetadata> functions;
 
-    private volatile List<EventMetadata> events;
+    private volatile Map<String, EventMetadata> events;
 
-    private volatile List<PropertyMetadata> tags;
+    private volatile Map<String, PropertyMetadata> tags;
 
     @Getter
     @Setter
@@ -49,15 +50,17 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         this.properties = another.getProperties()
                 .stream()
                 .map(JetLinksPropertyMetadata::new)
-                .collect(Collectors.toList());
+                .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a));
+
         this.functions = another.getFunctions()
                 .stream()
                 .map(JetLinksDeviceFunctionMetadata::new)
-                .collect(Collectors.toList());
+                .collect(Collectors.toMap(JetLinksDeviceFunctionMetadata::getId, Function.identity(), (a, b) -> a));
+
         this.events = another.getEvents()
                 .stream()
                 .map(JetLinksEventMetadata::new)
-                .collect(Collectors.toList());
+                .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a));
 
     }
 
@@ -70,13 +73,14 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
                             .map(JSONObject.class::cast)
                             .map(JetLinksPropertyMetadata::new)
                             .map(PropertyMetadata.class::cast)
-                            .collect(Collectors.toList()))
-                    .orElse(Collections.emptyList());
+                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a))
+                    )
+                    .orElse(Collections.emptyMap());
         }
         if (properties == null) {
-            this.properties = new ArrayList<>();
+            this.properties = new HashMap<>();
         }
-        return properties;
+        return new ArrayList<>(properties.values());
     }
 
     @Override
@@ -88,13 +92,14 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
                             .map(JSONObject.class::cast)
                             .map(JetLinksDeviceFunctionMetadata::new)
                             .map(FunctionMetadata.class::cast)
-                            .collect(Collectors.toList()))
-                    .orElse(Collections.emptyList());
+                            .collect(Collectors.toMap(FunctionMetadata::getId, Function.identity(), (a, b) -> a))
+                    )
+                    .orElse(Collections.emptyMap());
         }
         if (functions == null) {
-            this.functions = new ArrayList<>();
+            this.functions = new HashMap<>();
         }
-        return functions;
+        return new ArrayList<>(functions.values());
     }
 
     @Override
@@ -106,13 +111,14 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
                             .map(JSONObject.class::cast)
                             .map(JetLinksPropertyMetadata::new)
                             .map(PropertyMetadata.class::cast)
-                            .collect(Collectors.toList()))
-                    .orElse(Collections.emptyList());
+                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a))
+                    )
+                    .orElse(Collections.emptyMap());
         }
         if (tags == null) {
-            this.tags = new ArrayList<>();
+            this.tags = new HashMap<>();
         }
-        return tags;
+        return new ArrayList<>(tags.values());
     }
 
     @Override
@@ -124,45 +130,46 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
                             .map(JSONObject.class::cast)
                             .map(JetLinksEventMetadata::new)
                             .map(EventMetadata.class::cast)
-                            .collect(Collectors.toList()))
-                    .orElse(Collections.emptyList());
+                            .collect(Collectors.toMap(EventMetadata::getId, Function.identity(), (a, b) -> a))
+                    )
+                    .orElse(Collections.emptyMap());
         }
         if (events == null) {
-            this.events = new ArrayList<>();
+            this.events = new HashMap<>();
         }
-        return events;
+        return new ArrayList<>(events.values());
     }
 
     @Override
-    public Optional<EventMetadata> getEvent(String id) {
-        return getEvents()
-                .stream()
-                .filter(property -> property.getId().equals(id))
-                .findFirst();
+    public EventMetadata getEventOrNull(String id) {
+        if(events==null){
+            getEvents();
+        }
+        return events.get(id);
     }
 
     @Override
-    public Optional<PropertyMetadata> getProperty(String id) {
-        return getProperties()
-                .stream()
-                .filter(property -> property.getId().equals(id))
-                .findFirst();
+    public PropertyMetadata getPropertyOrNull(String id) {
+        if (properties == null) {
+            getProperties();
+        }
+        return properties.get(id);
     }
 
     @Override
-    public Optional<FunctionMetadata> getFunction(String id) {
-        return getFunctions()
-                .stream()
-                .filter(function -> function.getId().equals(id))
-                .findFirst();
+    public FunctionMetadata getFunctionOrNull(String id) {
+        if (functions == null) {
+            getFunctions();
+        }
+        return functions.get(id);
     }
 
     @Override
-    public Optional<PropertyMetadata> getTag(String id) {
-        return getTags()
-                .stream()
-                .filter(tag -> tag.getId().equals(id))
-                .findFirst();
+    public PropertyMetadata getTagOrNull(String id) {
+        if (tags == null) {
+            getTags();
+        }
+        return tags.get(id);
     }
 
     @Override
