@@ -142,6 +142,10 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
+        if (StringUtils.isEmpty(message.getMessageId())) {
+            log.warn("reply message messageId is empty: {}", message);
+            return Mono.just(false);
+        }
         return Mono.defer(() -> {
             message.addHeader(Headers.replyFrom, serverId);
             if (replyProcessor.containsKey(message.getMessageId())) {
