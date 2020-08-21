@@ -57,22 +57,10 @@ public class BrokerEventBus implements EventBus {
     }
 
     @Override
-    @SuppressWarnings("all")
     public <T> Flux<T> subscribe(@NotNull Subscription subscription,
                                  @NotNull Decoder<T> decoder) {
         return subscribe(subscription)
-                .flatMap(payload -> {
-                    if (payload.getPayload() instanceof NativePayload) {
-                        try {
-                            Object nativeObject = ((NativePayload) payload.getPayload()).getNativeObject();
-                            if (decoder.isDecodeFrom(nativeObject)) {
-                                return Mono.justOrEmpty((T) nativeObject);
-                            }
-                        } catch (ClassCastException ignore) {
-                        }
-                    }
-                    return Mono.justOrEmpty(decoder.decode(payload));
-                });
+                .flatMap(payload -> Mono.justOrEmpty(payload.decode(decoder)));
     }
 
     @Override
