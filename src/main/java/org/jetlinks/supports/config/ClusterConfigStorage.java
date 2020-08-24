@@ -7,9 +7,7 @@ import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.config.ConfigStorage;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.util.function.Tuple2;
 
 import java.util.Collection;
 import java.util.Map;
@@ -60,6 +58,13 @@ public class ClusterConfigStorage implements ConfigStorage {
             return Mono.just(true);
         }
         return cache.put(key, value);
+    }
+
+    @Override
+    public Mono<Value> getAndRemove(String key) {
+        return cache
+                .getAndRemove(key)
+                .map(Value::simple);
     }
 
     @Override

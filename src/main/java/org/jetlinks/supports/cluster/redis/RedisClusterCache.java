@@ -14,11 +14,11 @@ import java.util.Map;
 
 public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
 
-    private ReactiveHashOperations<Object, K, V> hash;
+    private final ReactiveHashOperations<Object, K, V> hash;
 
     private ReactiveRedisOperations<Object, Object> redis;
 
-    private String redisKey;
+    private final String redisKey;
 
     public RedisClusterCache(String redisKey, ReactiveRedisOperations<Object, Object> redis) {
         this(redisKey, redis.opsForHash());
@@ -56,6 +56,13 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
     @Override
     public Mono<Boolean> putIfAbsent(K key, V value) {
         return hash.putIfAbsent(redisKey, key, value);
+    }
+
+    @Override
+    public Mono<V> getAndRemove(K key) {
+        // TODO: 2020/8/24 使用script实现?
+        return hash.get(redisKey, key)
+                .flatMap(v -> remove(key).thenReturn(v));
     }
 
     @Override
@@ -137,7 +144,11 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
         @Override
         public V setValue(V value) {
             V old = getValue();
-            put(getKey(), this.value = value).subscribe();
+            if (value == null) {
+                remove(getKey()).subscribe();
+            } else {
+                put(getKey(), this.value = value).subscribe();
+            }
             return old;
         }
     }

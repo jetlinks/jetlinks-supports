@@ -170,9 +170,9 @@ public class RedisClusterManagerTest {
                 .expectNext("123")
                 .verifyComplete();
 
-        cache.remove("test")
+        cache.getAndRemove("test")
                 .as(StepVerifier::create)
-                .expectNext(true)
+                .expectNext("123")
                 .verifyComplete();
 
 

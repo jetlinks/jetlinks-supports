@@ -161,6 +161,9 @@ public class DefaultSendToDeviceMessageHandler {
                 .flatMap(session::send)
                 .reduce((r1, r2) -> r1 && r2)
                 .flatMap(success -> {
+                    if (alreadyReply.get()) {
+                        return Mono.empty();
+                    }
                     if (message.getHeader(Headers.async).orElse(false)) {
                         return doReply(reply.message(ErrorCode.REQUEST_HANDLING.getText())
                                 .code(ErrorCode.REQUEST_HANDLING.name())
@@ -168,13 +171,14 @@ public class DefaultSendToDeviceMessageHandler {
                     }
                     return Mono.just(true);
                 })
-
                 .switchIfEmpty(Mono.defer(() -> {
                     //协议没处理断开连接消息
                     if (message instanceof DisconnectDeviceMessage) {
                         session.close();
                         sessionManager.unregister(session.getId());
-                        return alreadyReply.get() ? Mono.empty() : doReply(createReply(deviceId, message).success());
+                        return alreadyReply.get() ?
+                                Mono.empty() :
+                                doReply(createReply(deviceId, message).success());
                     } else {
                         return alreadyReply.get() ?
                                 Mono.empty() :

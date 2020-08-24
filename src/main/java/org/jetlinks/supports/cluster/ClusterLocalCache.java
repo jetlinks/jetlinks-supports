@@ -11,7 +11,6 @@ import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
 
@@ -25,7 +24,7 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
 
     public ClusterLocalCache(String name, ClusterManager clusterManager) {
         this(name, clusterManager, clusterManager.getCache(name), CacheBuilder.newBuilder()
-                .expireAfterAccess(Duration.ofMinutes(30))
+//                .expireAfterAccess(Duration.ofMinutes(30))
 //                .expireAfterWrite(Duration.ofMinutes(30))
 //                .softValues()
                 .build());
@@ -157,6 +156,19 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
             return clusterCache.remove(key)
                     .flatMap(r -> clearTopic.publish(Mono.just(key)))
                     .thenReturn(true);
+        });
+    }
+
+    @Override
+    public Mono<V> getAndRemove(K key) {
+        if (key == null) {
+            return Mono.empty();
+        }
+        return Mono.defer(() -> {
+            cache.invalidate(key);
+            return clusterCache
+                    .getAndRemove(key)
+                    .flatMap(r -> clearTopic.publish(Mono.just(key)).thenReturn(r));
         });
     }
 
