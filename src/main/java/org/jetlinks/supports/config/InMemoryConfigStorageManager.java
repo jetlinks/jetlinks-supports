@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class InMemoryConfigStorageManager implements ConfigStorageManager {
 
-    private Map<String, ConfigStorage> storageMap = new ConcurrentHashMap<>();
+    private final Map<String, ConfigStorage> storageMap = new ConcurrentHashMap<>();
 
     @Override
     public Mono<ConfigStorage> getStorage(String id) {
