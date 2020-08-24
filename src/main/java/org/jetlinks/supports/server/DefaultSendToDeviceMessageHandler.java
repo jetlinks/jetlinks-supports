@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.*;
 import org.jetlinks.core.enums.ErrorCode;
+import org.jetlinks.core.exception.DeviceOperationException;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.ToDeviceMessageContext;
@@ -22,15 +23,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @AllArgsConstructor
 public class DefaultSendToDeviceMessageHandler {
 
-    private String serverId;
+    private final String serverId;
 
-    private DeviceSessionManager sessionManager;
+    private final DeviceSessionManager sessionManager;
 
-    private MessageHandler handler;
+    private final MessageHandler handler;
 
-    private DeviceRegistry registry;
+    private final DeviceRegistry registry;
 
-    private DecodedClientMessageHandler decodedClientMessageHandler;
+    private final DecodedClientMessageHandler decodedClientMessageHandler;
 
     public void startup() {
 
@@ -167,10 +168,7 @@ public class DefaultSendToDeviceMessageHandler {
                     }
                     return Mono.just(true);
                 })
-                .doOnError(error -> {
-                    log.error(error.getMessage(), error);
-                    doReply(reply.error(error)).subscribe();
-                })
+
                 .switchIfEmpty(Mono.defer(() -> {
                     //协议没处理断开连接消息
                     if (message instanceof DisconnectDeviceMessage) {
@@ -184,6 +182,18 @@ public class DefaultSendToDeviceMessageHandler {
                                         .error(ErrorCode.UNSUPPORTED_MESSAGE));
                     }
                 }))
+                .onErrorResume(error -> {
+                    alreadyReply.set(true);
+                    if (error instanceof DeviceOperationException) {
+                        DeviceOperationException err = ((DeviceOperationException) error);
+                        return doReply(reply.error(err.getCode()))
+                                .onErrorContinue((e, res) -> log.error(e.getMessage(), e));
+                    } else {
+                        log.error(error.getMessage(), error);
+                        return doReply(reply.error(error))
+                                .onErrorContinue((e, res) -> log.error(e.getMessage(), e));
+                    }
+                })
                 .subscribe();
     }
 

@@ -213,6 +213,18 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     }
 
     @Override
+    public DeviceSession replace(DeviceSession oldSession, DeviceSession newSession) {
+        DeviceSession old = repository.put(oldSession.getDeviceId(), newSession);
+        if (old != null) {
+            //清空sessionId不同
+            if (!old.getId().equals(old.getDeviceId())) {
+                repository.put(oldSession.getId(), newSession);
+            }
+        }
+        return newSession;
+    }
+
+    @Override
     public DeviceSession register(DeviceSession session) {
         DeviceSession old = repository.put(session.getDeviceId(), session);
         if (old != null) {
