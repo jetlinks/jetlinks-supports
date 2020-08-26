@@ -37,10 +37,8 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     @Setter
     private String description;
 
-    @Getter
     @Setter
     private Map<String, Object> expands;
-
 
     public JetLinksDeviceMetadata(JSONObject jsonObject) {
         this.jsonObject = jsonObject;
@@ -142,7 +140,7 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
 
     @Override
     public EventMetadata getEventOrNull(String id) {
-        if(events==null){
+        if (events == null) {
             getEvents();
         }
         return events.get(id);
@@ -170,6 +168,13 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
             getTags();
         }
         return tags.get(id);
+    }
+
+    public Map<String, Object> getExpands() {
+        if (this.expands == null && jsonObject != null) {
+            this.expands = jsonObject.getJSONObject("expands");
+        }
+        return this.expands;
     }
 
     @Override
