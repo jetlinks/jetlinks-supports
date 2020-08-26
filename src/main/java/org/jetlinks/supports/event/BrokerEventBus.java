@@ -60,7 +60,14 @@ public class BrokerEventBus implements EventBus {
     public <T> Flux<T> subscribe(@NotNull Subscription subscription,
                                  @NotNull Decoder<T> decoder) {
         return subscribe(subscription)
-                .flatMap(payload -> Mono.justOrEmpty(payload.decode(decoder)));
+                .flatMap(payload -> {
+                    try {
+                        payload.retain();
+                        return Mono.justOrEmpty(payload.decode(decoder));
+                    } finally {
+                        payload.release();
+                    }
+                });
     }
 
     @Override
@@ -286,10 +293,13 @@ public class BrokerEventBus implements EventBus {
 
     private void doPublish(SubscriptionInfo info, TopicPayload payload) {
         try {
+            payload.retain();
             info.sink.next(payload);
             log.debug("publish [{}] to [{}] complete", payload.getTopic(), info);
         } catch (Throwable error) {
             log.error("publish [{}] to [{}] event error", payload.getTopic(), info, error);
+        } finally {
+            payload.release();
         }
     }
 
@@ -341,12 +351,15 @@ public class BrokerEventBus implements EventBus {
                                 .map(subscriptionInfo -> {
                                     for (SubscriptionInfo info : subscriptionInfo) {
                                         try {
+                                            payload.retain();
                                             info.sink.next(payload);
                                             if (log.isDebugEnabled()) {
                                                 log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), info);
                                             }
                                         } catch (Exception e) {
                                             log.warn("broker publish [{}] to [{}] error", payload.getTopic(), info, e);
+                                        } finally {
+                                            payload.release();
                                         }
                                     }
                                     return (long) subscriptionInfo.size();

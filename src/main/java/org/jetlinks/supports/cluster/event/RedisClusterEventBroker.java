@@ -187,7 +187,9 @@ public class RedisClusterEventBroker implements EventBroker {
 
             disposable.add(Flux.<TopicPayload>create(sink -> this.output = sink)
                     .flatMap(payload -> {
-                        byte[] body = topicPayloadCodec.encode(payload).getBytes();
+                        payload.retain();
+                        Payload encoded = topicPayloadCodec.encode(payload);
+                        byte[] body = encoded.getBytes(true);
 //                        return operations.convertAndSend("/broker/bus/" + localId + "/" + brokerId, body);
                         return clusterManager
                                 .getQueue("/broker/bus/" + localId + "/" + brokerId)
