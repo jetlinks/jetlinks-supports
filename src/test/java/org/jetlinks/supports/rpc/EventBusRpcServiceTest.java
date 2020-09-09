@@ -11,12 +11,12 @@ import reactor.test.StepVerifier;
 
 import java.time.Duration;
 
-public class EventBusRcpServiceTest {
+public class EventBusRpcServiceTest {
 
 
     @Test
     public void test() {
-        EventBusRcpService rcpService = new EventBusRcpService(new BrokerEventBus());
+        EventBusRpcService rcpService = new EventBusRpcService(new BrokerEventBus());
 
         RpcDefinition<String, String> definition = RpcDefinition.of("test", "/lower_case", String.class, String.class);
 
@@ -35,7 +35,7 @@ public class EventBusRcpServiceTest {
 
     @Test
     public void testReturnFlux() {
-        EventBusRcpService rcpService = new EventBusRcpService(new BrokerEventBus());
+        EventBusRpcService rcpService = new EventBusRpcService(new BrokerEventBus());
 
         RpcDefinition<Integer, Integer> definition = RpcDefinition.of("test", "/generic", Integer.class, Integer.class);
 

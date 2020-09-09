@@ -25,7 +25,7 @@ import java.util.function.Function;
 
 @AllArgsConstructor
 @Slf4j
-public class EventBusRcpService implements RpcService {
+public class EventBusRpcService implements RpcService {
 
     private final EventBus eventBus;
 
@@ -45,7 +45,7 @@ public class EventBusRcpService implements RpcService {
         String reqTopic = definition.getAddress();
         String reqTopicRes = definition.getAddress() + "/_reply";
         AtomicLong idInc = new AtomicLong();
-        Map<Long, FluxSink<RcpResult>> request = new ConcurrentHashMap<>();
+        Map<Long, FluxSink<RpcResult>> request = new ConcurrentHashMap<>();
         Disposable disposable = eventBus
                 .subscribe(
                         Subscription.of(
@@ -54,8 +54,8 @@ public class EventBusRcpService implements RpcService {
                                 Subscription.Feature.local,
                                 Subscription.Feature.broker))
                 .doOnNext(payload -> {
-                    RcpResult result = RcpResult.parse(payload);
-                    FluxSink<RcpResult> sink = request.get(result.getRequestId());
+                    RpcResult result = RpcResult.parse(payload);
+                    FluxSink<RpcResult> sink = request.get(result.getRequestId());
                     if (null != sink) {
                         sink.next(result);
                     }
@@ -91,7 +91,7 @@ public class EventBusRcpService implements RpcService {
 
             @Override
             public Flux<RES> invoke(Publisher<? extends REQ> payload) {
-                return Flux.<RcpResult>create(sink -> {
+                return Flux.<RpcResult>create(sink -> {
                     long id = idInc.incrementAndGet();
                     request.put(id, sink);
                     sink.onDispose(() -> request.remove(id));
@@ -106,20 +106,20 @@ public class EventBusRcpService implements RpcService {
                             .subscribe();
 
                 }).<RES>handle((res, sink) -> {
-                    if (res.getType() == RcpResult.Type.RESULT_AND_COMPLETE) {
+                    if (res.getType() == RpcResult.Type.RESULT_AND_COMPLETE) {
                         RES r = definition.responseCodec().decode(res);
                         if (r != null) {
                             sink.next(r);
                         }
                         sink.complete();
-                    } else if (res.getType() == RcpResult.Type.RESULT) {
+                    } else if (res.getType() == RpcResult.Type.RESULT) {
                         RES r = definition.responseCodec().decode(res);
                         if (r != null) {
                             sink.next(r);
                         }
-                    } else if (res.getType() == RcpResult.Type.COMPLETE) {
+                    } else if (res.getType() == RpcResult.Type.COMPLETE) {
                         sink.complete();
-                    } else if (res.getType() == RcpResult.Type.ERROR) {
+                    } else if (res.getType() == RpcResult.Type.ERROR) {
                         Throwable e = definition.errorCodec().decode(res);
                         if (e != null) {
                             sink.error(e);
@@ -137,7 +137,7 @@ public class EventBusRcpService implements RpcService {
         };
     }
 
-    protected Mono<Void> reply(String topic, RcpResult result) {
+    protected Mono<Void> reply(String topic, RpcResult result) {
         return eventBus
                 .publish(topic, result)
                 .then();
@@ -164,11 +164,11 @@ public class EventBusRcpService implements RpcService {
             this.invoker = invoker;
             this.disposable = disposable;
             Flux.from(invoker.apply(reqTopic, processor))
-                    .flatMap(res -> reply(reqTopicRes, RcpResult.result(requestId, NativePayload.of(res, definition.responseCodec()::encode))))
-                    .doOnComplete(() -> reply(reqTopicRes, RcpResult.complete(requestId)).subscribe())
+                    .flatMap(res -> reply(reqTopicRes, RpcResult.result(requestId, NativePayload.of(res, definition.responseCodec()::encode))))
+                    .doOnComplete(() -> reply(reqTopicRes, RpcResult.complete(requestId)).subscribe())
                     .doOnError((e) -> {
                         log.error(e.getMessage(), e);
-                        reply(reqTopicRes, RcpResult.error(requestId, NativePayload.of(e, definition.errorCodec()::encode))).subscribe();
+                        reply(reqTopicRes, RpcResult.error(requestId, NativePayload.of(e, definition.errorCodec()::encode))).subscribe();
                     })
                     .subscribe();
             sink.onDispose(disposable);

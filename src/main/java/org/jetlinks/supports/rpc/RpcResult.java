@@ -11,7 +11,7 @@ import javax.annotation.Nonnull;
 /**
  * rcp result
  */
-public class RcpResult implements Payload {
+public class RpcResult implements Payload {
 
     private final static Type[] types = Type.values();
 
@@ -21,28 +21,28 @@ public class RcpResult implements Payload {
     @Getter
     private final long requestId;
 
-    public static RcpResult parse(Payload payload) {
-        return new RcpResult(payload);
+    public static RpcResult parse(Payload payload) {
+        return new RpcResult(payload);
     }
 
-    public static RcpResult complete(long messageId) {
-        return new RcpResult(messageId, Type.COMPLETE, Payload.voidPayload);
+    public static RpcResult complete(long messageId) {
+        return new RpcResult(messageId, Type.COMPLETE, Payload.voidPayload);
     }
 
-    public static RcpResult complete(long messageId, Payload payload) {
-        return new RcpResult(messageId, Type.RESULT_AND_COMPLETE, payload);
+    public static RpcResult complete(long messageId, Payload payload) {
+        return new RpcResult(messageId, Type.RESULT_AND_COMPLETE, payload);
     }
 
-    public static RcpResult result(long messageId, Payload payload) {
-        return new RcpResult(messageId, Type.RESULT, payload);
+    public static RpcResult result(long messageId, Payload payload) {
+        return new RpcResult(messageId, Type.RESULT, payload);
     }
 
-    public static RcpResult error(long messageId, Payload payload) {
+    public static RpcResult error(long messageId, Payload payload) {
 
-        return new RcpResult(messageId, Type.ERROR, payload);
+        return new RpcResult(messageId, Type.ERROR, payload);
     }
 
-    private RcpResult(Payload source) {
+    private RpcResult(Payload source) {
         ByteBuf body = source.getBody();
         this.type = types[body.readByte()];
         byte[] msgId = new byte[8];
@@ -52,7 +52,7 @@ public class RcpResult implements Payload {
         body.resetReaderIndex();
     }
 
-    private RcpResult(long requestId, Type type, Payload payload) {
+    private RpcResult(long requestId, Type type, Payload payload) {
         this.type = type;
         ByteBuf byteBuf = Unpooled.buffer(payload.getBody().capacity() + 9);
         byteBuf.writeByte(this.type.ordinal());

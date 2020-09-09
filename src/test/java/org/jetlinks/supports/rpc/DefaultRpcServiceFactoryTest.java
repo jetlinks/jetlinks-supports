@@ -17,7 +17,7 @@ public class DefaultRpcServiceFactoryTest {
 
     @Test
     public void test() {
-        DefaultRpcServiceFactory factory = new DefaultRpcServiceFactory(new EventBusRcpService(new BrokerEventBus()));
+        DefaultRpcServiceFactory factory = new DefaultRpcServiceFactory(new EventBusRpcService(new BrokerEventBus()));
 
 
         TestService service = factory.createProducer("/test", TestService.class).getService();
