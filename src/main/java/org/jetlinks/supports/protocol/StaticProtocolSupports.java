@@ -32,7 +32,10 @@ public class StaticProtocolSupports implements ProtocolSupports {
     }
 
     public void register(ProtocolSupport support) {
-        supports.put(support.getId(), support);
+        ProtocolSupport old = supports.put(support.getId(), support);
+        if (null != old) {
+            old.dispose();
+        }
     }
 
     public void unRegister(ProtocolSupport support) {
@@ -40,6 +43,9 @@ public class StaticProtocolSupports implements ProtocolSupports {
     }
 
     public void unRegister(String id) {
-        supports.remove(id);
+        ProtocolSupport old = supports.remove(id);
+        if (null != old) {
+            old.dispose();
+        }
     }
 }
