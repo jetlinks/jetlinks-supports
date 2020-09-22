@@ -90,7 +90,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
                 try {
                     if (null != oldProvider) {
-                        oldProvider.close();
+                        oldProvider.dispose();
                     }
                 } catch (Exception e) {
                     log.error(e.getMessage(), e);

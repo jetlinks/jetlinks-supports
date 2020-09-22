@@ -149,6 +149,11 @@ public class DefaultSendToDeviceMessageHandler {
                         return session.getOperator();
                     }
 
+                    @Override
+                    public Mono<DeviceOperator> getDevice(String deviceId) {
+                        return registry.getDevice(deviceId);
+                    }
+
                     @Nonnull
                     @Override
                     public Mono<Void> reply(@Nonnull Publisher<? extends DeviceMessage> replyMessage) {
