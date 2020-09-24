@@ -138,6 +138,11 @@ public class DefaultSendToDeviceMessageHandler {
                         return session;
                     }
 
+                    @Override
+                    public Mono<DeviceSession> getSession(String deviceId) {
+                        return Mono.justOrEmpty(sessionManager.getSession(deviceId));
+                    }
+
                     @Nonnull
                     @Override
                     public Message getMessage() {
