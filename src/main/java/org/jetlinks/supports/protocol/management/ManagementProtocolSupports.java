@@ -48,6 +48,7 @@ public class ManagementProtocolSupports extends StaticProtocolSupports {
         log.debug("{} protocol:{}", operation, definition);
         try {
             loader.load(definition)
+                    .doOnNext(protocolSupport -> protocolSupport.init(definition.getConfiguration()))
                     .doOnError(e -> log.error("{} protocol[{}] error: {}", operation, definition.getId(), e))
                     .doOnNext(e -> log.debug("{} protocol[{}] success: {}", operation, definition.getId(), e))
                     .doOnNext(e -> configProtocolIdMapping.put(definition.getId(), e.getId()))
