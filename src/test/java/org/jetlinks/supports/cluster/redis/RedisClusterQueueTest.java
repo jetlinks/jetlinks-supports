@@ -79,12 +79,15 @@ public class RedisClusterQueueTest {
     @Test
     public void test() {
         RedisClusterQueue<Integer> queue = new RedisClusterQueue("test3", operations);
+        operations.delete("test3").block();
+        queue.setLocalConsumerPercent(0F);
         queue.subscribe()
                 .doOnSubscribe(sb->{
                    queue.add(Flux.range(0,100))
                            .subscribe();
                 })
-                .take(Duration.ofSeconds(2))
+                .take(Duration.ofSeconds(3))
+                .doOnNext(System.out::println)
                 .as(StepVerifier::create)
                 .expectNextCount(100)
                 .verifyComplete();

@@ -3,6 +3,7 @@ package org.jetlinks.supports.cluster.redis;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cluster.ClusterQueue;
 import org.reactivestreams.Publisher;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -77,9 +78,14 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
             , Long.class
     );
 
+    private boolean useScript;
+
     public RedisClusterQueue(String id, ReactiveRedisTemplate<String, T> operations) {
         this.id = id;
         this.operations = operations;
+
+        LettuceConnectionFactory factory = (LettuceConnectionFactory) operations.getConnectionFactory();
+        useScript = !factory.isClusterAware();
     }
 
     protected void tryPoll() {
@@ -192,7 +198,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     private Flux<T> pollBatch(int size) {
-        if (size == 1) {
+        if (size == 1 || !useScript) {
             return poll()
                     .flux();
         }
