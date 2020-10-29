@@ -23,11 +23,7 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
     private final ClusterTopic<K> clearTopic;
 
     public ClusterLocalCache(String name, ClusterManager clusterManager) {
-        this(name, clusterManager, clusterManager.getCache(name), CacheBuilder.newBuilder()
-//                .expireAfterAccess(Duration.ofMinutes(30))
-//                .expireAfterWrite(Duration.ofMinutes(30))
-//                .softValues()
-                .build());
+        this(name, clusterManager, clusterManager.getCache(name), CacheBuilder.newBuilder().build());
     }
 
     public ClusterLocalCache(String name,
