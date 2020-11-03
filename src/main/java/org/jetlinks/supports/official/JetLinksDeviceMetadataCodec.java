@@ -83,6 +83,12 @@ import reactor.core.publisher.Mono;
  * @since 1.0.0
  */
 public class JetLinksDeviceMetadataCodec implements DeviceMetadataCodec {
+
+    @Override
+    public String getId() {
+        return "jetlinks";
+    }
+
     @Override
     public Mono<DeviceMetadata> decode(String source) {
         return Mono.just(new JetLinksDeviceMetadata(JSON.parseObject(source)));
