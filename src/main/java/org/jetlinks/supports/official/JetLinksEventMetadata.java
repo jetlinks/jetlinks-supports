@@ -20,7 +20,7 @@ public class JetLinksEventMetadata implements EventMetadata {
 
     private JSONObject jsonObject;
 
-    private volatile DataType type;
+    private DataType type;
 
     private transient EventMetadata another;
 
@@ -47,6 +47,10 @@ public class JetLinksEventMetadata implements EventMetadata {
 
     public JetLinksEventMetadata(EventMetadata another) {
         this.another = another;
+        this.id = another.getId();
+        this.name = another.getName();
+        this.description = another.getDescription();
+        this.expands = another.getExpands();
     }
 
     @Override
@@ -55,9 +59,9 @@ public class JetLinksEventMetadata implements EventMetadata {
             JSONObject typeJson = jsonObject.getJSONObject("valueType");
 
             type = Optional.ofNullable(typeJson.getString("type"))
-                    .map(DataTypes::lookup)
-                    .map(Supplier::get)
-                    .orElseGet(UnknownType::new);
+                           .map(DataTypes::lookup)
+                           .map(Supplier::get)
+                           .orElseGet(UnknownType::new);
 
             type = JetLinksDataTypeCodecs.decode(type, typeJson);
         }

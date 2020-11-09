@@ -45,6 +45,10 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     }
 
     public JetLinksDeviceMetadata(DeviceMetadata another) {
+        this.id = another.getId();
+        this.name = another.getName();
+        this.description = another.getDescription();
+        this.expands = another.getExpands();
         this.properties = another.getProperties()
                 .stream()
                 .map(JetLinksPropertyMetadata::new)
