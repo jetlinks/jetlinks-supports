@@ -39,6 +39,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
         if (key != null) {
             cache.invalidate(key);
         }
+        if("___all".equals(key)){
+            cache.invalidateAll();
+        }
     }
 
     public static final Object NULL_VALUE = new Object();
@@ -232,7 +235,9 @@ public class ClusterLocalCache<K, V> implements ClusterCache<K, V> {
     public Mono<Void> clear() {
         return Mono.defer(() -> {
             cache.invalidateAll();
-            return clusterCache.clear();
+            return clusterCache.clear()
+                    .then(clearTopic.publish(Mono.just((K)"___all")))
+                    .then();
         });
     }
 }

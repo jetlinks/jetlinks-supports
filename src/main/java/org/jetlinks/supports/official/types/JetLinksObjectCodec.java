@@ -23,7 +23,7 @@ public class JetLinksObjectCodec extends AbstractDataTypeCodec<ObjectType> {
 
     @Override
     public ObjectType decode(ObjectType type, Map<String, Object> config) {
-        super.decode(type,config);
+        super.decode(type, config);
         JSONObject jsonObject = new JSONObject(config);
 
         ofNullable(jsonObject.getJSONArray("properties"))
@@ -40,9 +40,11 @@ public class JetLinksObjectCodec extends AbstractDataTypeCodec<ObjectType> {
 
     @Override
     protected void doEncode(Map<String, Object> encoded, ObjectType type) {
-        super.doEncode(encoded,type);
-        encoded.put("properties", type.getProperties()
+        super.doEncode(encoded, type);
+        encoded.put("properties", type
+                .getProperties()
                 .stream()
+                .map(JetLinksPropertyMetadata::new)
                 .map(PropertyMetadata::toJson)
                 .collect(Collectors.toList()));
     }
