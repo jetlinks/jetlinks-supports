@@ -28,12 +28,12 @@ import java.util.function.Function;
 @Slf4j
 public class ClusterDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
 
-    private ClusterManager clusterManager;
-    private String serverId;
+    private final ClusterManager clusterManager;
+    private final String serverId;
 
 
-    private Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = new ConcurrentHashMap<>();
-    private Map<String, FluxProcessor<DeviceCheckResponse, DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
+    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = new ConcurrentHashMap<>();
+    private final Map<String, FluxProcessor<DeviceCheckResponse, DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
 
 
     private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
@@ -102,7 +102,7 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
     }
 
     @Override
-    public Flux<DeviceMessageReply> handleReply(String messageId, Duration timeout) {
+    public Flux<DeviceMessageReply> handleReply(String deviceId,String messageId, Duration timeout) {
         return replyProcessor
                 .computeIfAbsent(messageId, ignore -> UnicastProcessor.create())
                 .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))

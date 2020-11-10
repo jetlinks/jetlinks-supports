@@ -22,11 +22,12 @@ public interface EventProducer extends EventConnection {
      *
      * @param subscription 订阅请求
      */
-    Mono<Void>  unsubscribe(Subscription subscription);
+    Mono<Void> unsubscribe(Subscription subscription);
 
     /**
+     * 从生产者订阅消息
      *
-     * @return
+     * @return 消息流
      */
     Flux<TopicPayload> subscribe();
 

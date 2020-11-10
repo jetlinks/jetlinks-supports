@@ -77,7 +77,7 @@ public class ClusterDeviceOperationBrokerTest {
         message.setFunctionId("test");
         message.setMessageId("test");
 
-        Flux<Boolean> successReply = broker.handleReply(message.getMessageId(), Duration.ofSeconds(10))
+        Flux<Boolean> successReply = broker.handleReply("test", message.getMessageId(), Duration.ofSeconds(10))
                 .map(DeviceMessageReply::isSuccess);
 
         broker.send("test", Mono.just(message))
@@ -117,7 +117,7 @@ public class ClusterDeviceOperationBrokerTest {
         message.setMessageId("test");
 
         Flux<Boolean> successReply = handler
-                .handleReply(message.getMessageId(), Duration.ofSeconds(2))
+                .handleReply("test",message.getMessageId(), Duration.ofSeconds(2))
                 .doOnNext(System.out::println)
                 .map(DeviceMessageReply::isSuccess);
 
