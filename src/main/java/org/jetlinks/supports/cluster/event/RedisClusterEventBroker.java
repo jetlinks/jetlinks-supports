@@ -142,6 +142,17 @@ public class RedisClusterEventBroker implements EventBroker {
             disposable.add(unsubProcessor::onComplete);
             disposable.add(processor::onComplete);
 
+//            disposable.add(operations.listenToChannel("/broker/bus/" + brokerId + "/" + localId)
+//                                   .doOnNext(msg -> {
+//                                       if (!processor.hasDownstreams()) {
+//                                           return;
+//                                       }
+//                                       TopicPayload payload = topicPayloadCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg.getMessage())));
+//                                       log.trace("{} handle redis [{}] event {}", localId, brokerId, payload.getTopic());
+//                                       input.next(payload);
+//                                   })
+//                                   .onErrorContinue((err, res) -> log.error(err.getMessage(), err))
+//                                   .subscribe());
             disposable.add(clusterManager
                     .<byte[]>getQueue("/broker/bus/" + brokerId + "/" + localId)
                     .subscribe()

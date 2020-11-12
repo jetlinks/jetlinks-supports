@@ -1,10 +1,7 @@
 package org.jetlinks.supports.server;
 
 import lombok.SneakyThrows;
-import org.jetlinks.core.device.DeviceConfigKey;
-import org.jetlinks.core.device.DeviceInfo;
-import org.jetlinks.core.device.DeviceOperator;
-import org.jetlinks.core.device.StandaloneDeviceMessageBroker;
+import org.jetlinks.core.device.*;
 import org.jetlinks.core.message.ChildDeviceMessageReply;
 import org.jetlinks.core.message.property.ReadPropertyMessageReply;
 import org.jetlinks.core.server.monitor.GatewayServerMetrics;
@@ -63,16 +60,25 @@ public class DefaultSendToDeviceMessageHandlerTest {
     @Test
     @SneakyThrows
     public void testMessage() {
-        DeviceOperator device = registry.register(DeviceInfo.builder()
-                .id("test")
-                .protocol("jetlinks.v1.0")
-                .build())
+        registry.register(ProductInfo
+                                  .builder()
+                                  .id("test")
+                                  .protocol("jetlinks.v1.0")
+                                  .build())
+                .block();;
+
+        DeviceOperator device = registry
+                .register(DeviceInfo.builder()
+                                    .id("test")
+                                    .productId("test")
+                                    .build())
                 .block();
 
-        DeviceOperator children = registry.register(DeviceInfo.builder()
-                .id("test-children")
-                .protocol("jetlinks.v1.0")
-                .build())
+        DeviceOperator children = registry
+                .register(DeviceInfo.builder()
+                                    .id("test-children")
+                                    .productId("test")
+                                    .build())
                 .block();
 
         children.setConfig(DeviceConfigKey.parentGatewayId, "test").block();
@@ -89,7 +95,7 @@ public class DefaultSendToDeviceMessageHandlerTest {
             reply.setChildDeviceMessage(readPropertyMessageReply);
 
             decodedHandler.handleMessage(sessionManager.getSession("test").getOperator(), reply)
-                    .subscribe();
+                          .subscribe();
         }));
 
         sessionManager.registerChildren("test", "test-children").block();

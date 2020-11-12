@@ -17,6 +17,7 @@ import org.jetlinks.supports.cluster.redis.DeviceCheckRequest;
 import org.jetlinks.supports.cluster.redis.DeviceCheckResponse;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
+import reactor.core.Disposable;
 import reactor.core.publisher.*;
 
 import java.time.Duration;
@@ -85,9 +86,9 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
     }
 
     @Override
-    public void handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
+    public Disposable handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
         localStateChecker = stateMapper;
-        clusterManager.<DeviceCheckRequest>getTopic("device:state:checker:".concat(serverId))
+       return clusterManager.<DeviceCheckRequest>getTopic("device:state:checker:".concat(serverId))
                 .subscribe()
                 .subscribe(request ->
                         stateMapper.apply(Flux.fromIterable(request.getDeviceId()))

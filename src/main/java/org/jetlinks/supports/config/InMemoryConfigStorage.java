@@ -10,7 +10,6 @@ import reactor.util.function.Tuples;
 
 import java.util.Collection;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
@@ -21,9 +20,8 @@ public class InMemoryConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Value> getConfig(String key) {
-        return Mono.justOrEmpty(Optional.of(key).map(storage::get))
-                .map(Value::simple)
-                .cache();
+        return Mono.fromSupplier(()->storage.get(key))
+                .map(Value::simple);
     }
 
 

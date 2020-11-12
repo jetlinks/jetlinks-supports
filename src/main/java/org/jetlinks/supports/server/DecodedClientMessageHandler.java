@@ -15,6 +15,12 @@ import javax.annotation.Nullable;
  */
 public interface DecodedClientMessageHandler {
 
+    /**
+     * 处理消息
+     * @param device 设备操作接口,可以为null
+     * @param message
+     * @return
+     */
     Mono<Boolean> handleMessage(@Nullable DeviceOperator device, @Nonnull Message message);
 
 

@@ -25,7 +25,9 @@ public class DefaultDecodedClientMessageHandler implements DecodedClientMessageH
         this(handler, sessionManager, EmitterProcessor.create(false));
     }
 
-    public DefaultDecodedClientMessageHandler(MessageHandler handler, DeviceSessionManager sessionManager, FluxProcessor<Message, Message> processor) {
+    public DefaultDecodedClientMessageHandler(MessageHandler handler,
+                                              DeviceSessionManager sessionManager,
+                                              FluxProcessor<Message, Message> processor) {
         this.messageHandler = handler;
         this.processor = processor;
         this.sessionManager = sessionManager;

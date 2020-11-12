@@ -1,5 +1,6 @@
 package org.jetlinks.supports.cluster;
 
+import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.codec.Codecs;
 import org.jetlinks.core.device.DeviceStateInfo;
@@ -21,6 +22,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
+@Slf4j
 public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker implements Disposable {
 
     private static final Codec<Message> messageCodec = Codecs.lookup(Message.class);
@@ -57,7 +59,6 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
             Subscription subscription = Subscription
                     .of("device-message-broker",
                         new String[]{"/_sys/msg-broker-reply/" + serverId},
-                        Subscription.Feature.local,
                         Subscription.Feature.broker);
 
             disposable.add(
@@ -110,6 +111,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
             if (serverId.equals(deviceGatewayServerId) && localStateChecker != null) {
                 return localStateChecker.apply(Flux.fromIterable(deviceIdList));
             }
+            long startWith = System.currentTimeMillis();
             String uid = UUID.randomUUID().toString();
 
             DeviceCheckRequest request = new DeviceCheckRequest(serverId, uid, new ArrayList<>(deviceIdList));
@@ -119,20 +121,23 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
             return eventBus
                     .publish("/_sys/device-state-check/".concat(deviceGatewayServerId), request)
-                    .flatMapMany(m -> processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
+                    .thenMany(processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
                     .timeout(Duration.ofSeconds(5), Flux.empty())
-                    .doFinally((s) -> checkRequests.remove(uid));
+                    .doFinally((s) -> {
+                        log.trace("check device state complete take {}ms", System.currentTimeMillis() - startWith);
+                        checkRequests.remove(uid);
+                    });
         });
     }
 
     @Override
-    public void handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
+    public Disposable handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
         Subscription subscription = Subscription
                 .of("device-state-checker",
                     new String[]{"/_sys/device-state-check/" + serverId},
                     Subscription.Feature.broker);
         this.localStateChecker = stateMapper;
-        eventBus
+        return eventBus
                 .subscribe(subscription, DeviceCheckRequest.class)
                 .subscribe(request -> stateMapper
                         .apply(Flux.fromIterable(request.getDeviceId()))
@@ -151,14 +156,14 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                 .orElse("*");
 
         return eventBus
-                .publish("/_sys/msg-broker-reply/" + serverId, reply)
+                .publish("/_sys/msg-broker-reply/" + serverId, messageCodec, reply)
                 .then();
     }
 
     @Override
     public Mono<Integer> send(String deviceGatewayServerId, Publisher<? extends Message> message) {
         return eventBus
-                .publish("/_sys/msg-broker/" + deviceGatewayServerId,
+                .publish("/_sys/msg-broker/" + deviceGatewayServerId, messageCodec,
                          Flux.from(message)
                              .doOnNext(msg -> msg.addHeader(Headers.sendFrom, serverId))
                 )
@@ -168,7 +173,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
     @Override
     public Mono<Integer> send(Publisher<? extends BroadcastMessage> message) {
         return eventBus
-                .publish("/_sys/msg-broker-broadcast", message)
+                .publish("/_sys/msg-broker-broadcast", messageCodec, message)
                 .map(Long::intValue);
     }
 

@@ -11,6 +11,7 @@ import org.jetlinks.core.message.*;
 import org.jetlinks.core.server.MessageHandler;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
@@ -32,16 +33,19 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
     public abstract Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId, Collection<String> deviceIdList);
 
     @Override
-    public abstract void handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper);
+    public abstract Disposable handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper);
 
     @Override
     public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
+        long startWith = System.currentTimeMillis();
+        String id = getAwaitReplyKey(deviceId, messageId);
         return replyProcessor
-                .computeIfAbsent(getAwaitReplyKey(deviceId, messageId), ignore -> UnicastProcessor.create())
+                .computeIfAbsent(id, ignore -> UnicastProcessor.create())
                 .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
                 .doFinally(signal -> {
-                    replyProcessor.remove(messageId);
-                    fragmentCounter.remove(messageId);
+                    log.trace("reply device message {} {} take {}ms", deviceId, messageId, System.currentTimeMillis() - startWith);
+                    replyProcessor.remove(id);
+                    fragmentCounter.remove(id);
                 });
     }
 
@@ -74,7 +78,9 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
         }
         return Mono
                 .defer(() -> {
-                    if (replyProcessor.containsKey(getAwaitReplyKey(message))) {
+                    String msgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(message.getMessageId());
+                    if (message.getHeader(Headers.async).orElse(false)
+                            || replyProcessor.containsKey(getAwaitReplyKey(message.getDeviceId(), msgId))) {
                         handleReply(message);
                         return Mono.just(true);
                     }
@@ -90,6 +96,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
             String partMsgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(null);
             if (partMsgId != null) {
+                log.trace("handle fragment device[{}] message {}", message.getDeviceId(), message);
                 partMsgId = getAwaitReplyKey(message.getDeviceId(), partMsgId);
                 FluxProcessor<DeviceMessageReply, DeviceMessageReply> processor = replyProcessor
                         .getOrDefault(partMsgId, replyProcessor.get(messageId));

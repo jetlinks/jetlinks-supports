@@ -37,11 +37,11 @@ public class DefaultSendToDeviceMessageHandler {
 
         //处理发往设备的消息
         handler.handleSendToDeviceMessage(serverId)
-                .subscribe(message -> {
-                    if (message instanceof DeviceMessage) {
-                        handleDeviceMessage(((DeviceMessage) message));
-                    }
-                });
+               .subscribe(message -> {
+                   if (message instanceof DeviceMessage) {
+                       handleDeviceMessage(((DeviceMessage) message));
+                   }
+               });
 
         //处理设备状态检查
         handler.handleGetDeviceState(serverId, deviceId -> Flux
@@ -88,12 +88,12 @@ public class DefaultSendToDeviceMessageHandler {
                         }
                         //回复离线
                         return doReply(createReply(deviceId, message)
-                                .error(ErrorCode.CLIENT_OFFLINE));
+                                               .error(ErrorCode.CLIENT_OFFLINE));
                     })
                     .switchIfEmpty(Mono.defer(() -> {
                         log.warn("device[{}] not connected,send message fail", message.getDeviceId());
                         return doReply(createReply(deviceId, message)
-                                .error(ErrorCode.CLIENT_OFFLINE));
+                                               .error(ErrorCode.CLIENT_OFFLINE));
                     }))
                     .subscribe();
 
@@ -115,7 +115,12 @@ public class DefaultSendToDeviceMessageHandler {
         String deviceId = message.getDeviceId();
         DeviceMessageReply reply = createReply(deviceId, message);
         AtomicBoolean alreadyReply = new AtomicBoolean(false);
-        session.getOperator()
+        if (session.getOperator() == null) {
+            log.warn("unsupported send message to {}", session);
+            return;
+        }
+        session
+                .getOperator()
                 .getProtocol()
                 .flatMap(protocolSupport -> protocolSupport.getMessageCodec(session.getTransport()))
                 .flatMapMany(codec -> codec.encode(new ToDeviceMessageContext() {
@@ -164,8 +169,8 @@ public class DefaultSendToDeviceMessageHandler {
                     public Mono<Void> reply(@Nonnull Publisher<? extends DeviceMessage> replyMessage) {
                         alreadyReply.set(true);
                         return Flux.from(replyMessage)
-                                .flatMap(msg -> decodedClientMessageHandler.handleMessage(session.getOperator(), msg))
-                                .then();
+                                   .flatMap(msg -> decodedClientMessageHandler.handleMessage(session.getOperator(), msg))
+                                   .then();
                     }
                 }))
                 .flatMap(session::send)
@@ -176,8 +181,8 @@ public class DefaultSendToDeviceMessageHandler {
                     }
                     if (message.getHeader(Headers.async).orElse(false)) {
                         return doReply(reply.message(ErrorCode.REQUEST_HANDLING.getText())
-                                .code(ErrorCode.REQUEST_HANDLING.name())
-                                .success());
+                                            .code(ErrorCode.REQUEST_HANDLING.name())
+                                            .success());
                     }
                     return Mono.just(true);
                 })
@@ -186,25 +191,26 @@ public class DefaultSendToDeviceMessageHandler {
                     if (message instanceof DisconnectDeviceMessage) {
                         session.close();
                         sessionManager.unregister(session.getId());
-                        return alreadyReply.get() ?
-                                Mono.empty() :
-                                doReply(createReply(deviceId, message).success());
+                        return alreadyReply.get()
+                                ? Mono.empty()
+                                : doReply(createReply(deviceId, message).success());
                     } else {
-                        return alreadyReply.get() ?
-                                Mono.empty() :
-                                doReply(createReply(deviceId, message)
-                                        .error(ErrorCode.UNSUPPORTED_MESSAGE));
+                        return alreadyReply.get()
+                                ? Mono.empty()
+                                : doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE));
                     }
                 }))
                 .onErrorResume(error -> {
                     alreadyReply.set(true);
                     if (error instanceof DeviceOperationException) {
                         DeviceOperationException err = ((DeviceOperationException) error);
-                        return doReply(reply.error(err.getCode()))
+                        return this
+                                .doReply(reply.error(err.getCode()))
                                 .onErrorContinue((e, res) -> log.error(e.getMessage(), e));
                     } else {
                         log.error(error.getMessage(), error);
-                        return doReply(reply.error(error))
+                        return this
+                                .doReply(reply.error(error))
                                 .onErrorContinue((e, res) -> log.error(e.getMessage(), e));
                     }
                 })

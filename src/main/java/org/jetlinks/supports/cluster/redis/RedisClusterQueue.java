@@ -128,7 +128,6 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
             AtomicLong total = new AtomicLong(size);
             long pollSize = Math.min(total.get(), maxBatchSize);
 
-            log.trace("poll datas[{}] from redis [] ", pollSize, id);
             pollBatch((int) pollSize)
                     .flatMap(v -> {
                         //没有订阅者了,重入队列
@@ -147,6 +146,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                         if (r > 0 && total.addAndGet(-r) > 0) { //继续poll
                             polling.set(false);
                             doPoll(total.get());
+                            log.trace("poll datas[{}] from redis [{}] ", r, id);
                         }
                     });
         }
