@@ -12,7 +12,7 @@ import reactor.core.publisher.Mono;
 import java.util.Collection;
 import java.util.Map;
 
-public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
+public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V>  {
 
     private final Cache<K, Object> cache;
 
