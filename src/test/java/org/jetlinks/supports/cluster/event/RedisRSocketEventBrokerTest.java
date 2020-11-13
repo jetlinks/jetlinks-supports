@@ -1,6 +1,5 @@
 package org.jetlinks.supports.cluster.event;
 
-
 import lombok.SneakyThrows;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.message.property.ReadPropertyMessage;
@@ -14,85 +13,90 @@ import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class RedisClusterEventBrokerTest {
-
+public class RedisRSocketEventBrokerTest {
 
     ReactiveRedisTemplate<Object, Object> reactiveRedisTemplate = RedisHelper.getRedisTemplate();
     Disposable.Composite disposable = Disposables.composite();
 
     @After
-    public void shutdown(){
+    public void shutdown() {
         disposable.dispose();
+        reactiveRedisTemplate.execute(connection -> {
+            return connection.serverCommands().flushDb();
+        }).blockLast();
     }
 
     @Test
     @SneakyThrows
     public void test() {
-
         BrokerEventBus eventBus = new BrokerEventBus();
-
         BrokerEventBus eventBus2 = new BrokerEventBus();
-
+        eventBus2.setPublishScheduler(Schedulers.parallel());
         BrokerEventBus eventBus3 = new BrokerEventBus();
-
-
         {
-            RedisClusterManager clusterManager = new RedisClusterManager("redis", "test-bus1", reactiveRedisTemplate);
+            RedisClusterManager clusterManager = new RedisClusterManager("redis2", "test-bus1", reactiveRedisTemplate);
             clusterManager.startup();
             Thread.sleep(1000);
-            eventBus.addBroker(new RedisClusterEventBroker(clusterManager, reactiveRedisTemplate.getConnectionFactory()));
-            disposable.add(clusterManager::shutdown);
-        }
-        {
-            RedisClusterManager clusterManager = new RedisClusterManager("redis", "test-bus2", reactiveRedisTemplate);
-            clusterManager.startup();
-            Thread.sleep(1000);
-            eventBus2.addBroker(new RedisClusterEventBroker(clusterManager, reactiveRedisTemplate.getConnectionFactory()));
+            eventBus.addBroker(new RedisRSocketEventBroker(clusterManager,
+                                                           reactiveRedisTemplate.getConnectionFactory(),
+                                                           RSocketAddress.of(1234)));
             disposable.add(clusterManager::shutdown);
         }
 
         {
-            RedisClusterManager clusterManager = new RedisClusterManager("redis", "test-bus3", reactiveRedisTemplate);
+            RedisClusterManager clusterManager = new RedisClusterManager("redis2", "test-bus2", reactiveRedisTemplate);
             clusterManager.startup();
             Thread.sleep(1000);
-            eventBus3.addBroker(new RedisClusterEventBroker(clusterManager, reactiveRedisTemplate.getConnectionFactory()));
+            eventBus2.addBroker(new RedisRSocketEventBroker(clusterManager,
+                                                            reactiveRedisTemplate.getConnectionFactory(),
+                                                            RSocketAddress.of(1235)));
+            disposable.add(clusterManager::shutdown);
+        }
+
+
+        {
+            RedisClusterManager clusterManager = new RedisClusterManager("redis2", "test-bus3", reactiveRedisTemplate);
+            clusterManager.startup();
+            Thread.sleep(1000);
+            eventBus3.addBroker(new RedisRSocketEventBroker(clusterManager,
+                                                            reactiveRedisTemplate.getConnectionFactory(),
+                                                            RSocketAddress.of(1236)));
             disposable.add(clusterManager::shutdown);
         }
 
         Subscription subscription = Subscription.of("test",
-                new String[]{"/test/topic1"}
-                , Subscription.Feature.broker
+                                                    new String[]{"/test/topic1"}
+                 , Subscription.Feature.broker
                 , Subscription.Feature.local
-                //, Subscription.Feature.shared
+                                                    //, Subscription.Feature.shared
         );
-
 
         AtomicReference<Long> startWith = new AtomicReference<>();
 
         Flux.merge(
                 eventBus.subscribe(subscription)
-//                        , eventBus2.subscribe(subscription)
-                , eventBus3.subscribe(subscription)
+                // , eventBus2.subscribe(subscription)
+                 , eventBus3.subscribe(subscription)
         )
             .doOnSubscribe(sub -> {
                 Mono.delay(Duration.ofSeconds(1))
                     .doOnNext(i -> startWith.set(System.currentTimeMillis()))
-                    .thenMany(Flux.range(0, 10000)
+                    .thenMany(Flux.range(0, 100000)
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
-            .take(20000L)
+            .take(200000)
             .map(payload -> payload.getPayload().bodyToString())
+            .count()
             .as(StepVerifier::create)
-            .expectNextCount(20000L)
+            .expectNext(200000L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
-
     }
-
 }

@@ -23,8 +23,8 @@ public class BrokerEventBusTest {
         eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}), String.class)
                 .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))
-                            .flatMap(i -> eventBus.publish("/test/1/2/3", "hello"))
-                            .subscribe();
+                        .flatMap(i -> eventBus.publish("/test/1/2/3", "hello"))
+                        .subscribe();
                 })
                 .take(Duration.ofSeconds(3))
                 .as(StepVerifier::create)
@@ -40,15 +40,15 @@ public class BrokerEventBusTest {
                 eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class),
                 eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class)
         )
-                .doOnSubscribe(sub -> {
-                    Mono.delay(Duration.ofSeconds(1))
-                            .flatMap(i -> eventBus.publish("/test/1/2/3", "hello"))
-                            .subscribe();
-                })
-                .take(Duration.ofSeconds(3))
-                .as(StepVerifier::create)
-                .expectNextCount(1)
-                .verifyComplete();
+            .doOnSubscribe(sub -> {
+                Mono.delay(Duration.ofSeconds(1))
+                    .flatMap(i -> eventBus.publish("/test/1/2/3", "hello"))
+                    .subscribe();
+            })
+            .take(Duration.ofSeconds(3))
+            .as(StepVerifier::create)
+            .expectNextCount(1)
+            .verifyComplete();
     }
 
     @Test
@@ -57,13 +57,13 @@ public class BrokerEventBusTest {
 
         Flux
                 .merge(
-                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"},Subscription.Feature.local), String.class),
-                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"},Subscription.Feature.local), String.class)
+                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local), String.class),
+                        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local), String.class)
                 )
                 .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))
-                            .flatMap(i -> eventBus.publish("/test/1/2/3", "hello"))
-                            .subscribe();
+                        .flatMap(i -> eventBus.publish("/test/1/2/3", "hello"))
+                        .subscribe();
                 })
                 .take(Duration.ofSeconds(3))
                 .as(StepVerifier::create)
@@ -104,7 +104,7 @@ public class BrokerEventBusTest {
 
             TestEventConnection() {
                 processor.doOnNext(i -> counter.incrementAndGet())
-                        .subscribe();
+                         .subscribe();
             }
 
             @Override

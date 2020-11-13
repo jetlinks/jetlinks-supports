@@ -27,6 +27,7 @@ public class RedisHelper {
 //        return operations;
         if (operations == null) {
             LettuceConnectionFactory factory = new LettuceConnectionFactory("localhost", 6379);
+            factory.setDatabase(5);
             factory.afterPropertiesSet();
             operations = new ReactiveRedisTemplate<>(factory, RedisSerializationContext.java());
         }
