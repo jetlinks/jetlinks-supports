@@ -3,6 +3,7 @@ package org.jetlinks.supports.cluster;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import org.jetlinks.core.ProtocolSupports;
+import org.jetlinks.core.cache.Caches;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.config.ConfigStorageManager;
@@ -21,7 +22,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class ClusterDeviceRegistry implements DeviceRegistry {
     //全局拦截器
@@ -34,7 +34,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     private final Cache<String, DeviceOperator> operatorCache;
 
     //产品
-    private final Map<String, DeviceProductOperator> productOperatorMap = new ConcurrentHashMap<>();
+    private final Map<String, DeviceProductOperator> productOperatorMap = Caches.newCache();
 
     //协议支持
     private final ProtocolSupports supports;

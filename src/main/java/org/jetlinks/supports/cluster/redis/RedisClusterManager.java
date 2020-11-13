@@ -1,6 +1,7 @@
 package org.jetlinks.supports.cluster.redis;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.core.cache.Caches;
 import org.jetlinks.core.cluster.*;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
@@ -10,7 +11,6 @@ import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings("all")
 @Slf4j
@@ -20,10 +20,10 @@ public class RedisClusterManager implements ClusterManager {
 
     private String serverId;
 
-    private Map<String, RedisClusterQueue> queues = new ConcurrentHashMap<>();
-    private Map<String, ClusterTopic> topics = new ConcurrentHashMap<>();
-    private Map<String, ClusterCache> caches = new ConcurrentHashMap<>();
-    private Map<String, ClusterSet> sets = new ConcurrentHashMap<>();
+    private Map<String, RedisClusterQueue> queues = Caches.newCache();
+    private Map<String, ClusterTopic> topics = Caches.newCache();
+    private Map<String, ClusterCache> caches = Caches.newCache();
+    private Map<String, ClusterSet> sets = Caches.newCache();
 
     private ReactiveRedisTemplate<?, ?> commonOperations;
 
