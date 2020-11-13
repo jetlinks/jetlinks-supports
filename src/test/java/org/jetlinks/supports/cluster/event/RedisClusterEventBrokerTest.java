@@ -82,14 +82,14 @@ public class RedisClusterEventBrokerTest {
             .doOnSubscribe(sub -> {
                 Mono.delay(Duration.ofSeconds(1))
                     .doOnNext(i -> startWith.set(System.currentTimeMillis()))
-                    .thenMany(Flux.range(0, 10000)
+                    .thenMany(Flux.range(0, 100)
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
-            .take(20000L)
+            .take(Duration.ofSeconds(3))
             .map(payload -> payload.getPayload().bodyToString())
             .as(StepVerifier::create)
-            .expectNextCount(20000L)
+            .expectNextCount(200L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
 
