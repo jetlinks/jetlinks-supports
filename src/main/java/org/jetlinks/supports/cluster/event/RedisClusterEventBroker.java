@@ -31,7 +31,7 @@ public class RedisClusterEventBroker extends AbstractClusterEventBroker {
 
     @Override
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
-        payload.retain();
+      //  payload.retain();
         Payload encoded = topicPayloadCodec.encode(payload);
         byte[] body = encoded.getBytes(true);
 //        return redis

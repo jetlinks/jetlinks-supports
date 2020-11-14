@@ -2,7 +2,6 @@ package org.jetlinks.supports.rpc;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.NativePayload;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
@@ -56,8 +55,10 @@ public class EventBusRpcService implements RpcService {
                 .doOnNext(payload -> {
                     RpcResult result = RpcResult.parse(payload);
                     FluxSink<RpcResult> sink = request.get(result.getRequestId());
-                    if (null != sink) {
+                    if (null != sink && !sink.isCancelled()) {
                         sink.next(result);
+                    } else {
+                        result.release();
                     }
                 })
                 .onErrorContinue((err, obj) -> {
@@ -76,13 +77,15 @@ public class EventBusRpcService implements RpcService {
             private Mono<Long> doSend(long id, Publisher<? extends REQ> payload) {
                 if (payload instanceof Mono) {
                     return Mono.from(payload)
-                            .flatMap(req -> eventBus.publish(reqTopic, RpcRequest.nextAndComplete(id, definition.requestCodec().encode(req))))
+                               .flatMap(req -> eventBus.publish(reqTopic, RpcRequest.nextAndComplete(id, definition
+                                       .requestCodec()
+                                       .encode(req))))
                             ;
                 } else if (payload instanceof Flux) {
                     return Flux.from(payload)
-                            .map(req -> RpcRequest.next(id, definition.requestCodec().encode(req)))
-                            .as(req -> eventBus.publish(reqTopic, req))
-                            .doOnSuccess((v) -> eventBus.publish(reqTopic, RpcRequest.complete(id)).subscribe())
+                               .map(req -> RpcRequest.next(id, definition.requestCodec().encode(req)))
+                               .as(req -> eventBus.publish(reqTopic, req))
+                               .doOnSuccess((v) -> eventBus.publish(reqTopic, RpcRequest.complete(id)).subscribe())
                             ;
                 } else {
                     return eventBus.publish(reqTopic, RpcRequest.nextAndComplete(id, Payload.voidPayload));
@@ -106,26 +109,30 @@ public class EventBusRpcService implements RpcService {
                             .subscribe();
 
                 }).<RES>handle((res, sink) -> {
-                    if (res.getType() == RpcResult.Type.RESULT_AND_COMPLETE) {
-                        RES r = definition.responseCodec().decode(res);
-                        if (r != null) {
-                            sink.next(r);
-                        }
-                        sink.complete();
-                    } else if (res.getType() == RpcResult.Type.RESULT) {
-                        RES r = definition.responseCodec().decode(res);
-                        if (r != null) {
-                            sink.next(r);
-                        }
-                    } else if (res.getType() == RpcResult.Type.COMPLETE) {
-                        sink.complete();
-                    } else if (res.getType() == RpcResult.Type.ERROR) {
-                        Throwable e = definition.errorCodec().decode(res);
-                        if (e != null) {
-                            sink.error(e);
-                        } else {
+                    try {
+                        if (res.getType() == RpcResult.Type.RESULT_AND_COMPLETE) {
+                            RES r = definition.responseCodec().decode(res);
+                            if (r != null) {
+                                sink.next(r);
+                            }
                             sink.complete();
+                        } else if (res.getType() == RpcResult.Type.RESULT) {
+                            RES r = definition.responseCodec().decode(res);
+                            if (r != null) {
+                                sink.next(r);
+                            }
+                        } else if (res.getType() == RpcResult.Type.COMPLETE) {
+                            sink.complete();
+                        } else if (res.getType() == RpcResult.Type.ERROR) {
+                            Throwable e = definition.errorCodec().decode(res);
+                            if (e != null) {
+                                sink.error(e);
+                            } else {
+                                sink.complete();
+                            }
                         }
+                    }finally {
+                        res.release();
                     }
                 }).timeout(Duration.ofSeconds(10));
             }
@@ -164,13 +171,13 @@ public class EventBusRpcService implements RpcService {
             this.invoker = invoker;
             this.disposable = disposable;
             Flux.from(invoker.apply(reqTopic, processor))
-                    .flatMap(res -> reply(reqTopicRes, RpcResult.result(requestId, NativePayload.of(res, definition.responseCodec()::encode))))
-                    .doOnComplete(() -> reply(reqTopicRes, RpcResult.complete(requestId)).subscribe())
-                    .doOnError((e) -> {
-                        log.error(e.getMessage(), e);
-                        reply(reqTopicRes, RpcResult.error(requestId, NativePayload.of(e, definition.errorCodec()::encode))).subscribe();
-                    })
-                    .subscribe();
+                .flatMap(res -> reply(reqTopicRes, RpcResult.result(requestId, Payload.of(res, definition.responseCodec()))))
+                .doOnComplete(() -> reply(reqTopicRes, RpcResult.complete(requestId)).subscribe())
+                .doOnError((e) -> {
+                    log.error(e.getMessage(), e);
+                    reply(reqTopicRes, RpcResult.error(requestId, Payload.of(e, definition.errorCodec()))).subscribe();
+                })
+                .subscribe();
             sink.onDispose(disposable);
         }
 
@@ -203,14 +210,15 @@ public class EventBusRpcService implements RpcService {
         //订阅请求
         return eventBus
                 .subscribe(Subscription.of(definition.getId(),
-                        definition.getAddress(),
-                        Subscription.Feature.local,
-                        Subscription.Feature.broker))
+                                           definition.getAddress(),
+                                           Subscription.Feature.local,
+                                           Subscription.Feature.broker))
                 .map(RpcRequest::parse)
                 .doOnCancel(request::clear)
                 .subscribe(_req -> request.computeIfAbsent(_req.getRequestId(),
-                        id -> new PendingRequest<>(id, definition, invokeResult, () -> request.remove(id)))
-                        .next(_req)
+                                                           id -> new PendingRequest<>(id, definition, invokeResult, () -> request
+                                                                   .remove(id)))
+                                          .next(_req)
                 );
     }
 

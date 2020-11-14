@@ -23,8 +23,8 @@ public class RedisClusterQueueTest {
     private ReactiveRedisTemplate<String, Object> operations;
 
     static {
-        ReactorDebugAgent.init();
-        ReactorDebugAgent.processExistingClasses();
+        //ReactorDebugAgent.init();
+        //ReactorDebugAgent.processExistingClasses();
     }
 
     @Before

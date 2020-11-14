@@ -4,6 +4,7 @@ import io.netty.buffer.Unpooled;
 import io.rsocket.RSocket;
 import io.rsocket.core.RSocketConnector;
 import io.rsocket.core.RSocketServer;
+import io.rsocket.frame.decoder.PayloadDecoder;
 import io.rsocket.transport.netty.client.TcpClientTransport;
 import io.rsocket.transport.netty.server.TcpServerTransport;
 import io.rsocket.util.ByteBufPayload;
@@ -64,7 +65,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
         RSocketConnector
                 .create()
-               // .payloadDecoder(PayloadDecoder.ZERO_COPY)
+                .payloadDecoder(PayloadDecoder.ZERO_COPY)
                 .reconnect(Retry.fixedDelay(Integer.MAX_VALUE, Duration.ofSeconds(1))
                                 .doBeforeRetry(s -> {
                                     if (s.failure() != null) {
@@ -89,17 +90,25 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                     log.debug("{} start poll broker event from {}", serverId, remote);
                     socket.requestStream(ByteBufPayload.create(serverId))
                           .retryWhen(Retry.fixedDelay(Integer.MAX_VALUE, Duration.ofSeconds(1)))
-                          .doOnCancel(() -> {
-                              log.debug("{} cancel poll broker event from {}", serverId, remote);
-                          })
+                          .doOnCancel(() -> log.debug("{} cancel poll broker event from {}", serverId, remote))
                           .subscribe(payload -> {
-                              String topic = payload.getMetadataUtf8();
-                              processor.onNext(TopicPayload.of(topic,Payload.of(payload.sliceData())));
+                              try {
+                                  if (!processor.hasDownstreams()) {
+                                      payload.release();
+                                  } else {
+                                      String topic = payload.getMetadataUtf8();
+                                      processor.onNext(TopicPayload.of(topic, RSocketPayload.of(payload)));
+                                  }
+                              } catch (Throwable e) {
+                                  log.error("handle broker [{}] event error", remote, e);
+                                  try {
+                                      payload.release();
+                                  } catch (Throwable ignore) {
+                                  }
+                              }
                           });
                 })
-                .doOnError(err -> {
-                    log.error("connect to cluster node [{}] error", remote, err);
-                })
+                .doOnError(err -> log.error("connect to cluster node [{}] error", remote, err))
                 .subscribe();
     }
 
@@ -128,6 +137,19 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                 .then();
     }
 
+    protected Mono<io.rsocket.Payload> topicPayloadToRSocketPayload(TopicPayload payload) {
+        try {
+            return Mono
+                    .just(ByteBufPayload
+                                  .create(payload.getBody(),
+                                          Unpooled.wrappedBuffer(payload.getTopic().getBytes()))
+                    );
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+        }
+        return Mono.empty();
+    }
+
     public void init() {
         this.addressCache = clusterManager.getCache("__rsocket_addresses");
         this.serverId = clusterManager.getCurrentServerId();
@@ -139,24 +161,8 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                                              payload.release();
                                              EmitterProcessor<TopicPayload> processor = getOrCreateRemoteSink(broker);
                                              return processor
-                                                     .doOnCancel(() -> {
-                                                         log.debug("stop handle broker[{}] event request", broker);
-                                                     })
-                                                     .flatMap(topicPayload -> {
-                                                         try {
-                                                             topicPayload.retain();
-                                                             return Mono.just(
-                                                                     ByteBufPayload.create(
-                                                                             topicPayload.getBody(),
-                                                                             Unpooled.wrappedBuffer(topicPayload
-                                                                                                            .getTopic()
-                                                                                                            .getBytes()))
-                                                             );
-                                                         } catch (Exception e) {
-                                                             log.error(e.getMessage(), e);
-                                                         }
-                                                         return Mono.empty();
-                                                     })
+                                                     .doOnCancel(() -> log.debug("stop handle broker[{}] event request", broker))
+                                                     .flatMap(this::topicPayloadToRSocketPayload)
                                                      ;
                                          }
                 ))
@@ -221,6 +227,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
         EmitterProcessor<TopicPayload> processor = remoteSink.get(brokerId);
         if (processor == null || !processor.hasDownstreams() || processor.isDisposed()) {
+            log.debug("no rsocket broker [{}] event listener,fallback to redis", brokerId);
             return super.dispatch(localId, brokerId, payload);
         }
         processor.onNext(payload);

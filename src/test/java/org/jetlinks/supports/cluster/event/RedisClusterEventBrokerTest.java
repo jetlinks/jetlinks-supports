@@ -14,6 +14,8 @@ import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
@@ -26,7 +28,7 @@ public class RedisClusterEventBrokerTest {
     Disposable.Composite disposable = Disposables.composite();
 
     @After
-    public void shutdown(){
+    public void shutdown() {
         disposable.dispose();
     }
 
@@ -37,7 +39,7 @@ public class RedisClusterEventBrokerTest {
         BrokerEventBus eventBus = new BrokerEventBus();
 
         BrokerEventBus eventBus2 = new BrokerEventBus();
-
+        eventBus2.setPublishScheduler(Schedulers.parallel());
         BrokerEventBus eventBus3 = new BrokerEventBus();
 
 
@@ -65,10 +67,10 @@ public class RedisClusterEventBrokerTest {
         }
 
         Subscription subscription = Subscription.of("test",
-                new String[]{"/test/topic1"}
+                                                    new String[]{"/test/topic1"}
                 , Subscription.Feature.broker
                 , Subscription.Feature.local
-                //, Subscription.Feature.shared
+                                                    //, Subscription.Feature.shared
         );
 
 
@@ -76,7 +78,7 @@ public class RedisClusterEventBrokerTest {
 
         Flux.merge(
                 eventBus.subscribe(subscription)
-//                        , eventBus2.subscribe(subscription)
+                , eventBus2.subscribe(subscription)
                 , eventBus3.subscribe(subscription)
         )
             .doOnSubscribe(sub -> {
@@ -87,9 +89,9 @@ public class RedisClusterEventBrokerTest {
                     .subscribe();
             })
             .take(Duration.ofSeconds(3))
-            .map(payload -> payload.getPayload().bodyToString())
+            .map(payload -> payload.bodyToString(true))
             .as(StepVerifier::create)
-            .expectNextCount(20L)
+            .expectNextCount(30L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
 

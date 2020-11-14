@@ -2,6 +2,8 @@ package org.jetlinks.supports.cluster.event;
 
 import lombok.SneakyThrows;
 import org.jetlinks.core.event.Subscription;
+import org.jetlinks.core.message.DeviceMessage;
+import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.property.ReadPropertyMessage;
 import org.jetlinks.supports.cluster.RedisHelper;
 import org.jetlinks.supports.cluster.redis.RedisClusterManager;
@@ -72,30 +74,30 @@ public class RedisRSocketEventBrokerTest {
 
         Subscription subscription = Subscription.of("test",
                                                     new String[]{"/test/topic1"}
-                 , Subscription.Feature.broker
+                , Subscription.Feature.broker
                 , Subscription.Feature.local
-                                                    //, Subscription.Feature.shared
+               // , Subscription.Feature.shared
         );
 
         AtomicReference<Long> startWith = new AtomicReference<>();
 
         Flux.merge(
                 eventBus.subscribe(subscription)
-                // , eventBus2.subscribe(subscription)
-                 , eventBus3.subscribe(subscription)
+                , eventBus2.subscribe(subscription)
+                , eventBus3.subscribe(subscription)
         )
             .doOnSubscribe(sub -> {
                 Mono.delay(Duration.ofSeconds(1))
                     .doOnNext(i -> startWith.set(System.currentTimeMillis()))
-                    .thenMany(Flux.range(0, 100)
+                    .thenMany(Flux.range(0, 10)
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
             .take(Duration.ofSeconds(5))
-            .map(payload -> payload.getPayload().bodyToString())
+            .doOnNext(payload -> payload.bodyToString(true))
             .count()
             .as(StepVerifier::create)
-            .expectNext(200L)
+            .expectNext(30L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
     }
