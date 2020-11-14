@@ -36,24 +36,26 @@ public class EventBusDeviceOperationBrokerTest {
             BrokerEventBus eventBus = new BrokerEventBus();
             RedisClusterManager clusterManager = new RedisClusterManager("test123", "node-1", operations);
             clusterManager.startup();
+            Thread.sleep(1000);
             eventBus.addBroker(new RedisClusterEventBroker(clusterManager, operations.getConnectionFactory()));
 
             broker1 = new EventBusDeviceOperationBroker("node-1", eventBus);
             broker1.start();
         }
-        Thread.sleep(1000);
+
         {
             ReactiveRedisTemplate<Object, Object> operations = RedisHelper.getRedisTemplate();
 
             BrokerEventBus eventBus = new BrokerEventBus();
             RedisClusterManager clusterManager = new RedisClusterManager("test123", "node-2", operations);
             clusterManager.startup();
+            Thread.sleep(1000);
             eventBus.addBroker(new RedisClusterEventBroker(clusterManager, operations.getConnectionFactory()));
 
             broker2 = new EventBusDeviceOperationBroker("node-2", eventBus);
             broker2.start();
         }
-        Thread.sleep(1000);
+
     }
 
     @Test
