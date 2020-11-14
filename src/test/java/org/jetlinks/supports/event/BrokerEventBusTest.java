@@ -103,7 +103,10 @@ public class BrokerEventBusTest {
             EmitterProcessor<TopicPayload> processor = EmitterProcessor.create();
 
             TestEventConnection() {
-                processor.doOnNext(i -> counter.incrementAndGet())
+                processor.doOnNext(i ->{
+                    i.release();
+                    counter.incrementAndGet();
+                })
                          .subscribe();
             }
 

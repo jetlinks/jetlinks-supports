@@ -1,6 +1,7 @@
 package org.jetlinks.supports.config;
 
 import lombok.SneakyThrows;
+import org.hswebframework.web.id.IDGenerator;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.supports.cluster.RedisHelper;
@@ -35,11 +36,11 @@ public class EventBusStorageManagerTest {
             eventBus.addBroker(new RedisClusterEventBroker(clusterManager, operations.getConnectionFactory()));
             storageManager2 = new EventBusStorageManager(clusterManager, eventBus);
         }
-
+        String id = IDGenerator.UUID.generate();
         storageManager
-                .getStorage("test")
+                .getStorage(id)
                 .flatMap(storage -> storage.setConfig("test", 1234))
-                .then(storageManager2.getStorage("test"))
+                .then(storageManager2.getStorage(id))
                 .flatMap(storage -> storage.getConfig("test").map(Value::asInt))
                 .as(StepVerifier::create)
                 .expectNext(1234)
@@ -47,9 +48,9 @@ public class EventBusStorageManagerTest {
         ;
 
         storageManager
-                .getStorage("test")
+                .getStorage(id)
                 .flatMap(storage -> storage.setConfig("test", 12345))
-                .then(storageManager2.getStorage("test"))
+                .then(storageManager2.getStorage(id))
                 .flatMap(storage -> storage.getConfig("test").map(Value::asInt))
                 .as(StepVerifier::create)
                 .expectNext(12345)
@@ -57,9 +58,9 @@ public class EventBusStorageManagerTest {
         ;
 
         storageManager
-                .getStorage("test")
+                .getStorage(id)
                 .flatMap(ConfigStorage::clear)
-                .then(storageManager2.getStorage("test"))
+                .then(storageManager2.getStorage(id))
                 .flatMap(storage -> storage.getConfig("test").map(Value::asInt))
                 .as(StepVerifier::create)
                 .expectComplete()

@@ -28,6 +28,7 @@ public class EventBusDeviceOperationBrokerTest {
     EventBusDeviceOperationBroker broker1, broker2;
 
     @Before
+    @SneakyThrows
     public void init() {
         {
            ReactiveRedisTemplate<Object, Object> operations = RedisHelper.getRedisTemplate();
@@ -40,7 +41,7 @@ public class EventBusDeviceOperationBrokerTest {
             broker1 = new EventBusDeviceOperationBroker("node-1", eventBus);
             broker1.start();
         }
-
+        Thread.sleep(1000);
         {
             ReactiveRedisTemplate<Object, Object> operations = RedisHelper.getRedisTemplate();
 
@@ -52,15 +53,12 @@ public class EventBusDeviceOperationBrokerTest {
             broker2 = new EventBusDeviceOperationBroker("node-2", eventBus);
             broker2.start();
         }
+        Thread.sleep(1000);
     }
 
     @Test
     @SneakyThrows
     public void testCluster() {
-        doTestStateChecker(broker1, broker2);
-        System.err.println("-----");
-        doTestStateChecker(broker1, broker2);
-        System.err.println("-----");
         doTestStateChecker(broker1, broker2);
         doTestSendMessage(broker1, broker2);
         doTestSendTwiceMessage(broker1, broker2);

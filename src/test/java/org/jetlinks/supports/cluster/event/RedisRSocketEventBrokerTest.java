@@ -38,6 +38,7 @@ public class RedisRSocketEventBrokerTest {
     @SneakyThrows
     public void test() {
         BrokerEventBus eventBus = new BrokerEventBus();
+        eventBus.setPublishScheduler(Schedulers.parallel());
         BrokerEventBus eventBus2 = new BrokerEventBus();
         eventBus2.setPublishScheduler(Schedulers.parallel());
         BrokerEventBus eventBus3 = new BrokerEventBus();
@@ -83,6 +84,7 @@ public class RedisRSocketEventBrokerTest {
 
         Flux.merge(
                 eventBus.subscribe(subscription)
+                , eventBus.subscribe(subscription)
                 , eventBus2.subscribe(subscription)
                 , eventBus3.subscribe(subscription)
         )
@@ -97,7 +99,7 @@ public class RedisRSocketEventBrokerTest {
             .doOnNext(payload -> payload.bodyToString(true))
             .count()
             .as(StepVerifier::create)
-            .expectNext(30L)
+            .expectNext(40L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
     }
