@@ -36,15 +36,19 @@ public class RpcRequest implements Payload {
     }
 
     private RpcRequest(Type type, long requestId, Payload payload) {
-        ByteBuf byteBuf = Unpooled.buffer(9 + payload.getBody().capacity());
+        try {
+            ByteBuf byteBuf = Unpooled.buffer(9 + payload.getBody().capacity());
 
-        byteBuf.writeByte(type.ordinal());
-        byteBuf.writeBytes(BytesUtils.longToBe(requestId));
-        byteBuf.writeBytes(payload.getBody());
+            byteBuf.writeByte(type.ordinal());
+            byteBuf.writeBytes(BytesUtils.longToBe(requestId));
+            byteBuf.writeBytes(payload.getBody());
 
-        this.type = type;
-        this.body = byteBuf;
-        this.requestId = requestId;
+            this.type = type;
+            this.body = byteBuf;
+            this.requestId = requestId;
+        } finally {
+            payload.release();
+        }
     }
 
     private RpcRequest(Payload payload) {

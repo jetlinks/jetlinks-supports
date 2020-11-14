@@ -57,8 +57,6 @@ public class EventBusRpcService implements RpcService {
                     FluxSink<RpcResult> sink = request.get(result.getRequestId());
                     if (null != sink && !sink.isCancelled()) {
                         sink.next(result);
-                    } else {
-                        result.release();
                     }
                 })
                 .onErrorContinue((err, obj) -> {
@@ -77,9 +75,14 @@ public class EventBusRpcService implements RpcService {
             private Mono<Long> doSend(long id, Publisher<? extends REQ> payload) {
                 if (payload instanceof Mono) {
                     return Mono.from(payload)
-                               .flatMap(req -> eventBus.publish(reqTopic, RpcRequest.nextAndComplete(id, definition
-                                       .requestCodec()
-                                       .encode(req))))
+                               .flatMap(req -> eventBus
+                                       .publish(
+                                               reqTopic,
+                                               RpcRequest.nextAndComplete(id, definition
+                                                       .requestCodec()
+                                                       .encode(req))
+                                       )
+                               )
                             ;
                 } else if (payload instanceof Flux) {
                     return Flux.from(payload)
@@ -131,7 +134,7 @@ public class EventBusRpcService implements RpcService {
                                 sink.complete();
                             }
                         }
-                    }finally {
+                    } finally {
                         res.release();
                     }
                 }).timeout(Duration.ofSeconds(10));

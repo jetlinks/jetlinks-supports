@@ -58,14 +58,18 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
 
             Flux<?> flux = invoker
                     .invoke(definition.requestCodec().encode(new MethodRpcRequest(definition.getAddress(), args)))
-                    .flatMap(payload -> Mono.justOrEmpty(definition.responseCodec().decode(payload)));
+                    .flatMap(payload -> {
+                        return Mono.justOrEmpty(definition.responseCodec().decode(payload));
+                    });
             if (method.getReturnType().isAssignableFrom(Mono.class)) {
                 return Mono.from(flux);
             }
             return flux;
         };
 
-        T service = (T) Proxy.newProxyInstance(this.getClass().getClassLoader(), new Class[]{serviceInterface}, handler);
+        T service = (T) Proxy.newProxyInstance(this
+                                                       .getClass()
+                                                       .getClassLoader(), new Class[]{serviceInterface}, handler);
 
         return new DisposableService<T>() {
             @Override
@@ -153,6 +157,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
         @Nullable
         @Override
         public Tuple2<String, Payload> decode(@Nonnull Payload payload) {
+
             ByteBuf buf = payload.getBody();
 
             byte[] lenArr = new byte[4];
@@ -161,7 +166,11 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
             ByteBuf byteBuf = buf.readBytes(len);
 
             buf.resetReaderIndex();
-            return Tuples.of(byteBuf.toString(StandardCharsets.UTF_8), payload);
+            try {
+                return Tuples.of(byteBuf.toString(StandardCharsets.UTF_8), payload);
+            } finally {
+                byteBuf.release();
+            }
         }
 
         @Override
@@ -190,18 +199,22 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
         @Nullable
         @Override
         public MethodRpcRequest decode(@Nonnull Payload payload) {
-            ByteBuf buf = payload.getBody().skipBytes(4 + method.length);
-            Object[] args = new Object[parameter.size()];
-            int i = 0;
-            for (Codec<?> codec : parameter) {
-                byte[] lenArr = new byte[4];
-                buf.readBytes(lenArr);
-                int len = BytesUtils.beToInt(lenArr);
-                ByteBuf data = buf.readBytes(len);
-                args[i++] = codec.decode(Payload.of(data));
+            try {
+                ByteBuf buf = payload.getBody().skipBytes(4 + method.length);
+                Object[] args = new Object[parameter.size()];
+                int i = 0;
+                for (Codec<?> codec : parameter) {
+                    byte[] lenArr = new byte[4];
+                    buf.readBytes(lenArr);
+                    int len = BytesUtils.beToInt(lenArr);
+                    ByteBuf data = buf.readBytes(len);
+                    args[i++] = codec.decode(Payload.of(data));
+                }
+                buf.resetReaderIndex();
+                return new MethodRpcRequest(new String(method), args);
+            } finally {
+                payload.release();
             }
-            buf.resetReaderIndex();
-            return new MethodRpcRequest(new String(method), args);
         }
 
         @Override

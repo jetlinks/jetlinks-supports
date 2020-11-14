@@ -352,18 +352,14 @@ public class BrokerEventBus implements EventBus {
                                         if (log.isDebugEnabled()) {
                                             log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), info);
                                         }
-
                                     } catch (Throwable e) {
                                         log.warn("broker publish [{}] to [{}] error", payload.getTopic(), info, e);
                                     }
                                 })
                                 .count()
                                 .defaultIfEmpty(0L)
-                                .doFinally(signalType -> {
-                                    //if (i == 0) {
-                                    payload.release();
-                                    // }
-                                })
+                                .doFinally(i -> payload.release())
+
                 );
     }
 

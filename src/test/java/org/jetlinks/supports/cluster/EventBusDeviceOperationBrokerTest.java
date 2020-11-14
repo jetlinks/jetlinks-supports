@@ -62,9 +62,9 @@ public class EventBusDeviceOperationBrokerTest {
     @SneakyThrows
     public void testCluster() {
         doTestStateChecker(broker1, broker2);
-        doTestSendMessage(broker1, broker2);
-        doTestSendTwiceMessage(broker1, broker2);
-        doTestSendFragMessage(broker1, broker2);
+//        doTestSendMessage(broker1, broker2);
+//        doTestSendTwiceMessage(broker1, broker2);
+//        doTestSendFragMessage(broker1, broker2);
     }
 
 
