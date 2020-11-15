@@ -26,7 +26,6 @@ import reactor.core.scheduler.Schedulers;
 
 import javax.validation.constraints.NotNull;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -317,18 +316,13 @@ public class BrokerEventBus implements EventBus {
                 .groupBy(SubscriptionInfo::getSubscriber, Integer.MAX_VALUE)
                 .publishOn(publishScheduler)
                 .flatMap(group -> group
-                                 .collectSortedList(Comparator.comparing(SubscriptionInfo::isLocal).reversed())
-                                 .flatMapMany(allSubs -> {
-                                     SubscriptionInfo first = allSubs.get(0);
-                                     if (first.hasFeature(Subscription.Feature.shared)) {
-                                         //本地优先
-                                         if (first.hasFeature(Subscription.Feature.local) && (first.isLocal() || allSubs.size() == 1)) {
-                                             return Flux.just(first);
-                                         }
-                                         //随机
-                                         return Flux.just(allSubs.get(ThreadLocalRandom.current().nextInt(0, allSubs.size())));
+                                 .groupBy(sub -> sub.hasFeature(Subscription.Feature.shared))
+                                 .flatMap(groups -> {
+                                     //共享订阅
+                                     if (Boolean.TRUE.equals(groups.key())) {
+                                         return selectSharedSubscription(groups);
                                      }
-                                     return Flux.fromIterable(allSubs);
+                                     return groups;
                                  }),
                          Integer.MAX_VALUE)
                 // 防止多次推送给同一个消费者,
@@ -337,6 +331,13 @@ public class BrokerEventBus implements EventBus {
                 .distinct(SubscriptionInfo::getSink)
                 .as(subscriberConsumer);
 
+    }
+
+    private Flux<SubscriptionInfo> selectSharedSubscription(Flux<SubscriptionInfo> subscriptionInfoFlux) {
+        return subscriptionInfoFlux
+                .collectList()
+                //随机转发订阅者
+                .flatMapMany(subs -> Flux.just(subs.get(ThreadLocalRandom.current().nextInt(0, subs.size()))));
     }
 
     private Mono<Long> doPublishFromBroker(TopicPayload payload, Predicate<SubscriptionInfo> predicate) {
