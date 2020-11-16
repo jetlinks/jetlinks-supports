@@ -2,8 +2,6 @@ package org.jetlinks.supports.cluster.event;
 
 import lombok.SneakyThrows;
 import org.jetlinks.core.event.Subscription;
-import org.jetlinks.core.message.DeviceMessage;
-import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.property.ReadPropertyMessage;
 import org.jetlinks.supports.cluster.RedisHelper;
 import org.jetlinks.supports.cluster.redis.RedisClusterManager;
@@ -29,9 +27,9 @@ public class RedisRSocketEventBrokerTest {
     @After
     public void shutdown() {
         disposable.dispose();
-        reactiveRedisTemplate.execute(connection -> {
-            return connection.serverCommands().flushDb();
-        }).blockLast();
+//        reactiveRedisTemplate.execute(connection -> {
+//            return connection.serverCommands().flushDb();
+//        }).blockLast();
     }
 
     @Test
@@ -91,15 +89,15 @@ public class RedisRSocketEventBrokerTest {
             .doOnSubscribe(sub -> {
                 Mono.delay(Duration.ofSeconds(1))
                     .doOnNext(i -> startWith.set(System.currentTimeMillis()))
-                    .thenMany(Flux.range(0, 10)
+                    .thenMany(Flux.range(0, 100000)
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
-            .take(Duration.ofSeconds(5))
+            .take(400000L)
             .doOnNext(payload -> payload.bodyToString(true))
             .count()
             .as(StepVerifier::create)
-            .expectNext(40L)
+            .expectNext(400000L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
     }

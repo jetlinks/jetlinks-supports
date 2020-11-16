@@ -82,12 +82,9 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                           handleRemoteConnection(clusterManager.getCurrentServerId(), node.getId());
                       });
 
-//        clusterManager.getHaManager()
-//                .subscribeServerOffline()
-//                .subscribe(node -> Optional
-//                        .ofNullable(connections.remove(node.getId()))
-//                        .ifPresent(conn -> conn.disposable.dispose())
-//                );
+        clusterManager.getHaManager()
+                .subscribeServerOffline()
+                .subscribe(this::handleServerNodeLeave);
     }
 
     public void shutdown() {
@@ -97,6 +94,10 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
     }
 
     protected void handleServerNodeJoin(ServerNode node){
+
+    }
+
+    protected void handleServerNodeLeave(ServerNode node){
 
     }
 

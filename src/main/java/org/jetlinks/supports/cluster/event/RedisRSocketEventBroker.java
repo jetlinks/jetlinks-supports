@@ -9,7 +9,6 @@ import io.rsocket.transport.netty.client.TcpClientTransport;
 import io.rsocket.transport.netty.server.TcpServerTransport;
 import io.rsocket.util.ByteBufPayload;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.Payload;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.cluster.ServerNode;
@@ -113,6 +112,12 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
     }
 
     @Override
+    protected void handleServerNodeLeave(ServerNode node) {
+        remotes.clear();
+        reloadAddresses().subscribe();
+    }
+
+    @Override
     protected void handleServerNodeJoin(ServerNode node) {
         if (!serverId.equals(node.getId())) {
             getOrCreateRemoteSink(node.getId());
@@ -213,12 +218,9 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
     @Override
     protected Flux<TopicPayload> listen(String localId, String brokerId) {
         return Flux.merge(
-                getOrCreateLocalSink(brokerId)
+                this.getOrCreateLocalSink(brokerId)
                 ,
-                clusterManager
-                        .<byte[]>getQueue("/broker/bus/" + brokerId + "/" + localId)
-                        .subscribe()
-                        .map(msg -> topicPayloadCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg))))
+                super.listen(localId, brokerId)
         );
     }
 
@@ -228,6 +230,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
         EmitterProcessor<TopicPayload> processor = remoteSink.get(brokerId);
         if (processor == null || !processor.hasDownstreams() || processor.isDisposed()) {
             log.debug("no rsocket broker [{}] event listener,fallback to redis", brokerId);
+            connectRemote(brokerId);
             return super.dispatch(localId, brokerId, payload);
         }
         processor.onNext(payload);
