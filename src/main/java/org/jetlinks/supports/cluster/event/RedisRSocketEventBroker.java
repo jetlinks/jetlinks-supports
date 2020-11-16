@@ -66,6 +66,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                 .create()
                 .payloadDecoder(PayloadDecoder.ZERO_COPY)
                 .reconnect(Retry.fixedDelay(Integer.MAX_VALUE, Duration.ofSeconds(1))
+                                .filter(err-> remotes.containsKey(remote))
                                 .doBeforeRetry(s -> {
                                     if (s.failure() != null) {
                                         RSocketAddress address = remotes.get(remote);
