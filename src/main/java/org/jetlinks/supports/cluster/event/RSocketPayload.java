@@ -30,23 +30,25 @@ class RSocketPayload implements Payload {
     }
 
     @Override
-    public void release() {
-        ReferenceCountUtil.safeRelease(payload);
+    public boolean release() {
+        return ReferenceCountUtil.release(payload);
     }
 
     @Override
-    public void release(int dec) {
-        ReferenceCountUtil.safeRelease(payload, dec);
+    public boolean release(int dec) {
+        return ReferenceCountUtil.release(payload, dec);
     }
 
     @Override
-    public void retain() {
+    public RSocketPayload retain() {
         payload.retain();
+        return this;
     }
 
     @Override
-    public void retain(int inc) {
+    public RSocketPayload retain(int inc) {
         payload.retain(inc);
+        return this;
     }
 
     @Override
