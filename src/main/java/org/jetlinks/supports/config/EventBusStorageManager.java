@@ -2,6 +2,7 @@ package org.jetlinks.supports.config;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import lombok.SneakyThrows;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.config.ConfigStorageManager;
@@ -11,17 +12,17 @@ import org.jetlinks.supports.cluster.EventBusLocalCache;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 public class EventBusStorageManager implements ConfigStorageManager {
 
-    private final ClusterManager clusterManager;
-
-    private final EventBus eventBus;
-
-    private final Cache<String, ClusterConfigStorage> cache;
+    private final ConcurrentMap<String, ClusterConfigStorage> cache;
 
     private final Supplier<Cache<String, Object>> cacheSupplier;
+
+    private final Function<String, ClusterConfigStorage> storageBuilder;
 
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus) {
@@ -33,10 +34,11 @@ public class EventBusStorageManager implements ConfigStorageManager {
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus,
                                   Supplier<Cache<String, Object>> supplier) {
-        this.clusterManager = clusterManager;
-        this.eventBus = eventBus;
-        this.cache = (Cache) supplier.get();
+        this.cache = (ConcurrentMap) supplier.get().asMap();
         this.cacheSupplier = supplier;
+        storageBuilder = id -> {
+            return new ClusterConfigStorage(new EventBusLocalCache<>(id, eventBus, clusterManager, cacheSupplier.get()));
+        };
         eventBus
                 .subscribe(Subscription
                                    .of("event-bus-storage-listener",
@@ -46,7 +48,7 @@ public class EventBusStorageManager implements ConfigStorageManager {
                     payload.release();
                     Map<String, String> vars = payload.getTopicVars("/_sys/cluster_cache/{name}/{type}/{key}");
 
-                    ClusterConfigStorage storage = cache.getIfPresent(vars.get("name"));
+                    ClusterConfigStorage storage = cache.get(vars.get("name"));
                     if (storage != null) {
                         EventBusLocalCache eventBusLocalCache = ((EventBusLocalCache) storage.getCache());
                         eventBusLocalCache.clearLocalCache(vars.get("key"));
@@ -55,12 +57,8 @@ public class EventBusStorageManager implements ConfigStorageManager {
     }
 
     @Override
+    @SneakyThrows
     public Mono<ConfigStorage> getStorage(String id) {
-        return Mono
-                .fromCallable(() -> cache.get(id, () -> new ClusterConfigStorage(new EventBusLocalCache<>(
-                        id,
-                        eventBus,
-                        clusterManager,
-                        cacheSupplier.get()))));
+        return Mono.just(cache.computeIfAbsent(id, storageBuilder));
     }
 }

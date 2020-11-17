@@ -11,8 +11,9 @@ import reactor.core.publisher.Mono;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.function.Predicate;
 
-public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V>  {
+public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
 
     private final Cache<K, Object> cache;
 
@@ -23,6 +24,7 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V>  {
         this.cache = localCache;
         this.clusterCache = clusterCache;
     }
+
 
     public void clearLocalCache(K key) {
         if ("*".equals(key)) {
@@ -45,6 +47,7 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V>  {
     protected abstract Mono<Void> onClear();
 
     public static final Object NULL_VALUE = new Object();
+    private static final Predicate<Object> notNull = v -> v != NULL_VALUE;
 
     @Override
     public Mono<V> get(K key) {
@@ -52,13 +55,12 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V>  {
             return Mono.empty();
         }
         return Mono
-                .justOrEmpty(cache.getIfPresent(key))
+                .justOrEmpty((V) cache.getIfPresent(key))
                 .switchIfEmpty(Mono.defer(() -> clusterCache
                         .get(key)
                         .switchIfEmpty(Mono.fromRunnable(() -> cache.put(key, NULL_VALUE)))
                         .doOnNext(v -> cache.put(key, v))))
-                .filter(v -> v != NULL_VALUE)
-                .map(v -> (V) v);
+                .filter(notNull);
     }
 
     @AllArgsConstructor
