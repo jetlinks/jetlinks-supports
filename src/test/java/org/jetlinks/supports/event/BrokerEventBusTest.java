@@ -33,6 +33,25 @@ public class BrokerEventBusTest {
     }
 
     @Test
+    public void testRelease() {
+        BrokerEventBus eventBus = new BrokerEventBus();
+
+        eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local))
+                .doOnSubscribe(sub->{
+                    Mono.delay(Duration.ofSeconds(1))
+                        .subscribe((r)->{
+                            eventBus.publish("/test/1/2/3","test")
+                                    .subscribe();
+                        });
+                })
+                .doOnNext(TopicPayload::release)
+                .take(1)
+                .as(StepVerifier::create)
+                .expectNextMatches(sub -> sub.refCnt() == 0)
+                .verifyComplete();
+    }
+
+    @Test
     public void testQueue() {
         BrokerEventBus eventBus = new BrokerEventBus();
 
@@ -103,7 +122,7 @@ public class BrokerEventBusTest {
             EmitterProcessor<TopicPayload> processor = EmitterProcessor.create();
 
             TestEventConnection() {
-                processor.doOnNext(i ->{
+                processor.doOnNext(i -> {
                     i.release();
                     counter.incrementAndGet();
                 })

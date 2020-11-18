@@ -386,7 +386,9 @@ public class BrokerEventBus implements EventBus {
                                    .filter(CollectionUtils::isNotEmpty)
                                    .flatMap(subs -> cache
                                            .doOnNext(payload -> {
-                                               payload.retain(subs.size());
+                                               if (subs.size() > 1) {
+                                                   payload.retain(subs.size() - 1);
+                                               }
                                                for (SubscriptionInfo sub : subs) {
                                                    doPublish(sub, payload);
                                                }

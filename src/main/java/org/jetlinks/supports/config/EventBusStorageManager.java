@@ -45,13 +45,16 @@ public class EventBusStorageManager implements ConfigStorageManager {
                                        new String[]{"/_sys/cluster_cache/*/*/*"},
                                        Subscription.Feature.broker))
                 .subscribe(payload -> {
-                    payload.release();
-                    Map<String, String> vars = payload.getTopicVars("/_sys/cluster_cache/{name}/{type}/{key}");
+                    try {
+                        Map<String, String> vars = payload.getTopicVars("/_sys/cluster_cache/{name}/{type}/{key}");
 
-                    ClusterConfigStorage storage = cache.get(vars.get("name"));
-                    if (storage != null) {
-                        EventBusLocalCache eventBusLocalCache = ((EventBusLocalCache) storage.getCache());
-                        eventBusLocalCache.clearLocalCache(vars.get("key"));
+                        ClusterConfigStorage storage = cache.get(vars.get("name"));
+                        if (storage != null) {
+                            EventBusLocalCache eventBusLocalCache = ((EventBusLocalCache) storage.getCache());
+                            eventBusLocalCache.clearLocalCache(vars.get("key"));
+                        }
+                    } finally {
+                        payload.release();
                     }
                 });
     }

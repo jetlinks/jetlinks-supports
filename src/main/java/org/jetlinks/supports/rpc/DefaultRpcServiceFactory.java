@@ -49,7 +49,27 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
             defs.put(method, def);
         }
 
-        RpcDefinition<Payload, Payload> rpcDef = RpcDefinition.of(serviceInterface.getName(), address, DirectCodec.INSTANCE, DirectCodec.INSTANCE);
+        RpcDefinition<Payload, Payload> rpcDef = RpcDefinition
+                .of(serviceInterface.getName(),
+                    address,
+                    DirectCodec.INSTANCE,
+                    new Codec<Payload>() {
+                        @Override
+                        public Class<Payload> forType() {
+                            return Payload.class;
+                        }
+
+                        @Override
+                        public Payload decode(@Nonnull Payload payload) {
+                            payload.retain();
+                            return payload;
+                        }
+
+                        @Override
+                        public Payload encode(Payload body) {
+                            return body;
+                        }
+                    });
 
         Invoker<Payload, Payload> invoker = rpcService.createInvoker(rpcDef);
 
@@ -59,7 +79,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
             Flux<?> flux = invoker
                     .invoke(definition.requestCodec().encode(new MethodRpcRequest(definition.getAddress(), args)))
                     .flatMap(payload -> {
-                        return Mono.justOrEmpty(definition.responseCodec().decode(payload));
+                        return Mono.justOrEmpty(payload.decode(definition.responseCodec()));
                     });
             if (method.getReturnType().isAssignableFrom(Mono.class)) {
                 return Mono.from(flux);

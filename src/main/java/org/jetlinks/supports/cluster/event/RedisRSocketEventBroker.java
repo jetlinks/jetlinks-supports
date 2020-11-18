@@ -8,6 +8,7 @@ import io.rsocket.frame.decoder.PayloadDecoder;
 import io.rsocket.transport.netty.client.TcpClientTransport;
 import io.rsocket.transport.netty.server.TcpServerTransport;
 import io.rsocket.util.ByteBufPayload;
+import io.rsocket.util.DefaultPayload;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.cluster.ClusterManager;
@@ -54,19 +55,19 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
         if (serverId.equals(remote)) {
             return;
         }
+        EmitterProcessor<TopicPayload> processor = getOrCreateLocalSink(remote);
         {
             RSocket socket = sockets.get(remote);
-            if (socket != null && !socket.isDisposed()) {
+            if (socket != null && !socket.isDisposed() && processor.hasDownstreams()) {
                 return;
             }
         }
-        EmitterProcessor<TopicPayload> processor = getOrCreateLocalSink(remote);
 
         RSocketConnector
                 .create()
                 .payloadDecoder(PayloadDecoder.ZERO_COPY)
                 .reconnect(Retry.fixedDelay(Integer.MAX_VALUE, Duration.ofSeconds(1))
-                                .filter(err-> remotes.containsKey(remote))
+                                .filter(err -> remotes.containsKey(remote))
                                 .doBeforeRetry(s -> {
                                     if (s.failure() != null) {
                                         RSocketAddress address = remotes.get(remote);
@@ -145,11 +146,16 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     protected Mono<io.rsocket.Payload> topicPayloadToRSocketPayload(TopicPayload payload) {
         try {
+//            return Mono
+//                    .using(() -> ByteBufPayload.create(payload.getBody(), Unpooled.wrappedBuffer(payload.getTopic().getBytes())),
+//                           Mono::just,
+//                           ignore -> payload.release(),false);
             return Mono
-                    .just(ByteBufPayload
+                    .just(DefaultPayload
                                   .create(payload.getBody(),
                                           Unpooled.wrappedBuffer(payload.getTopic().getBytes()))
-                    );
+                    )
+                    .doFinally(s->payload.release());
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }
@@ -180,6 +186,12 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
         reloadAddresses().block(Duration.ofSeconds(10));
 
+        Flux.interval(Duration.ofSeconds(10))
+            .flatMap(i -> reloadAddresses()
+                    .onErrorContinue((err, v) -> {
+
+                    })).subscribe();
+
         super.startup();
     }
 
@@ -199,7 +211,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
     private EmitterProcessor<TopicPayload> getOrCreateRemoteSink(String brokerId) {
         return remoteSink
                 .compute(brokerId, (k, val) -> {
-                    if (val != null && !val.isCancelled()) {
+                    if (val != null && !val.isDisposed()) {
                         return val;
                     }
                     return EmitterProcessor.create(Integer.MAX_VALUE, false);
@@ -209,7 +221,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
     private EmitterProcessor<TopicPayload> getOrCreateLocalSink(String brokerId) {
         return localSink
                 .compute(brokerId, (k, val) -> {
-                    if (val != null && !val.isCancelled()) {
+                    if (val != null && !val.isDisposed()) {
                         return val;
                     }
                     return EmitterProcessor.create(Integer.MAX_VALUE, false);
@@ -227,7 +239,10 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     @Override
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
-
+        if(!remotes.containsKey(brokerId)){
+            payload.release();
+            return Mono.empty();
+        }
         EmitterProcessor<TopicPayload> processor = remoteSink.get(brokerId);
         if (processor == null || !processor.hasDownstreams() || processor.isDisposed()) {
             log.debug("no rsocket broker [{}] event listener,fallback to redis", brokerId);
