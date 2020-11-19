@@ -89,15 +89,15 @@ public class RedisRSocketEventBrokerTest {
             .doOnSubscribe(sub -> {
                 Mono.delay(Duration.ofSeconds(1))
                     .doOnNext(i -> startWith.set(System.currentTimeMillis()))
-                    .thenMany(Flux.range(0, 10)
+                    .thenMany(Flux.range(0, 100000)
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
-            .take(Duration.ofSeconds(5))
+            .take(400000)
             .doOnNext(payload -> payload.bodyToString(true))
             .count()
             .as(StepVerifier::create)
-            .expectNext(40L)
+            .expectNext(400000L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
     }

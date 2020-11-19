@@ -101,6 +101,11 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
             public void dispose() {
                 invoker.dispose();
             }
+
+            @Override
+            public boolean isDisposed() {
+                return invoker.isDisposed();
+            }
         };
     }
 
@@ -117,7 +122,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
                 @SneakyThrows
                 @SuppressWarnings("all")
                 public Publisher<Payload> apply(Payload payload) {
-                    MethodRpcRequest request = definition.requestCodec().decode(payload);
+                    MethodRpcRequest request = payload.decode(definition.requestCodec());
                     Object result = declaredMethod.invoke(instance, request.getArgs());
                     Codec codec = definition.responseCodec();
                     if (result instanceof Mono) {
@@ -228,7 +233,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
                     buf.readBytes(lenArr);
                     int len = BytesUtils.beToInt(lenArr);
                     ByteBuf data = buf.readBytes(len);
-                    args[i++] = codec.decode(Payload.of(data));
+                    args[i++] = Payload.of(data).decode(codec);
                 }
                 buf.resetReaderIndex();
                 return new MethodRpcRequest(new String(method), args);

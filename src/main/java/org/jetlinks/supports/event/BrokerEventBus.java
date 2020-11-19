@@ -243,8 +243,7 @@ public class BrokerEventBus implements EventBus {
         for (String topic : subscription.getTopics()) {
             AtomicBoolean unsub = new AtomicBoolean(false);
             root.append(topic)
-                .unsubscribe(sub ->
-                                     sub.getEventConnection() == connection
+                .unsubscribe(sub -> sub.getEventConnection() == connection
                                              && sub.getSubscriber().equals(info.getSubscriber())
                                              && unsub.compareAndSet(false, true)
                 );
@@ -291,6 +290,11 @@ public class BrokerEventBus implements EventBus {
 
     private void doPublish(SubscriptionInfo info, TopicPayload payload) {
         try {
+            //已经取消订阅则直接释放
+            if (info.sink.isCancelled()) {
+                ReferenceCountUtil.safeRelease(payload);
+                return;
+            }
             info.sink.next(payload);
             log.debug("publish [{}] to [{}] complete", payload.getTopic(), info);
         } catch (Throwable error) {
@@ -360,7 +364,7 @@ public class BrokerEventBus implements EventBus {
                                 })
                                 .count()
                                 .defaultIfEmpty(0L)
-                                .doFinally(i -> payload.release())
+                                .doFinally(i -> ReferenceCountUtil.safeRelease(payload))
 
                 );
     }

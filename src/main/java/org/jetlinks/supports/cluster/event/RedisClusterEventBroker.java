@@ -1,6 +1,5 @@
 package org.jetlinks.supports.cluster.event;
 
-import io.netty.buffer.Unpooled;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.cluster.ClusterManager;
@@ -26,7 +25,7 @@ public class RedisClusterEventBroker extends AbstractClusterEventBroker {
         return clusterManager
                 .<byte[]>getQueue("/broker/bus/" + brokerId + "/" + localId)
                 .subscribe()
-                .map(msg -> topicPayloadCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg))));
+                .map(msg -> Payload.of(msg).decode(topicPayloadCodec, false));
     }
 
     @Override

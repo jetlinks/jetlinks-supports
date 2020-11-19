@@ -48,7 +48,7 @@ public class RpcResult implements Payload {
         byte[] msgId = new byte[8];
         body.getBytes(1, msgId);
         this.requestId = BytesUtils.beToLong(msgId);
-        this.body = body.slice(9, body.capacity() - 9);
+        this.body = body.copy(9, body.capacity() - 9);
         body.resetReaderIndex();
     }
 
@@ -60,6 +60,7 @@ public class RpcResult implements Payload {
         byteBuf.writeBytes(payload.getBody());
         this.body = byteBuf;
         this.requestId = requestId;
+        payload.release();
     }
 
     private final ByteBuf body;

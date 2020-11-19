@@ -1,6 +1,7 @@
 package org.jetlinks.supports.cluster.event;
 
 import io.netty.buffer.Unpooled;
+import io.netty.util.ReferenceCountUtil;
 import io.rsocket.RSocket;
 import io.rsocket.core.RSocketConnector;
 import io.rsocket.core.RSocketServer;
@@ -102,10 +103,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                                   }
                               } catch (Throwable e) {
                                   log.error("handle broker [{}] event error", remote, e);
-                                  try {
-                                      payload.release();
-                                  } catch (Throwable ignore) {
-                                  }
+                                  ReferenceCountUtil.safeRelease(payload);
                               }
                           });
                 })
@@ -146,16 +144,11 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     protected Mono<io.rsocket.Payload> topicPayloadToRSocketPayload(TopicPayload payload) {
         try {
-//            return Mono
-//                    .using(() -> ByteBufPayload.create(payload.getBody(), Unpooled.wrappedBuffer(payload.getTopic().getBytes())),
-//                           Mono::just,
-//                           ignore -> payload.release(),false);
             return Mono
-                    .just(DefaultPayload
-                                  .create(payload.getBody(),
-                                          Unpooled.wrappedBuffer(payload.getTopic().getBytes()))
-                    )
-                    .doFinally(s->payload.release());
+                    .just(DefaultPayload.create(
+                            payload.getBody(),
+                            Unpooled.wrappedBuffer(payload.getTopic().getBytes())))
+                    .doFinally(s -> payload.release());
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }
@@ -239,7 +232,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     @Override
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
-        if(!remotes.containsKey(brokerId)){
+        if (!remotes.containsKey(brokerId)) {
             payload.release();
             return Mono.empty();
         }

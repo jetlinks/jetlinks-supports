@@ -37,11 +37,12 @@ public class RpcRequest implements Payload {
 
     private RpcRequest(Type type, long requestId, Payload payload) {
         try {
-            ByteBuf byteBuf = Unpooled.buffer(9 + payload.getBody().capacity());
+            ByteBuf body = payload.getBody();
+            ByteBuf byteBuf = Unpooled.buffer(9 +body.capacity());
 
             byteBuf.writeByte(type.ordinal());
             byteBuf.writeBytes(BytesUtils.longToBe(requestId));
-            byteBuf.writeBytes(payload.getBody());
+            byteBuf.writeBytes(body);
 
             this.type = type;
             this.body = byteBuf;
@@ -57,8 +58,9 @@ public class RpcRequest implements Payload {
         byte[] msgId = new byte[8];
         byteBuf.getBytes(1, msgId);
         this.requestId = BytesUtils.beToLong(msgId);
-        this.body = byteBuf.slice(9, byteBuf.capacity() - 9);
+        this.body = byteBuf.copy(9, byteBuf.capacity() - 9);
         byteBuf.resetReaderIndex();
+        payload.release();
     }
 
     public enum Type {

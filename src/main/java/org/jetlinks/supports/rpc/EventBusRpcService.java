@@ -1,8 +1,11 @@
 package org.jetlinks.supports.rpc;
 
+import io.netty.util.ReferenceCountUtil;
+import io.netty.util.ReferenceCounted;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Payload;
+import org.jetlinks.core.codec.defaults.DirectCodec;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.rpc.Invoker;
@@ -50,13 +53,18 @@ public class EventBusRpcService implements RpcService {
                         Subscription.of(
                                 definition.getId(),
                                 reqTopicRes,
+                                Subscription.Feature.shared,
                                 Subscription.Feature.local,
                                 Subscription.Feature.broker))
                 .doOnNext(payload -> {
-                    RpcResult result = RpcResult.parse(payload);
-                    FluxSink<RpcResult> sink = request.get(result.getRequestId());
-                    if (null != sink && !sink.isCancelled()) {
-                        sink.next(result);
+                    try {
+                        RpcResult result = RpcResult.parse(payload);
+                        FluxSink<RpcResult> sink = request.get(result.getRequestId());
+                        if (null != sink && !sink.isCancelled()) {
+                            sink.next(result);
+                        }
+                    } finally {
+                        payload.release();
                     }
                 })
                 .onErrorContinue((err, obj) -> {
@@ -78,16 +86,14 @@ public class EventBusRpcService implements RpcService {
                                .flatMap(req -> eventBus
                                        .publish(
                                                reqTopic,
-                                               RpcRequest.nextAndComplete(id, definition
-                                                       .requestCodec()
-                                                       .encode(req))
+                                               RpcRequest.nextAndComplete(id, definition.requestCodec().encode(req))
                                        )
                                )
                             ;
                 } else if (payload instanceof Flux) {
                     return Flux.from(payload)
                                .map(req -> RpcRequest.next(id, definition.requestCodec().encode(req)))
-                               .as(req -> eventBus.publish(reqTopic, req))
+                               .as(req -> eventBus.publish(reqTopic, DirectCodec.INSTANCE, req))
                                .doOnSuccess((v) -> eventBus.publish(reqTopic, RpcRequest.complete(id)).subscribe())
                             ;
                 } else {
@@ -135,7 +141,7 @@ public class EventBusRpcService implements RpcService {
                             }
                         }
                     } finally {
-                        res.release();
+                        ReferenceCountUtil.safeRelease(res);
                     }
                 }).timeout(Duration.ofSeconds(10));
             }
@@ -143,6 +149,11 @@ public class EventBusRpcService implements RpcService {
             @Override
             public void dispose() {
                 disposable.dispose();
+            }
+
+            @Override
+            public boolean isDisposed() {
+                return disposable.isDisposed();
             }
         };
     }
@@ -159,7 +170,6 @@ public class EventBusRpcService implements RpcService {
         String reqTopic;
         RpcDefinition<REQ, RES> definition;
         BiFunction<String, Publisher<REQ>, Publisher<RES>> invoker;
-        Disposable disposable;
         EmitterProcessor<REQ> processor = EmitterProcessor.create();
         FluxSink<REQ> sink = processor.sink(FluxSink.OverflowStrategy.BUFFER);
 
@@ -172,13 +182,13 @@ public class EventBusRpcService implements RpcService {
             this.reqTopicRes = definition.getAddress() + "/_reply";
             this.definition = definition;
             this.invoker = invoker;
-            this.disposable = disposable;
             Flux.from(invoker.apply(reqTopic, processor))
-                .flatMap(res -> reply(reqTopicRes, RpcResult.result(requestId, Payload.of(res, definition.responseCodec()))))
+                .flatMap(res -> reply(reqTopicRes, RpcResult.result(requestId, definition.responseCodec().encode(res))))
                 .doOnComplete(() -> reply(reqTopicRes, RpcResult.complete(requestId)).subscribe())
                 .doOnError((e) -> {
                     log.error(e.getMessage(), e);
-                    reply(reqTopicRes, RpcResult.error(requestId, Payload.of(e, definition.errorCodec()))).subscribe();
+                    reply(reqTopicRes, RpcResult.error(requestId, definition.errorCodec().encode(e)))
+                            .subscribe();
                 })
                 .subscribe();
             sink.onDispose(disposable);
@@ -190,9 +200,12 @@ public class EventBusRpcService implements RpcService {
                     sink.complete();
                     return;
                 }
-                REQ v = definition.requestCodec().decode(req);
+                REQ v = req.decode(definition.requestCodec(),false);
                 if (v != null) {
                     sink.next(v);
+                }
+                if (!(v instanceof ReferenceCounted)) {
+                    req.release();
                 }
                 if (req.getType() == RpcRequest.Type.NEXT_AND_END) {
                     sink.complete();
@@ -200,6 +213,8 @@ public class EventBusRpcService implements RpcService {
             } catch (Throwable e) {
                 log.error(e.getMessage(), e);
                 sink.error(e);
+            }finally {
+                req.release();
             }
         }
 
@@ -212,16 +227,17 @@ public class EventBusRpcService implements RpcService {
 
         //订阅请求
         return eventBus
-                .subscribe(Subscription.of(definition.getId(),
-                                           definition.getAddress(),
-                                           Subscription.Feature.local,
-                                           Subscription.Feature.broker))
+                .subscribe(Subscription
+                                   .of(definition.getId(),
+                                       definition.getAddress(),
+                                       Subscription.Feature.local,
+                                       Subscription.Feature.broker))
                 .map(RpcRequest::parse)
                 .doOnCancel(request::clear)
-                .subscribe(_req -> request.computeIfAbsent(_req.getRequestId(),
-                                                           id -> new PendingRequest<>(id, definition, invokeResult, () -> request
-                                                                   .remove(id)))
-                                          .next(_req)
+                .subscribe(_req -> request
+                        .computeIfAbsent(_req.getRequestId(),
+                                         id -> new PendingRequest<>(id, definition, invokeResult, () -> request.remove(id)))
+                        .next(_req)
                 );
     }
 

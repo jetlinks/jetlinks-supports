@@ -1,6 +1,5 @@
 package org.jetlinks.supports.cluster.event;
 
-import io.netty.buffer.Unpooled;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Payload;
@@ -83,8 +82,8 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                       });
 
         clusterManager.getHaManager()
-                .subscribeServerOffline()
-                .subscribe(this::handleServerNodeLeave);
+                      .subscribeServerOffline()
+                      .subscribe(this::handleServerNodeLeave);
     }
 
     public void shutdown() {
@@ -93,11 +92,11 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
         }
     }
 
-    protected void handleServerNodeJoin(ServerNode node){
+    protected void handleServerNodeJoin(ServerNode node) {
 
     }
 
-    protected void handleServerNodeLeave(ServerNode node){
+    protected void handleServerNodeLeave(ServerNode node) {
 
     }
 
@@ -111,7 +110,7 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                 });
     }
 
-    protected ClusterConnecting onConnectionCreated(ClusterConnecting clusterConnecting){
+    protected ClusterConnecting onConnectionCreated(ClusterConnecting clusterConnecting) {
         return clusterConnecting;
     }
 
@@ -128,7 +127,7 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
     protected abstract Flux<TopicPayload> listen(String localId, String brokerId);
 
 
-    protected abstract Mono<Void> dispatch(String localId, String brokerId,TopicPayload payload);
+    protected abstract Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload);
 
 
     class ClusterConnecting implements EventProducer, EventConsumer {
@@ -177,7 +176,9 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
             disposable.add(redis
                                    .listenToPattern("/broker/" + brokerId + "/" + localId + "/*")
                                    .subscribe(msg -> {
-                                       Subscription subscription = subscriptionCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg.getMessage())));
+                                       Subscription subscription = Payload
+                                               .of(msg.getMessage())
+                                               .decode(subscriptionCodec);
                                        if (subscription != null) {
                                            if (msg.getChannel().endsWith("unsub") && unsubProcessor.hasDownstreams()) {
                                                unsubSink.next(subscription);
@@ -196,7 +197,7 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                                    .opsForSet()
                                    .members(loadSubsInfoKey)
                                    .doOnNext(msg -> {
-                                       Subscription subscription = subscriptionCodec.decode(Payload.of(Unpooled.wrappedBuffer(msg)));
+                                       Subscription subscription = Payload.of(msg).decode(subscriptionCodec);
                                        subSink.next(subscription);
                                    })
                                    .onErrorContinue((err, v) -> log.warn(err.getMessage(), err))
