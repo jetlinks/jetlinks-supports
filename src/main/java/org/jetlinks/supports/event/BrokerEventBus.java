@@ -1,5 +1,6 @@
 package org.jetlinks.supports.event;
 
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.internal.ThreadLocalRandom;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -294,7 +295,7 @@ public class BrokerEventBus implements EventBus {
             log.debug("publish [{}] to [{}] complete", payload.getTopic(), info);
         } catch (Throwable error) {
             log.error("publish [{}] to [{}] event error", payload.getTopic(), info, error);
-            payload.release();
+            ReferenceCountUtil.safeRelease(payload);
         }
     }
 
