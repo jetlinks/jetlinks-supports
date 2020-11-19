@@ -11,7 +11,6 @@ import reactor.core.publisher.Mono;
 
 import java.util.Collection;
 import java.util.Map;
-import java.util.function.Predicate;
 
 public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
 
@@ -47,20 +46,20 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
     protected abstract Mono<Void> onClear();
 
     public static final Object NULL_VALUE = new Object();
-    private static final Predicate<Object> notNull = v -> v != NULL_VALUE;
 
     @Override
     public Mono<V> get(K key) {
         if (StringUtils.isEmpty(key)) {
             return Mono.empty();
         }
-        return Mono
-                .justOrEmpty((V) cache.getIfPresent(key))
-                .switchIfEmpty(Mono.defer(() -> clusterCache
-                        .get(key)
-                        .switchIfEmpty(Mono.fromRunnable(() -> cache.put(key, NULL_VALUE)))
-                        .doOnNext(v -> cache.put(key, v))))
-                .filter(notNull);
+        Object val = cache.getIfPresent(key);
+        if (val != null) {
+            return NULL_VALUE == val ? Mono.empty() : Mono.just((V)val);
+        }
+        return clusterCache
+                .get(key)
+                .switchIfEmpty(Mono.fromRunnable(() -> cache.put(key, NULL_VALUE)))
+                .doOnNext(v -> cache.put(key, v));
     }
 
     @AllArgsConstructor
@@ -92,23 +91,20 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
         if (CollectionUtils.isEmpty(key)) {
             return Flux.empty();
         }
-        return Flux
-                .defer(() -> {
-                    ImmutableMap<K, Object> all = cache.getAllPresent(key);
-                    if (key.size() == all.size()) {
-                        return Flux.fromIterable(all.entrySet()).map(SimpleEntry::new);
+        ImmutableMap<K, Object> all = cache.getAllPresent(key);
+        if (key.size() == all.size()) {
+            return Flux.fromIterable(all.entrySet()).map(SimpleEntry::new);
+        }
+        return clusterCache
+                .get(key)
+                .doOnNext(kvEntry -> {
+                    K k = kvEntry.getKey();
+                    V v = kvEntry.getValue();
+                    if (v == null) {
+                        cache.put(k, NULL_VALUE);
+                    } else {
+                        cache.put(k, v);
                     }
-                    return clusterCache
-                            .get(key)
-                            .doOnNext(kvEntry -> {
-                                K k = kvEntry.getKey();
-                                V v = kvEntry.getValue();
-                                if (v == null) {
-                                    cache.put(k, NULL_VALUE);
-                                } else {
-                                    cache.put(k, v);
-                                }
-                            });
                 });
     }
 

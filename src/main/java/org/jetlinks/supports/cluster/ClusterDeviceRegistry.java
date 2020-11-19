@@ -82,24 +82,25 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     @Override
     public Flux<DeviceStateInfo> checkDeviceState(Flux<? extends Collection<String>> id) {
 
-        return id.flatMap(list -> Flux.fromIterable(list)
-                                      .flatMap(this::getDevice)
-                                      .flatMap(device -> device
-                                              .getConnectionServerId()
-                                              .defaultIfEmpty("__")
-                                              .zipWith(Mono.just(device)))
-                                      .groupBy(Tuple2::getT1, Tuple2::getT2)
-                                      .flatMap(group -> {
-                                          if (!StringUtils.hasText(group.key()) || "__".equals(group.key())) {
-                                              return group.flatMap(operator -> operator
-                                                      .getState()
-                                                      .map(state -> new DeviceStateInfo(operator.getDeviceId(), state)));
-                                          }
-                                          return group
-                                                  .map(DeviceOperator::getDeviceId)
-                                                  .collectList()
-                                                  .flatMapMany(deviceIdList -> handler.getDeviceState(group.key(), deviceIdList));
-                                      }));
+        return id.flatMap(list -> Flux
+                .fromIterable(list)
+                .flatMap(this::getDevice)
+                .flatMap(device -> device
+                        .getConnectionServerId()
+                        .defaultIfEmpty("__")
+                        .zipWith(Mono.just(device)))
+                .groupBy(Tuple2::getT1, Tuple2::getT2)
+                .flatMap(group -> {
+                    if (!StringUtils.hasText(group.key()) || "__".equals(group.key())) {
+                        return group.flatMap(operator -> operator
+                                .getState()
+                                .map(state -> new DeviceStateInfo(operator.getDeviceId(), state)));
+                    }
+                    return group
+                            .map(DeviceOperator::getDeviceId)
+                            .collectList()
+                            .flatMapMany(deviceIdList -> handler.getDeviceState(group.key(), deviceIdList));
+                }));
     }
 
     @Override
@@ -107,15 +108,18 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         if (StringUtils.isEmpty(deviceId)) {
             return Mono.empty();
         }
-        return Mono
-                .justOrEmpty(operatorCache.getIfPresent(deviceId))
-                .switchIfEmpty(Mono.defer(() -> {
-                    DeviceOperator deviceOperator = createOperator(deviceId);
-                    return deviceOperator
-                            .getConfig(DeviceConfigKey.protocol)
-                            .doOnNext(r -> operatorCache.put(deviceId, deviceOperator))
-                            .map((r) -> deviceOperator);
-                }));
+        {
+            DeviceOperator deviceOperator = operatorCache.getIfPresent(deviceId);
+            if (null != deviceOperator) {
+                return Mono.just(deviceOperator);
+            }
+        }
+        DeviceOperator deviceOperator = createOperator(deviceId);
+        return deviceOperator
+                .getSelfConfig(DeviceConfigKey.productId)
+                .doOnNext(r -> operatorCache.put(deviceId, deviceOperator))
+                .map((r) -> deviceOperator);
+
     }
 
     @Override
@@ -123,14 +127,17 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         if (StringUtils.isEmpty(productId)) {
             return Mono.empty();
         }
-        return Mono
-                .justOrEmpty(productOperatorMap.get(productId))
-                .switchIfEmpty(Mono.defer(() -> {
-                    DeviceProductOperator deviceOperator = createProductOperator(productId);
-                    return deviceOperator.getConfig(DeviceConfigKey.protocol)
-                                         .doOnNext(r -> productOperatorMap.put(productId, deviceOperator))
-                                         .map((r) -> deviceOperator);
-                }));
+        {
+            DeviceProductOperator operator = productOperatorMap.get(productId);
+            if (null != operator) {
+                return Mono.just(operator);
+            }
+        }
+        DeviceProductOperator deviceOperator = createProductOperator(productId);
+        return deviceOperator
+                .getConfig(DeviceConfigKey.protocol)
+                .doOnNext(r -> productOperatorMap.put(productId, deviceOperator))
+                .map((r) -> deviceOperator);
     }
 
 

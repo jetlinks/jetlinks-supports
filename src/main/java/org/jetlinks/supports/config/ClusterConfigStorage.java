@@ -28,7 +28,7 @@ public class ClusterConfigStorage implements ConfigStorage {
             return Mono.empty();
         }
         return cache.get(key)
-                .map(Value::simple);
+                    .map(Value::simple);
     }
 
     @Override
@@ -36,9 +36,11 @@ public class ClusterConfigStorage implements ConfigStorage {
         if (CollectionUtils.isEmpty(keys)) {
             return Mono.empty();
         }
-        return cache.get(keys)
+        return cache
+                .get(keys)
                 .collectList()
-                .map(list -> list.stream()
+                .map(list -> list
+                        .stream()
                         .filter(e -> e.getValue() != null)
                         .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (_1, _2) -> _2)))
                 .map(Values::of);
@@ -80,6 +82,6 @@ public class ClusterConfigStorage implements ConfigStorage {
     @Override
     public Mono<Boolean> clear() {
         return cache.clear()
-                .thenReturn(true);
+                    .thenReturn(true);
     }
 }
