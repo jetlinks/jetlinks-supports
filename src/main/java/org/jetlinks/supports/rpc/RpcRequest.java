@@ -2,6 +2,7 @@ package org.jetlinks.supports.rpc;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.util.ReferenceCountUtil;
 import lombok.Getter;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.utils.BytesUtils;
@@ -48,7 +49,7 @@ public class RpcRequest implements Payload {
             this.body = byteBuf;
             this.requestId = requestId;
         } finally {
-            payload.release();
+            ReferenceCountUtil.safeRelease(payload);
         }
     }
 
@@ -60,7 +61,7 @@ public class RpcRequest implements Payload {
         this.requestId = BytesUtils.beToLong(msgId);
         this.body = byteBuf.copy(9, byteBuf.capacity() - 9);
         byteBuf.resetReaderIndex();
-        payload.release();
+        ReferenceCountUtil.safeRelease(payload);
     }
 
     public enum Type {

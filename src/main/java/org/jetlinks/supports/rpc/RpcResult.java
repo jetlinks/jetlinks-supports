@@ -2,6 +2,7 @@ package org.jetlinks.supports.rpc;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.util.ReferenceCountUtil;
 import lombok.Getter;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.utils.BytesUtils;
@@ -60,7 +61,7 @@ public class RpcResult implements Payload {
         byteBuf.writeBytes(payload.getBody());
         this.body = byteBuf;
         this.requestId = requestId;
-        payload.release();
+        ReferenceCountUtil.safeRelease(payload);
     }
 
     private final ByteBuf body;

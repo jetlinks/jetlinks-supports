@@ -2,6 +2,7 @@ package org.jetlinks.supports.rpc;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.util.ReferenceCountUtil;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.SneakyThrows;
@@ -194,7 +195,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
             try {
                 return Tuples.of(byteBuf.toString(StandardCharsets.UTF_8), payload);
             } finally {
-                byteBuf.release();
+                ReferenceCountUtil.safeRelease(byteBuf);
             }
         }
 
@@ -238,7 +239,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
                 buf.resetReaderIndex();
                 return new MethodRpcRequest(new String(method), args);
             } finally {
-                payload.release();
+                ReferenceCountUtil.safeRelease(payload);
             }
         }
 

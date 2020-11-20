@@ -2,6 +2,7 @@ package org.jetlinks.supports.config;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import io.netty.util.ReferenceCountUtil;
 import lombok.SneakyThrows;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.config.ConfigStorage;
@@ -54,7 +55,7 @@ public class EventBusStorageManager implements ConfigStorageManager {
                             eventBusLocalCache.clearLocalCache(vars.get("key"));
                         }
                     } finally {
-                        payload.release();
+                        ReferenceCountUtil.safeRelease(payload);
                     }
                 });
     }

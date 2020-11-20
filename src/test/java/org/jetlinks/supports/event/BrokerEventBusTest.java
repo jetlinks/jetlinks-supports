@@ -1,5 +1,6 @@
 package org.jetlinks.supports.event;
 
+import io.netty.util.ReferenceCountUtil;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import org.junit.Test;
@@ -123,7 +124,7 @@ public class BrokerEventBusTest {
 
             TestEventConnection() {
                 processor.doOnNext(i -> {
-                    i.release();
+                    ReferenceCountUtil.safeRelease(i);
                     counter.incrementAndGet();
                 })
                          .subscribe();

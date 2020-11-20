@@ -64,7 +64,7 @@ public class EventBusRpcService implements RpcService {
                             sink.next(result);
                         }
                     } finally {
-                        payload.release();
+                        ReferenceCountUtil.safeRelease(payload);
                     }
                 })
                 .onErrorContinue((err, obj) -> {
@@ -205,7 +205,7 @@ public class EventBusRpcService implements RpcService {
                     sink.next(v);
                 }
                 if (!(v instanceof ReferenceCounted)) {
-                    req.release();
+                    ReferenceCountUtil.safeRelease(req);
                 }
                 if (req.getType() == RpcRequest.Type.NEXT_AND_END) {
                     sink.complete();
@@ -214,7 +214,7 @@ public class EventBusRpcService implements RpcService {
                 log.error(e.getMessage(), e);
                 sink.error(e);
             }finally {
-                req.release();
+                ReferenceCountUtil.safeRelease(req);
             }
         }
 

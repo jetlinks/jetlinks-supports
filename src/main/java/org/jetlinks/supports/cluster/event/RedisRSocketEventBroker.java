@@ -96,7 +96,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                           .subscribe(payload -> {
                               try {
                                   if (!processor.hasDownstreams()) {
-                                      payload.release();
+                                      ReferenceCountUtil.safeRelease(payload);
                                   } else {
                                       String topic = payload.getMetadataUtf8();
                                       processor.onNext(TopicPayload.of(topic, RSocketPayload.of(payload)));
@@ -148,7 +148,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                     .just(DefaultPayload.create(
                             payload.getBody(),
                             Unpooled.wrappedBuffer(payload.getTopic().getBytes())))
-                    .doFinally(s -> payload.release());
+                    .doFinally(s ->  ReferenceCountUtil.safeRelease(payload));
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }
@@ -163,7 +163,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                                          {
                                              String broker = payload.getDataUtf8();
                                              log.debug("{} handle broker[{}] event request", serverId, broker);
-                                             payload.release();
+                                             ReferenceCountUtil.safeRelease(payload);
                                              EmitterProcessor<TopicPayload> processor = getOrCreateRemoteSink(broker);
                                              return processor
                                                      .doOnCancel(() -> log.debug("stop handle broker[{}] event request", broker))
@@ -233,7 +233,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
     @Override
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
         if (!remotes.containsKey(brokerId)) {
-            payload.release();
+            ReferenceCountUtil.safeRelease(payload);
             return Mono.empty();
         }
         EmitterProcessor<TopicPayload> processor = remoteSink.get(brokerId);

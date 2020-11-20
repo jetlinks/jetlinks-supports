@@ -1,5 +1,6 @@
 package org.jetlinks.supports.cluster.event;
 
+import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.cluster.ClusterManager;
@@ -32,7 +33,7 @@ public class RedisClusterEventBroker extends AbstractClusterEventBroker {
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
         Payload encoded = topicPayloadCodec.encode(payload);
         byte[] body = encoded.getBytes(true);
-        payload.release();
+        ReferenceCountUtil.safeRelease(payload);
 //        return redis
 //                .convertAndSend("/broker/bus/" + localId + "/" + brokerId, body)
 //                .then();
