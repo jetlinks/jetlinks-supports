@@ -9,6 +9,7 @@
     <logger name="io.rsocket.FrameLogger" level="warn"/>
     　
     <logger name="org.jetlinks" level="warn"/>
+    <logger name="org.jetlinks.core.event.TopicPayload" level="debug"/>
     <!--    　<logger name="org.jetlinks.supports.cluster" level="trace"/>-->
         　<logger name="org.jetlinks.supports.cluster.event.RedisRSocketEventBroker" level="trace"/>
 

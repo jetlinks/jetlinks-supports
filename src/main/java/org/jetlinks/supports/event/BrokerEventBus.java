@@ -6,7 +6,6 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.collections.CollectionUtils;
 import org.hswebframework.web.dict.EnumDict;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codecs;
@@ -244,8 +243,8 @@ public class BrokerEventBus implements EventBus {
             AtomicBoolean unsub = new AtomicBoolean(false);
             root.append(topic)
                 .unsubscribe(sub -> sub.getEventConnection() == connection
-                                             && sub.getSubscriber().equals(info.getSubscriber())
-                                             && unsub.compareAndSet(false, true)
+                        && sub.getSubscriber().equals(info.getSubscriber())
+                        && unsub.compareAndSet(false, true)
                 );
         }
     }
@@ -290,13 +289,15 @@ public class BrokerEventBus implements EventBus {
 
     private void doPublish(SubscriptionInfo info, TopicPayload payload) {
         try {
-            //已经取消订阅则直接释放
+            //已经取消订阅则不推送
             if (info.sink.isCancelled()) {
-                ReferenceCountUtil.safeRelease(payload);
                 return;
             }
+            payload.retain();
             info.sink.next(payload);
-            log.debug("publish [{}] to [{}] complete", payload.getTopic(), info);
+            if(log.isDebugEnabled()) {
+                log.debug("publish [{}] to [{}] complete", payload.getTopic(), info);
+            }
         } catch (Throwable error) {
             log.error("publish [{}] to [{}] event error", payload.getTopic(), info, error);
             ReferenceCountUtil.safeRelease(payload);
@@ -378,36 +379,31 @@ public class BrokerEventBus implements EventBus {
 
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream) {
-        Flux<TopicPayload> cache = Flux
-                .from(eventStream)
-                .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
-                .cache();
 
         return this
                 .doPublish(topic,
                            sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
-                           subscribers -> subscribers
-                                   .collectList()
-                                   .filter(CollectionUtils::isNotEmpty)
-                                   .flatMap(subs -> cache
-                                           .doOnNext(payload -> {
-                                               if (subs.size() > 1) {
-                                                   payload.retain(subs.size() - 1);
-                                               }
-                                               for (SubscriptionInfo sub : subs) {
-                                                   doPublish(sub, payload);
-                                               }
-                                           })
-                                           .then(Mono.just((long) subs.size()))
-                                   )
-                                   .defaultIfEmpty(0L)
+                           subscribers -> {
+                               Flux<TopicPayload> cache = Flux
+                                       .from(eventStream)
+                                       .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
+                                       .cache();
+                               return subscribers
+                                       .flatMap(sub -> cache.doOnNext(payload -> doPublish(sub, payload)))
+                                       .count()
+                                       .flatMap(s -> {
+                                           if (s > 0) {
+                                               return cache
+                                                       .doOnNext(ReferenceCountUtil::safeRelease)
+                                                       .then(Mono.just(s));
+                                           }
+                                           return Mono.just(s);
+                                       });
+                           }
                 )
                 .as(res -> {
                     if (log.isTraceEnabled()) {
-                        return res
-                                .doOnNext(subs -> {
-                                    log.trace("topic [{}] has {} subscriber", topic, subs);
-                                });
+                        return res.doOnNext(subs -> log.trace("topic [{}] has {} subscriber", topic, subs));
                     }
                     return res;
                 });

@@ -47,12 +47,12 @@ public class BrokerEventBusTest {
                 .doOnNext(TopicPayload::release)
                 .take(1)
                 .as(StepVerifier::create)
-                .expectNextMatches(sub -> sub.refCnt() == 0)
+                .expectNextMatches(sub -> sub.refCnt() == 1)
                 .verifyComplete();
     }
 
     @Test
-    public void testQueue() {
+    public void testShared() {
         BrokerEventBus eventBus = new BrokerEventBus();
 
         Flux.merge(
