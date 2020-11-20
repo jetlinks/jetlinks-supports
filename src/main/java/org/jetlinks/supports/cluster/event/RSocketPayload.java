@@ -80,7 +80,7 @@ class RSocketPayload implements Payload {
     @Override
     protected void finalize() throws Throwable {
         int refCnt = ReferenceCountUtil.refCnt(payload);
-        if (refCnt != 0) {
+        if (refCnt > 0) {
             log.debug("payload {} was not release properly, release() was not called before it's garbage-collected. refCnt={}", payload, refCnt);
         }
         super.finalize();
