@@ -192,11 +192,10 @@ class JetlinksTopicMessageCodec {
                 throw new UnsupportedOperationException("unsupported topic:" + topic);
             }
             applyCommons(message, result, object);
-            ChildDeviceMessageReply children = new ChildDeviceMessageReply();
+            ChildDeviceMessage children = new ChildDeviceMessage();
             children.setChildDeviceId(result.getChildDeviceId());
             children.setDeviceId(result.getDeviceId());
             children.setChildDeviceMessage(message);
-            children.setSuccess(Optional.ofNullable(object.getBoolean("success")).orElse(true));
             children.setTimestamp(Optional.ofNullable(object.getLong("timestamp")).orElse(System.currentTimeMillis()));
             Optional.ofNullable(object.getString("messageId")).ifPresent(children::setMessageId);
             result.message = children;
