@@ -50,32 +50,33 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         this.description = another.getDescription();
         this.expands = another.getExpands();
         this.properties = another.getProperties()
-                .stream()
-                .map(JetLinksPropertyMetadata::new)
-                .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a));
+                                 .stream()
+                                 .map(JetLinksPropertyMetadata::new)
+                                 .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a));
 
         this.functions = another.getFunctions()
-                .stream()
-                .map(JetLinksDeviceFunctionMetadata::new)
-                .collect(Collectors.toMap(JetLinksDeviceFunctionMetadata::getId, Function.identity(), (a, b) -> a));
+                                .stream()
+                                .map(JetLinksDeviceFunctionMetadata::new)
+                                .collect(Collectors.toMap(JetLinksDeviceFunctionMetadata::getId, Function.identity(), (a, b) -> a));
 
         this.events = another.getEvents()
-                .stream()
-                .map(JetLinksEventMetadata::new)
-                .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a));
+                             .stream()
+                             .map(JetLinksEventMetadata::new)
+                             .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a));
 
     }
 
     @Override
     public List<PropertyMetadata> getProperties() {
         if (properties == null && jsonObject != null) {
-            properties = Optional.ofNullable(jsonObject.getJSONArray("properties"))
+            properties = Optional
+                    .ofNullable(jsonObject.getJSONArray("properties"))
                     .map(Collection::stream)
-                    .map(stream -> stream
+                    .<Map<String, PropertyMetadata>>map(stream -> stream
                             .map(JSONObject.class::cast)
                             .map(JetLinksPropertyMetadata::new)
                             .map(PropertyMetadata.class::cast)
-                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a))
+                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
                     )
                     .orElse(Collections.emptyMap());
         }
@@ -88,13 +89,14 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     @Override
     public List<FunctionMetadata> getFunctions() {
         if (functions == null && jsonObject != null) {
-            functions = Optional.ofNullable(jsonObject.getJSONArray("functions"))
+            functions = Optional
+                    .ofNullable(jsonObject.getJSONArray("functions"))
                     .map(Collection::stream)
-                    .map(stream -> stream
+                    .<Map<String, FunctionMetadata>>map(stream -> stream
                             .map(JSONObject.class::cast)
                             .map(JetLinksDeviceFunctionMetadata::new)
                             .map(FunctionMetadata.class::cast)
-                            .collect(Collectors.toMap(FunctionMetadata::getId, Function.identity(), (a, b) -> a))
+                            .collect(Collectors.toMap(FunctionMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
                     )
                     .orElse(Collections.emptyMap());
         }
@@ -107,13 +109,14 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     @Override
     public List<PropertyMetadata> getTags() {
         if (tags == null && jsonObject != null) {
-            tags = Optional.ofNullable(jsonObject.getJSONArray("tags"))
+            tags = Optional
+                    .ofNullable(jsonObject.getJSONArray("tags"))
                     .map(Collection::stream)
-                    .map(stream -> stream
+                    .<Map<String, PropertyMetadata>>map(stream -> stream
                             .map(JSONObject.class::cast)
                             .map(JetLinksPropertyMetadata::new)
                             .map(PropertyMetadata.class::cast)
-                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a))
+                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
                     )
                     .orElse(Collections.emptyMap());
         }
@@ -126,7 +129,8 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     @Override
     public List<EventMetadata> getEvents() {
         if (events == null && jsonObject != null) {
-            events = Optional.ofNullable(jsonObject.getJSONArray("events"))
+            events = Optional
+                    .ofNullable(jsonObject.getJSONArray("events"))
                     .map(Collection::stream)
                     .map(stream -> stream
                             .map(JSONObject.class::cast)
