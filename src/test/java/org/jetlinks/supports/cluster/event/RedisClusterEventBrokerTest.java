@@ -14,7 +14,6 @@ import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
@@ -88,7 +87,7 @@ public class RedisClusterEventBrokerTest {
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
-            .take(Duration.ofSeconds(3))
+            .take(Duration.ofSeconds(10))
             .map(payload -> payload.bodyToString(true))
             .as(StepVerifier::create)
             .expectNextCount(30L)
