@@ -25,6 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
+import static com.google.common.cache.RemovalCause.EXPIRED;
+
 @Slf4j
 public abstract class AbstractDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
 
@@ -32,10 +34,12 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
             .newBuilder()
             .expireAfterWrite(Duration.ofMinutes(10))
             .<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>>removalListener(notify -> {
-                try {
-                    log.debug("discard await reply message[{}] processor", notify.getKey());
-                    notify.getValue().onComplete();
-                } catch (Throwable ignore) {
+                if (notify.getCause() == EXPIRED) {
+                    try {
+                        log.debug("discard await reply message[{}] processor", notify.getKey());
+                        notify.getValue().onComplete();
+                    } catch (Throwable ignore) {
+                    }
                 }
             })
             .build()
