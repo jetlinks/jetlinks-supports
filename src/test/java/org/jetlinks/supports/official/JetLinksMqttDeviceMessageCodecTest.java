@@ -102,10 +102,9 @@ public class JetLinksMqttDeviceMessageCodecTest {
                 .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof ChildDeviceMessageReply);
-        ChildDeviceMessageReply childReply = ((ChildDeviceMessageReply) message);
+        Assert.assertTrue(message instanceof ChildDeviceMessage);
+        ChildDeviceMessage childReply = ((ChildDeviceMessage) message);
 
-        Assert.assertTrue(childReply.isSuccess());
         Assert.assertEquals(childReply.getDeviceId(),"device1");
         Assert.assertEquals(childReply.getMessageId(),"test");
 
@@ -177,10 +176,9 @@ public class JetLinksMqttDeviceMessageCodecTest {
                 .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof ChildDeviceMessageReply);
-        ChildDeviceMessageReply childReply = ((ChildDeviceMessageReply) message);
+        Assert.assertTrue(message instanceof ChildDeviceMessage);
+        ChildDeviceMessage childReply = ((ChildDeviceMessage) message);
 
-        Assert.assertTrue(childReply.isSuccess());
         Assert.assertEquals(childReply.getDeviceId(),"device1");
         Assert.assertEquals(childReply.getMessageId(),"test");
 
@@ -248,10 +246,9 @@ public class JetLinksMqttDeviceMessageCodecTest {
                 .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"output\":\"ok\"}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof ChildDeviceMessageReply);
-        ChildDeviceMessageReply childReply = ((ChildDeviceMessageReply) message);
+        Assert.assertTrue(message instanceof ChildDeviceMessage);
+        ChildDeviceMessage childReply = ((ChildDeviceMessage) message);
 
-        Assert.assertTrue(childReply.isSuccess());
         Assert.assertEquals(childReply.getDeviceId(),"device1");
         Assert.assertEquals(childReply.getMessageId(),"test");
 
@@ -285,9 +282,9 @@ public class JetLinksMqttDeviceMessageCodecTest {
                 .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"data\":100}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof ChildDeviceMessageReply);
+        Assert.assertTrue(message instanceof ChildDeviceMessage);
 
-        EventMessage reply = ((EventMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
+        EventMessage reply = ((EventMessage) ((ChildDeviceMessage) message).getChildDeviceMessage());
         Assert.assertEquals(reply.getDeviceId(), "test");
         Assert.assertEquals(reply.getMessageId(), "test");
         Assert.assertEquals(reply.getData(), 100);
@@ -317,9 +314,9 @@ public class JetLinksMqttDeviceMessageCodecTest {
                 .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"properties\":{\"sn\":\"test\"}}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof ChildDeviceMessageReply);
+        Assert.assertTrue(message instanceof ChildDeviceMessage);
 
-        ReportPropertyMessage reply = ((ReportPropertyMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
+        ReportPropertyMessage reply = ((ReportPropertyMessage) ((ChildDeviceMessage) message).getChildDeviceMessage());
         Assert.assertEquals(reply.getDeviceId(), "test");
         Assert.assertEquals(reply.getMessageId(), "test");
         Assert.assertEquals(reply.getProperties(), Collections.singletonMap("sn", "test"));
@@ -349,9 +346,9 @@ public class JetLinksMqttDeviceMessageCodecTest {
                 .payload(Unpooled.wrappedBuffer("{\"messageId\":\"test\",\"metadata\":\"1\"}".getBytes()))
                 .build())).block();
 
-        Assert.assertTrue(message instanceof ChildDeviceMessageReply);
+        Assert.assertTrue(message instanceof ChildDeviceMessage);
 
-        DerivedMetadataMessage reply = ((DerivedMetadataMessage) ((ChildDeviceMessageReply) message).getChildDeviceMessage());
+        DerivedMetadataMessage reply = ((DerivedMetadataMessage) ((ChildDeviceMessage) message).getChildDeviceMessage());
         Assert.assertEquals(reply.getDeviceId(), "test");
         Assert.assertEquals(reply.getMessageId(), "test");
         Assert.assertEquals(reply.getMetadata(), "1");
