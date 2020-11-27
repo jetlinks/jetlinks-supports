@@ -7,6 +7,7 @@ import io.rsocket.core.RSocketConnector;
 import io.rsocket.core.RSocketServer;
 import io.rsocket.frame.decoder.PayloadDecoder;
 import io.rsocket.transport.netty.client.TcpClientTransport;
+import io.rsocket.transport.netty.server.CloseableChannel;
 import io.rsocket.transport.netty.server.TcpServerTransport;
 import io.rsocket.util.ByteBufPayload;
 import io.rsocket.util.DefaultPayload;
@@ -22,7 +23,9 @@ import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -51,6 +54,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
         this.address = address;
         init();
     }
+    private Set<String> connecting=new HashSet<>();
 
     public void connectRemote(String remote) {
         if (serverId.equals(remote)) {
@@ -63,11 +67,14 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                 return;
             }
         }
-
+        if(connecting.contains(remote)){
+            return;
+        }
+        connecting.add(remote);
         RSocketConnector
                 .create()
                 .payloadDecoder(PayloadDecoder.ZERO_COPY)
-                .reconnect(Retry.fixedDelay(Integer.MAX_VALUE, Duration.ofSeconds(1))
+                .reconnect(Retry.backoff(10, Duration.ofSeconds(1))
                                 .filter(err -> remotes.containsKey(remote))
                                 .doBeforeRetry(s -> {
                                     if (s.failure() != null) {
@@ -108,6 +115,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                           });
                 })
                 .doOnError(err -> log.error("connect to cluster node [{}] error", remote, err))
+                .doFinally(s-> connecting.remove(remote))
                 .subscribe();
     }
 
@@ -148,7 +156,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                     .just(DefaultPayload.create(
                             payload.getBody(),
                             Unpooled.wrappedBuffer(payload.getTopic().getBytes())))
-                    .doFinally(s ->  ReferenceCountUtil.safeRelease(payload));
+                    .doFinally(s -> ReferenceCountUtil.safeRelease(payload));
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }
@@ -158,7 +166,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
     public void init() {
         this.addressCache = clusterManager.getCache("__rsocket_addresses");
         this.serverId = clusterManager.getCurrentServerId();
-        RSocketServer
+        CloseableChannel closeableChannel = RSocketServer
                 .create(forRequestStream(payload ->
                                          {
                                              String broker = payload.getDataUtf8();
@@ -174,16 +182,21 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                 .bind(TcpServerTransport.create(address.getPort()))
                 .doOnError(err -> log.error(err.getMessage(), err))
                 .block();
+        if (closeableChannel == null) {
+            throw new IllegalStateException("start rsocket server" + address + " error");
+        }
+        disposable.add(closeableChannel);
 
         addressCache.put(serverId, address).block(Duration.ofSeconds(10));
 
         reloadAddresses().block(Duration.ofSeconds(10));
 
-        Flux.interval(Duration.ofSeconds(10))
-            .flatMap(i -> reloadAddresses()
-                    .onErrorContinue((err, v) -> {
+        disposable.add(Flux.interval(Duration.ofSeconds(10))
+                           .flatMap(i -> reloadAddresses()
+                                   .onErrorContinue((err, v) -> {
 
-                    })).subscribe();
+                                   }))
+                           .subscribe());
 
         super.startup();
     }
@@ -194,6 +207,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
         this.addressCache
                 .remove(serverId)
                 .block();
+        sockets.values().forEach(RSocket::dispose);
     }
 
     @Override

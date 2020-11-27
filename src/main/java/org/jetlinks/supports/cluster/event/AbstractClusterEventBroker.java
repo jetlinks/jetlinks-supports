@@ -47,6 +47,8 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
     protected final Codec<Subscription> subscriptionCodec = Codecs.lookup(Subscription.class);
     protected final Codec<TopicPayload> topicPayloadCodec = Codecs.lookup(TopicPayload.class);
 
+    protected final Disposable.Composite disposable = Disposables.composite();
+
     public AbstractClusterEventBroker(ClusterManager clusterManager,
                                       ReactiveRedisConnectionFactory factory) {
         this.id = clusterManager.getClusterName();
@@ -74,22 +76,23 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                         handleRemoteConnection(clusterManager.getCurrentServerId(), node.getId());
                     }
                 });
-        clusterManager.getHaManager()
-                      .subscribeServerOnline()
-                      .subscribe(node -> {
-                          handleServerNodeJoin(node);
-                          handleRemoteConnection(clusterManager.getCurrentServerId(), node.getId());
-                      });
+        disposable.add(clusterManager.getHaManager()
+                                     .subscribeServerOnline()
+                                     .subscribe(node -> {
+                                         handleServerNodeJoin(node);
+                                         handleRemoteConnection(clusterManager.getCurrentServerId(), node.getId());
+                                     }));
 
-        clusterManager.getHaManager()
-                      .subscribeServerOffline()
-                      .subscribe(this::handleServerNodeLeave);
+        disposable.add(clusterManager.getHaManager()
+                                     .subscribeServerOffline()
+                                     .subscribe(this::handleServerNodeLeave));
     }
 
     public void shutdown() {
         for (ClusterConnecting value : connections.values()) {
             value.disposable.dispose();
         }
+        disposable.dispose();
     }
 
     protected void handleServerNodeJoin(ServerNode node) {
@@ -164,6 +167,7 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
             disposable.add(listen(localId, brokerId)
                                    .doOnNext(msg -> {
                                        if (!processor.hasDownstreams()) {
+                                           msg.release();
                                            return;
                                        }
                                        log.trace("{} handle cluster [{}] event {}", localId, brokerId, msg.getTopic());

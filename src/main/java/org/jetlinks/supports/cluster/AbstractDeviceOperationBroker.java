@@ -1,5 +1,6 @@
 package org.jetlinks.supports.cluster;
 
+import com.google.common.cache.CacheBuilder;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.DeviceOperationBroker;
@@ -27,7 +28,18 @@ import java.util.function.Function;
 @Slf4j
 public abstract class AbstractDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
 
-    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = new ConcurrentHashMap<>();
+    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = CacheBuilder
+            .newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>>removalListener(notify -> {
+                try {
+                    log.debug("discard await reply message[{}] processor", notify.getKey());
+                    notify.getValue().onComplete();
+                } catch (Throwable ignore) {
+                }
+            })
+            .build()
+            .asMap();
 
     @Override
     public abstract Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId, Collection<String> deviceIdList);
