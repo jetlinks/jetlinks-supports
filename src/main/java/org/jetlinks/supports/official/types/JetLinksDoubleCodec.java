@@ -36,16 +36,14 @@ public class JetLinksDoubleCodec extends AbstractDataTypeCodec<DoubleType> {
     }
 
     @Override
-    public Map<String, Object> encode(DoubleType type) {
-        JSONObject json = new JSONObject();
-        json.put("max", type.getMax());
-        json.put("min", type.getMin());
+    protected void doEncode(Map<String, Object> encoded, DoubleType type) {
+        encoded.put("max", type.getMax());
+        encoded.put("min", type.getMin());
 
-        json.put("scale", type.getScale());
+        encoded.put("scale", type.getScale());
         if (type.getUnit() != null) {
-            json.put("unit", type.getUnit().getId());
+            encoded.put("unit", type.getUnit().getId());
         }
-
-        return json;
     }
+ 
 }

@@ -3,9 +3,7 @@ package org.jetlinks.supports.official.types;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.types.DoubleType;
 import org.jetlinks.core.metadata.types.GeoType;
-import org.jetlinks.core.metadata.unit.ValueUnits;
 
 import java.util.Map;
 
@@ -32,10 +30,10 @@ public class JetLinksGeoPointCodec extends AbstractDataTypeCodec<GeoType> {
     }
 
     @Override
-    public Map<String, Object> encode(GeoType type) {
-        JSONObject json = new JSONObject();
-        json.put("latProperty", type.getLatProperty());
-        json.put("lonProperty", type.getLonProperty());
-        return json;
+    protected void doEncode(Map<String, Object> encoded, GeoType type) {
+        encoded.put("latProperty", type.getLatProperty());
+        encoded.put("lonProperty", type.getLonProperty());
     }
+
+
 }
