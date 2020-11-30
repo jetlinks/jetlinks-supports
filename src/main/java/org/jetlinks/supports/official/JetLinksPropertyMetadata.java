@@ -92,6 +92,7 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
         json.put("name", name);
         json.put("description", description);
         json.put("valueType", JetLinksDataTypeCodecs.encode(getValueType()).orElse(null));
+        json.put("expands",expands);
         return json;
     }
 
