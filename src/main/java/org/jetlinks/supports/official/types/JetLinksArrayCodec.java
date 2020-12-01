@@ -50,7 +50,7 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
     @Override
     protected void doEncode(Map<String, Object> encoded, ArrayType type) {
         super.doEncode(encoded, type);
-        JetLinksDataTypeCodecs.getCodec(type.getId())
+        JetLinksDataTypeCodecs.getCodec(type.getElementType().getId())
                 .ifPresent(codec -> encoded.put("elementType", codec.encode(type.getElementType())));
 
     }
