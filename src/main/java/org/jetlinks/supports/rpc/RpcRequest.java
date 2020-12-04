@@ -15,6 +15,9 @@ public class RpcRequest implements Payload {
     private final Type type;
 
     @Getter
+    private final long requesterId;
+
+    @Getter
     private final long requestId;
 
     @Getter
@@ -24,30 +27,33 @@ public class RpcRequest implements Payload {
         return new RpcRequest(payload);
     }
 
-    public static RpcRequest next(long requestId, Payload payload) {
-        return new RpcRequest(Type.NEXT, requestId, payload);
+    public static RpcRequest next(long requesterId, long requestId, Payload payload) {
+        return new RpcRequest(Type.NEXT, requesterId, requestId, payload);
     }
 
-    public static RpcRequest complete(long requestId) {
-        return new RpcRequest(Type.COMPLETE, requestId, voidPayload);
+    public static RpcRequest complete(long requesterId, long requestId) {
+        return new RpcRequest(Type.COMPLETE, requesterId, requestId, voidPayload);
     }
 
-    public static RpcRequest nextAndComplete(long requestId, Payload payload) {
-        return new RpcRequest(Type.NEXT_AND_END, requestId, payload);
+    public static RpcRequest nextAndComplete(long requesterId, long requestId, Payload payload) {
+        return new RpcRequest(Type.NEXT_AND_END, requesterId, requestId, payload);
     }
 
-    private RpcRequest(Type type, long requestId, Payload payload) {
+    private RpcRequest(Type type, long requesterId, long requestId, Payload payload) {
         try {
             ByteBuf body = payload.getBody();
-            ByteBuf byteBuf = Unpooled.buffer(9 +body.capacity());
+            ByteBuf byteBuf = Unpooled.buffer(17 + body.capacity());
 
             byteBuf.writeByte(type.ordinal());
             byteBuf.writeBytes(BytesUtils.longToBe(requestId));
+            byteBuf.writeBytes(BytesUtils.longToBe(requesterId));
+
             byteBuf.writeBytes(body);
 
             this.type = type;
             this.body = byteBuf;
             this.requestId = requestId;
+            this.requesterId = requesterId;
         } finally {
             ReferenceCountUtil.safeRelease(payload);
         }
@@ -57,9 +63,12 @@ public class RpcRequest implements Payload {
         ByteBuf byteBuf = payload.getBody();
         this.type = types[byteBuf.readByte()];
         byte[] msgId = new byte[8];
+        byte[] reqId = new byte[8];
         byteBuf.getBytes(1, msgId);
+        byteBuf.getBytes(9, reqId);
         this.requestId = BytesUtils.beToLong(msgId);
-        this.body = byteBuf.copy(9, byteBuf.capacity() - 9);
+        this.requesterId = BytesUtils.beToLong(reqId);
+        this.body = byteBuf.copy(17, byteBuf.capacity() - 17);
         byteBuf.resetReaderIndex();
         ReferenceCountUtil.safeRelease(payload);
     }

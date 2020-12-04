@@ -17,6 +17,7 @@ import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.cluster.ServerNode;
 import org.jetlinks.core.event.TopicPayload;
 import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
+import reactor.core.Disposable;
 import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -54,22 +55,59 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
         this.address = address;
         init();
     }
-    private Set<String> connecting=new HashSet<>();
+
+    private final Set<String> connecting = new HashSet<>();
+
+    private final Map<String, Disposable> polling = new ConcurrentHashMap<>();
+
+    private void doStartPollEvent(String remote, RSocket socket) {
+        log.debug("{} start poll broker event from {}", serverId, remote);
+        Disposable old = polling.remove(remote);
+
+        if (null != old) {
+            old.dispose();
+        }
+        polling.put(remote, socket
+                .requestStream(ByteBufPayload.create(serverId))
+                .doOnCancel(() -> {
+                    socket.dispose();
+                    log.debug("{} cancel poll broker event from {}", serverId, remote);
+                })
+                .subscribe(payload -> {
+                    try {
+                        EmitterProcessor<TopicPayload> processor = getOrCreateLocalSink(remote);
+                        if (!processor.hasDownstreams()) {
+                            ReferenceCountUtil.safeRelease(payload);
+                        } else {
+                            String topic = payload.getMetadataUtf8();
+                            processor.onNext(TopicPayload.of(topic, RSocketPayload.of(payload)));
+                        }
+                    } catch (Throwable e) {
+                        log.error("handle broker [{}] event error", remote, e);
+                        ReferenceCountUtil.safeRelease(payload);
+                    }
+                }));
+    }
 
     public void connectRemote(String remote) {
         if (serverId.equals(remote)) {
             return;
         }
-        EmitterProcessor<TopicPayload> processor = getOrCreateLocalSink(remote);
+        if (connecting.contains(remote)) {
+            return;
+        }
+
         {
+            EmitterProcessor<TopicPayload> processor = getOrCreateLocalSink(remote);
             RSocket socket = sockets.get(remote);
             if (socket != null && !socket.isDisposed() && processor.hasDownstreams()) {
+                if (polling.get(remote) != null && polling.get(remote).isDisposed()) {
+                    doStartPollEvent(remote, socket);
+                }
                 return;
             }
         }
-        if(connecting.contains(remote)){
-            return;
-        }
+
         connecting.add(remote);
         RSocketConnector
                 .create()
@@ -96,26 +134,10 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                     if (old != null && old != socket) {
                         old.dispose();
                     }
-                    log.debug("{} start poll broker event from {}", serverId, remote);
-                    socket.requestStream(ByteBufPayload.create(serverId))
-                          .retryWhen(Retry.fixedDelay(Integer.MAX_VALUE, Duration.ofSeconds(1)))
-                          .doOnCancel(() -> log.debug("{} cancel poll broker event from {}", serverId, remote))
-                          .subscribe(payload -> {
-                              try {
-                                  if (!processor.hasDownstreams()) {
-                                      ReferenceCountUtil.safeRelease(payload);
-                                  } else {
-                                      String topic = payload.getMetadataUtf8();
-                                      processor.onNext(TopicPayload.of(topic, RSocketPayload.of(payload)));
-                                  }
-                              } catch (Throwable e) {
-                                  log.error("handle broker [{}] event error", remote, e);
-                                  ReferenceCountUtil.safeRelease(payload);
-                              }
-                          });
+                    doStartPollEvent(remote, socket);
                 })
                 .doOnError(err -> log.error("connect to cluster node [{}] error", remote, err))
-                .doFinally(s-> connecting.remove(remote))
+                .doFinally(s -> connecting.remove(remote))
                 .subscribe();
     }
 
@@ -154,9 +176,9 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
         try {
             return Mono
                     .just(DefaultPayload.create(
-                            payload.getBody(),
+                            Unpooled.unreleasableBuffer(payload.getBody()),
                             Unpooled.wrappedBuffer(payload.getTopic().getBytes())))
-                    .doFinally(s -> ReferenceCountUtil.safeRelease(payload));
+                    .doAfterTerminate(() -> ReferenceCountUtil.safeRelease(payload));
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }

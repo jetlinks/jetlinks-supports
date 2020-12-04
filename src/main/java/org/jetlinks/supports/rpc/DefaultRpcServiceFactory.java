@@ -26,16 +26,14 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.Function;
 
 @AllArgsConstructor
 public class DefaultRpcServiceFactory implements RpcServiceFactory {
 
     RpcService rpcService;
+    private final String id = UUID.randomUUID().toString();
 
     @Override
     @SuppressWarnings("all")
@@ -51,7 +49,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
         }
 
         RpcDefinition<Payload, Payload> rpcDef = RpcDefinition
-                .of(serviceInterface.getName(),
+                .of(serviceInterface.getName()+":"+id,
                     address,
                     DirectCodec.INSTANCE,
                     new Codec<Payload>() {
@@ -168,7 +166,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
             throw new UnsupportedOperationException("unsupported return type:" + returnType);
         }
 
-        return RpcDefinition.of(type.getName(), methodName.toString(), codec, Codecs.lookup(returnType));
+        return RpcDefinition.of(type.getName()+":"+id, methodName.toString(), codec, Codecs.lookup(returnType));
     }
 
     static RpcRequestCodec requestCodec = new RpcRequestCodec();

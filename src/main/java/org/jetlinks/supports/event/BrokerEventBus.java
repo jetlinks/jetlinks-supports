@@ -287,7 +287,7 @@ public class BrokerEventBus implements EventBus {
 
     }
 
-    private void doPublish(SubscriptionInfo info, TopicPayload payload) {
+    private void doPublish(String topic, SubscriptionInfo info, TopicPayload payload) {
         try {
             //已经取消订阅则不推送
             if (info.sink.isCancelled()) {
@@ -295,11 +295,11 @@ public class BrokerEventBus implements EventBus {
             }
             payload.retain();
             info.sink.next(payload);
-            if(log.isDebugEnabled()) {
-                log.debug("publish [{}] to [{}] complete", payload.getTopic(), info);
+            if (log.isDebugEnabled()) {
+                log.debug("publish [{}] to [{}] complete", topic, info);
             }
         } catch (Throwable error) {
-            log.error("publish [{}] to [{}] event error", payload.getTopic(), info, error);
+            log.error("publish [{}] to [{}] event error", topic, info, error);
             ReferenceCountUtil.safeRelease(payload);
         }
     }
@@ -320,7 +320,6 @@ public class BrokerEventBus implements EventBus {
                 })
                 //根据订阅者标识进行分组,以进行订阅模式判断
                 .groupBy(SubscriptionInfo::getSubscriber, Integer.MAX_VALUE)
-                .publishOn(publishScheduler)
                 .flatMap(group -> group
                                  .groupBy(sub -> sub.hasFeature(Subscription.Feature.shared))
                                  .flatMap(groups -> {
@@ -379,7 +378,11 @@ public class BrokerEventBus implements EventBus {
 
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream) {
+        return publish(topic, encoder, eventStream, publishScheduler);
+    }
 
+    @Override
+    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream, Scheduler publisher) {
         return this
                 .doPublish(topic,
                            sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
@@ -389,7 +392,10 @@ public class BrokerEventBus implements EventBus {
                                        .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
                                        .cache();
                                return subscribers
-                                       .flatMap(sub -> cache.doOnNext(payload -> doPublish(sub, payload)))
+                                       .publishOn(publisher)
+                                       .flatMap(sub -> cache
+                                               .doOnNext(payload -> doPublish(topic, sub, payload))
+                                               .then(Mono.just(1)))
                                        .count()
                                        .flatMap(s -> {
                                            if (s > 0) {
@@ -407,9 +413,7 @@ public class BrokerEventBus implements EventBus {
                     }
                     return res;
                 });
-
     }
-
 
     @AllArgsConstructor(staticName = "of")
     @Getter
