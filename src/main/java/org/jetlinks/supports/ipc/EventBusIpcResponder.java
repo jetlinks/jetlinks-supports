@@ -3,6 +3,7 @@ package org.jetlinks.supports.ipc;
 import io.netty.buffer.ByteBuf;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Payload;
+import org.jetlinks.core.codec.defaults.DirectCodec;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
@@ -118,22 +119,29 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
                     .onErrorResume(err -> doReply(consumerId, messageId, err));
         }
         AtomicReference<Integer> seqRef = new AtomicReference<>(-1);
-        return Flux
-                .from(result)
-                .index()
-                .doOnError(err -> {
-                    doReply(consumerId, messageId, err).subscribe();
-                })
-                .flatMap(res -> {
-                    seqRef.set(res.getT1().intValue());
-                    return doReply(consumerId, messageId, res.getT1().intValue(), ResponseType.next, res.getT2());
-                })
-                .doFinally((s) -> {
-                    doReply(consumerId, messageId, seqRef.get(), ResponseType.complete, null)
+
+        return eventBus
+                .publish(acceptTopic + "/" + consumerId + "/_reply", DirectCodec.instance(), Flux
+                        .from(result)
+                        .index()
+                        .map(tp2 -> {
+                            int seq = tp2.getT1().intValue();
+                            seqRef.set(seq);
+                            return Payload
+                                    .of(IpcResponse
+                                                .of(ResponseType.next, seq, messageId, tp2.getT2(), null)
+                                                .toByteBuf(definition.responseCodec(), definition.errorCodec()));
+                        })
+                        .doOnError(err -> {
+                            doReply(consumerId, messageId, err).subscribe();
+                        })
+                )
+                .doOnNext(i -> {
+                    this
+                            .doReply(consumerId, messageId, seqRef.get(), ResponseType.complete, null)
                             .subscribe();
                 })
                 .then();
-
     }
 
 
