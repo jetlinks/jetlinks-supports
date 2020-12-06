@@ -53,6 +53,7 @@ public class EventBusIpcServiceTest {
                 IpcInvokerBuilder.forRequestStream("invoke", () -> Flux.just("a", "b", "c", "d")),
                 consumer -> consumer
                         .requestStream()
+                        .sort()
                         .as(StepVerifier::create)
                         .expectNext("a", "b", "c", "d")
                         .verifyComplete()
