@@ -16,6 +16,8 @@ import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import org.jetlinks.core.topic.Topic;
 import org.reactivestreams.Publisher;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
@@ -40,7 +42,6 @@ import java.util.function.Predicate;
  * @see EventBroker
  * @since 1.1.1
  */
-@Slf4j
 public class BrokerEventBus implements EventBus {
 
     private final Topic<SubscriptionInfo> root = Topic.createRoot();
@@ -51,6 +52,9 @@ public class BrokerEventBus implements EventBus {
 
     @Setter
     private Scheduler publishScheduler = Schedulers.immediate();
+
+    @Setter
+    private Logger log = LoggerFactory.getLogger(BrokerEventBus.class);
 
     public BrokerEventBus() {
     }
@@ -306,7 +310,8 @@ public class BrokerEventBus implements EventBus {
 
     private Mono<Long> doPublish(String topic,
                                  Predicate<SubscriptionInfo> predicate,
-                                 Function<Flux<SubscriptionInfo>, Mono<Long>> subscriberConsumer) {
+                                 Function<Flux<SubscriptionInfo>, Mono<Long>> subscriberConsumer,
+                                 Scheduler publisher) {
         return root
                 .findTopic(topic)
                 .flatMapIterable(Topic::getSubscribers)
@@ -320,6 +325,7 @@ public class BrokerEventBus implements EventBus {
                 })
                 //根据订阅者标识进行分组,以进行订阅模式判断
                 .groupBy(SubscriptionInfo::getSubscriber, Integer.MAX_VALUE)
+                .publishOn(publisher)
                 .flatMap(group -> group
                                  .groupBy(sub -> sub.hasFeature(Subscription.Feature.shared))
                                  .flatMap(groups -> {
@@ -364,7 +370,8 @@ public class BrokerEventBus implements EventBus {
                                 })
                                 .count()
                                 .defaultIfEmpty(0L)
-                                .doFinally(i -> ReferenceCountUtil.safeRelease(payload))
+                                .doFinally(i -> ReferenceCountUtil.safeRelease(payload)),
+                        publishScheduler
 
                 );
     }
@@ -390,9 +397,9 @@ public class BrokerEventBus implements EventBus {
                                Flux<TopicPayload> cache = Flux
                                        .from(eventStream)
                                        .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
-                                       .cache();
+                                       .cache()
+                                       ;
                                return subscribers
-                                       .publishOn(publisher)
                                        .flatMap(sub -> cache
                                                .doOnNext(payload -> doPublish(topic, sub, payload))
                                                .then(Mono.just(1)))
@@ -405,7 +412,8 @@ public class BrokerEventBus implements EventBus {
                                            }
                                            return Mono.just(s);
                                        });
-                           }
+                           },
+                           publisher
                 )
                 .as(res -> {
                     if (log.isTraceEnabled()) {

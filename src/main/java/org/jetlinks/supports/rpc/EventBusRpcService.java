@@ -68,6 +68,7 @@ public class EventBusRpcService implements RpcService {
                         Subscription.of(
                                 definition.getId(),
                                 reqTopicRes,
+                                Subscription.Feature.local,
                                 Subscription.Feature.broker))
                 .doOnNext(payload -> {
                     try {
@@ -77,7 +78,7 @@ public class EventBusRpcService implements RpcService {
                         if (null != sink && !sink.isCancelled()) {
                             sink.next(result);
                         }else {
-                            log.debug("discard rpc[{}] reply {} {}", definition, result.getType(), result.getRequestId());
+                            log.info("discard rpc[{}] reply {} {}", definition, result.getType(), result.getRequestId());
                         }
                     } finally {
                         ReferenceCountUtil.safeRelease(payload);
@@ -188,7 +189,7 @@ public class EventBusRpcService implements RpcService {
                 .publish(topic, result, Schedulers.immediate())
                 .doOnNext(i -> {
                     if(i==0){
-                        log.warn("reply rpc request {} requestId:{} failed: no listener", result.getType(), result.getRequestId());
+                        log.warn("reply rpc request {} requestId:{} failed: no listener[{}]", result.getType(), result.getRequestId(),topic);
                         return;
                     }
                     log.trace("reply rpc request {} requestId:{}", result.getType(), result.getRequestId());
@@ -203,8 +204,8 @@ public class EventBusRpcService implements RpcService {
         String reqTopic;
         RpcDefinition<REQ, RES> definition;
         BiFunction<String, Publisher<REQ>, Publisher<RES>> invoker;
-        EmitterProcessor<REQ> processor = EmitterProcessor.create();
-        FluxSink<REQ> sink = processor.sink(FluxSink.OverflowStrategy.BUFFER);
+        EmitterProcessor<REQ> processor = EmitterProcessor.create(Integer.MAX_VALUE);
+        FluxSink<REQ> sink = processor.sink();
         boolean started = false;
 
         public PendingRequest(long requesterId,
@@ -239,6 +240,9 @@ public class EventBusRpcService implements RpcService {
                 .subscribe();
         }
 
+        void release(){
+            processor.onComplete();
+        }
         void next(RpcRequest req) {
             try {
                 if (req.getType() == RpcRequest.Type.COMPLETE) {
@@ -264,6 +268,8 @@ public class EventBusRpcService implements RpcService {
         }
 
     }
+
+
 
     private <REQ, RES> Disposable doListen(RpcDefinition<REQ, RES> definition,
                                            BiFunction<String, Publisher<REQ>, Publisher<RES>> invokeResult) {

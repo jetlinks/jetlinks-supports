@@ -1,5 +1,6 @@
 package org.jetlinks.supports.rpc;
 
+import io.netty.util.ResourceLeakDetector;
 import org.jetlinks.core.rpc.Invoker;
 import org.jetlinks.core.rpc.RpcDefinition;
 import org.jetlinks.supports.event.BrokerEventBus;
@@ -12,7 +13,9 @@ import reactor.test.StepVerifier;
 import java.time.Duration;
 
 public class EventBusRpcServiceTest {
-
+    static {
+        ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
+    }
 
     @Test
     public void test() {

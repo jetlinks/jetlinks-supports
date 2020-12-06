@@ -30,6 +30,7 @@ import java.util.*;
 import java.util.function.Function;
 
 @AllArgsConstructor
+@Deprecated
 public class DefaultRpcServiceFactory implements RpcServiceFactory {
 
     RpcService rpcService;

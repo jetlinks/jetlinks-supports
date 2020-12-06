@@ -3,36 +3,39 @@ package org.jetlinks.supports.rpc;
 import io.netty.util.ResourceLeakDetector;
 import lombok.*;
 import org.jetlinks.supports.event.BrokerEventBus;
+import org.jetlinks.supports.ipc.EventBusIpcService;
 import org.junit.Test;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
-public class DefaultRpcServiceFactoryTest {
+import static org.junit.Assert.*;
 
+public class IpcRpcServiceFactoryTest {
     static {
         ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
     }
-
     @Test
     public void test() {
-        BrokerEventBus eventBus = new BrokerEventBus();
 
-        DefaultRpcServiceFactory factory = new DefaultRpcServiceFactory(new EventBusRpcService(eventBus));
+        BrokerEventBus eventBus= new BrokerEventBus();
+        eventBus.setPublishScheduler(Schedulers.parallel());
+        IpcRpcServiceFactory factory = new IpcRpcServiceFactory(new EventBusIpcService(1, eventBus));
 
-        DefaultRpcServiceFactory factory2 = new DefaultRpcServiceFactory(new EventBusRpcService(eventBus));
+        IpcRpcServiceFactory factory2 = new IpcRpcServiceFactory(new EventBusIpcService(2, eventBus));
 
 
-        TestService service = factory.createProducer("/test", TestService.class).getService();
+        TestService service = factory.createProducer("test", TestService.class).getService();
 
         TestServiceConsumer consumer = new TestServiceConsumer();
 
-        Disposable disposable = factory2.createConsumer("/test", TestService.class, consumer);
+        Disposable disposable = factory2.createConsumer("test", TestService.class, consumer);
 
         service.sayHello()
                 .as(StepVerifier::create)
@@ -43,32 +46,32 @@ public class DefaultRpcServiceFactoryTest {
                 .as(StepVerifier::create)
                 .expectComplete()
                 .verify();
-
-        service.genericNumber(4)
+//
+        service.genericNumber(4000)
                 .as(StepVerifier::create)
-                .expectNext(0, 1, 2, 3)
+                .expectNextCount(4000)
                 .verifyComplete();
 //
-        service.createList("1", "2")
+        service.createList("1","2")
                .as(StepVerifier::create)
                .expectNext(Arrays.asList("1", "2"))
                .verifyComplete();
 
         service.getObjs()
-                .as(StepVerifier::create)
-                .expectNext(Arrays.asList(new TestObj("test")))
-                .verifyComplete();
+               .as(StepVerifier::create)
+               .expectNext(Arrays.asList(new TestObj("test")))
+               .verifyComplete();
 
 
         service.getBoolean(true)
-                .as(StepVerifier::create)
-                .expectNext(true)
-                .verifyComplete();
+               .as(StepVerifier::create)
+               .expectNext(true)
+               .verifyComplete();
 
         service.getBoolean(false)
-                .as(StepVerifier::create)
-                .expectNext(false)
-                .verifyComplete();
+               .as(StepVerifier::create)
+               .expectNext(false)
+               .verifyComplete();
 
 
         disposable.dispose();
@@ -94,7 +97,7 @@ public class DefaultRpcServiceFactoryTest {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode
-    public static class TestObj {
+    public static class TestObj{
         private String id;
     }
 
@@ -102,7 +105,7 @@ public class DefaultRpcServiceFactoryTest {
         @Override
         public Flux<Integer> genericNumber(int numbers) {
 
-            return Flux.range(0, numbers).delayElements(Duration.ofMillis(100));
+            return Flux.range(0, numbers);
         }
 
         @Override
@@ -133,4 +136,5 @@ public class DefaultRpcServiceFactoryTest {
             return Mono.just(Arrays.asList(new TestObj("test")));
         }
     }
+
 }
