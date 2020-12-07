@@ -11,17 +11,15 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
-
-import static org.junit.Assert.*;
 
 public class IpcRpcServiceFactoryTest {
     static {
         ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
     }
     @Test
+    @SneakyThrows
     public void test() {
 
         BrokerEventBus eventBus= new BrokerEventBus();
@@ -75,6 +73,7 @@ public class IpcRpcServiceFactoryTest {
 
 
         disposable.dispose();
+//        Thread.sleep(100000);
     }
 
 

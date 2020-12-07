@@ -1,6 +1,5 @@
 package org.jetlinks.supports.cluster.event;
 
-import io.netty.buffer.Unpooled;
 import io.netty.util.ReferenceCountUtil;
 import io.rsocket.RSocket;
 import io.rsocket.core.RSocketConnector;
@@ -23,6 +22,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Map;
@@ -174,13 +174,14 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     protected Mono<io.rsocket.Payload> topicPayloadToRSocketPayload(TopicPayload payload) {
         try {
+            ByteBuffer bodyBuffer = payload.getBody().nioBuffer();
             return Mono
-                    .just(DefaultPayload.create(
-                            Unpooled.unreleasableBuffer(payload.getBody()),
-                            Unpooled.wrappedBuffer(payload.getTopic().getBytes())))
-                    .doAfterTerminate(() -> ReferenceCountUtil.safeRelease(payload));
+                    .just(DefaultPayload.create(bodyBuffer,
+                                                ByteBuffer.wrap(payload.getTopic().getBytes())));
         } catch (Exception e) {
             log.error(e.getMessage(), e);
+        }finally {
+            ReferenceCountUtil.safeRelease(payload);
         }
         return Mono.empty();
     }

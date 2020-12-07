@@ -21,20 +21,26 @@ class IpcRequestHandler<RES> implements Disposable {
     private final AtomicInteger totalSeq = new AtomicInteger(-1);
 
     IpcRequestHandler() {
-        sink.onDispose(disposable);
     }
 
     Mono<RES> handleRequest() {
-        return processor.next()
-                        .doOnNext((r) -> complete());
+        return processor
+                .next()
+                .doAfterTerminate(()->{
+                    disposable.dispose();
+                });
     }
 
     Flux<RES> handleStream() {
-        return processor;
+        return processor
+                .doAfterTerminate(()->{
+                    disposable.dispose();
+                });
     }
 
     void complete() {
         processor.onComplete();
+        sink.complete();
     }
 
     void handle(IpcResponse<RES> res) {

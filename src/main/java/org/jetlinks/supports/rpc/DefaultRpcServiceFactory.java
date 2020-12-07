@@ -252,7 +252,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
             if (params != null) {
                 for (int i = 0, size = params.length; i < size; i++) {
                     ByteBuf data = parameter.get(i).encode(params[i]).getBody();
-                    buf.writeBytes(BytesUtils.intToBe(data.capacity()));
+                    buf.writeBytes(BytesUtils.intToBe(data.writerIndex()));
                     buf.writeBytes(data);
                 }
             }

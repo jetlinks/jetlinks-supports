@@ -45,7 +45,6 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
     private boolean started = false;
 
     protected final Codec<Subscription> subscriptionCodec = Codecs.lookup(Subscription.class);
-    protected final Codec<TopicPayload> topicPayloadCodec = Codecs.lookup(TopicPayload.class);
 
     protected final Disposable.Composite disposable = Disposables.composite();
 

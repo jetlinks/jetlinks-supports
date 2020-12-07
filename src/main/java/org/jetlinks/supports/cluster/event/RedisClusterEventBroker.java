@@ -1,9 +1,12 @@
 package org.jetlinks.supports.cluster.event;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
 import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.Payload;
 import org.jetlinks.core.cluster.ClusterManager;
+import org.jetlinks.core.codec.defaults.TopicPayloadCodec;
 import org.jetlinks.core.event.TopicPayload;
 import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import reactor.core.publisher.Flux;
@@ -26,14 +29,15 @@ public class RedisClusterEventBroker extends AbstractClusterEventBroker {
         return clusterManager
                 .<byte[]>getQueue("/broker/bus/" + brokerId + "/" + localId)
                 .subscribe()
-                .map(msg -> Payload.of(msg).decode(topicPayloadCodec, false));
+                .map(msg -> TopicPayloadCodec.doDecode(Unpooled.wrappedBuffer(msg)));
     }
 
     @Override
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
-        Payload encoded = topicPayloadCodec.encode(payload);
-        byte[] body = encoded.getBytes(true);
+        ByteBuf byteBuf = TopicPayloadCodec.doEncode(payload);
+        byte[] body = ByteBufUtil.getBytes(byteBuf);
         ReferenceCountUtil.safeRelease(payload);
+        ReferenceCountUtil.safeRelease(byteBuf);
 //        return redis
 //                .convertAndSend("/broker/bus/" + localId + "/" + brokerId, body)
 //                .then();

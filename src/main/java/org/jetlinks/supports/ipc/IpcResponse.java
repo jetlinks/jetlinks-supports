@@ -78,7 +78,7 @@ class IpcResponse<T> {
         } else {
             Payload payload = result == null ? errorEncoder.encode(error) : encoder.encode(result);
             body = payload.getBody();
-            buf = ByteBufAllocator.DEFAULT.buffer(9 + body.capacity());
+            buf = ByteBufAllocator.DEFAULT.buffer(9 + body.writerIndex());
             ref = payload;
         }
         buf.writeByte(type.ordinal());//请求类型

@@ -49,13 +49,13 @@ public class RpcResult implements Payload {
         byte[] msgId = new byte[8];
         body.getBytes(1, msgId);
         this.requestId = BytesUtils.beToLong(msgId);
-        this.body = body.copy(9, body.capacity() - 9);
+        this.body = body.copy(9, body.writerIndex() - 9);
         body.resetReaderIndex();
     }
 
     private RpcResult(long requestId, Type type, Payload payload) {
         this.type = type;
-        ByteBuf byteBuf = Unpooled.buffer(payload.getBody().capacity() + 9);
+        ByteBuf byteBuf = Unpooled.buffer(payload.getBody().writerIndex() + 9);
         byteBuf.writeByte(this.type.ordinal());
         byteBuf.writeBytes(BytesUtils.longToBe(requestId));
         byteBuf.writeBytes(payload.getBody());

@@ -11,7 +11,6 @@ import org.jetlinks.core.utils.BytesUtils;
 import javax.annotation.Nonnull;
 import java.util.List;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 
 public class MethodRequestCodec implements Codec<MethodRequest> {
 
@@ -100,7 +99,7 @@ public class MethodRequestCodec implements Codec<MethodRequest> {
                 Payload payload = encoder.encode(arg);
                 try {
                     ByteBuf argBuf = payload.getBody();
-                    byteBuf.writeBytes(BytesUtils.intToBe(argBuf.capacity()));
+                    byteBuf.writeBytes(BytesUtils.intToBe(argBuf.writerIndex()));
                     byteBuf.writeBytes(argBuf);
                 } finally {
                     ReferenceCountUtil.safeRelease(payload);

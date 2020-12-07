@@ -1,6 +1,7 @@
 package org.jetlinks.supports.ipc;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.defaults.DirectCodec;
@@ -132,15 +133,9 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
                                                 .of(ResponseType.next, seq, messageId, tp2.getT2(), null)
                                                 .toByteBuf(definition.responseCodec(), definition.errorCodec()));
                         })
-                        .doOnError(err -> {
-                            doReply(consumerId, messageId, err).subscribe();
-                        })
                 )
-                .doOnNext(i -> {
-                    this
-                            .doReply(consumerId, messageId, seqRef.get(), ResponseType.complete, null)
-                            .subscribe();
-                })
+                .flatMap(i -> this.doReply(consumerId, messageId, seqRef.get(), ResponseType.complete, null))
+                .doOnError(err -> this.doReply(consumerId, messageId, err).subscribe())
                 .then();
     }
 
@@ -160,10 +155,15 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
     }
 
     private Mono<Void> doReply(int consumerId, ByteBuf byteBuf) {
-        return eventBus
-                .publish(acceptTopic + "/" + consumerId + "/_reply", Payload.of(byteBuf))
-                .doOnNext(i -> {
+        Payload payload = Payload.of(byteBuf);
 
+        return eventBus
+                .publish(acceptTopic + "/" + consumerId + "/_reply",payload)
+                .doOnNext(i -> {
+                    if (i == 0) {
+                        log.warn("reply ipc failed,no consumer[{}] listener",consumerId);
+                        ReferenceCountUtil.safeRelease(payload);
+                    }
                 })
                 .then();
     }

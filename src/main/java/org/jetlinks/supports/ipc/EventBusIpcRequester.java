@@ -1,9 +1,6 @@
 package org.jetlinks.supports.ipc;
 
-import io.netty.util.ReferenceCountUtil;
 import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-import org.checkerframework.checker.units.qual.A;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.defaults.DirectCodec;
 import org.jetlinks.core.event.EventBus;
@@ -74,7 +71,7 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
     @Override
     public Mono<RES> request() {
         return this
-                .doRequestWithHandler(RequestType.noArgRequest, (REQ) null)
+                .doRequestWithHandler(RequestType.noArgRequest, null)
                 .flatMap(IpcRequestHandler::handleRequest);
     }
 
@@ -95,14 +92,14 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
     @Override
     public Flux<RES> requestStream() {
         return this
-                .doRequestWithHandler(RequestType.noArgRequestStream, (REQ) null)
+                .doRequestWithHandler(RequestType.noArgRequestStream, null)
                 .flatMapMany(IpcRequestHandler::handleStream);
     }
 
     @Override
     public Flux<RES> requestChannel(Publisher<REQ> req) {
         return this
-                .doRequestWithHandler(RequestType.requestChannel, req)
+                .doRequestChannel(req)
                 .handleStream();
     }
 
@@ -151,7 +148,7 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
                 .thenReturn(handler);
     }
 
-    IpcRequestHandler<RES> doRequestWithHandler(RequestType requestType, Publisher<REQ> channel) {
+    IpcRequestHandler<RES> doRequestChannel(Publisher<REQ> channel) {
         int requestId = nextRequestId();
         IpcRequestHandler<RES> handler = newHandler(requestId);
         AtomicInteger seq = new AtomicInteger();
@@ -163,7 +160,10 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
                                                  .map(request -> {
                                                      int sqlVal = request.getT1().intValue();
                                                      seq.set(sqlVal);
-                                                     return encodeRequest(requestType, requestId, sqlVal, request.getT2());
+                                                     return encodeRequest(RequestType.requestChannel,
+                                                                          requestId,
+                                                                          sqlVal,
+                                                                          request.getT2());
                                                  })
                                                  //todo 负载均衡这里会有问题,cancel可能无法推送到接收流的服务.
                                                  .doFinally(s -> this
@@ -171,6 +171,11 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
                                                          .subscribe())
 
                                     )
+                                    .doOnNext(len -> {
+                                        if (len == 0) {
+                                            handler.error(new IpcException(IpcCode.ipcServiceUnavailable));
+                                        }
+                                    })
                                     .subscribe()
         );
 

@@ -1,5 +1,6 @@
 package org.jetlinks.supports.rpc;
 
+import io.netty.util.ReferenceCountUtil;
 import lombok.AllArgsConstructor;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codec;
@@ -26,7 +27,11 @@ public class IpcRpcServiceFactory implements RpcServiceFactory {
 
         @Override
         public Payload decode(@Nonnull Payload payload) {
-            return Payload.of(payload.getBody().copy());
+            try {
+                return Payload.of(payload.getBody().copy());
+            }finally {
+                ReferenceCountUtil.safeRelease(payload);
+            }
         }
 
         @Override

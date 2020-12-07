@@ -65,7 +65,7 @@ public class IpcRequest<T> {
         } else {
             Payload payload = encoder.encode(request);
             body = payload.getBody();
-            buf = ByteBufAllocator.DEFAULT.buffer(9 + body.capacity());
+            buf = ByteBufAllocator.DEFAULT.buffer(9 + body.writerIndex());
             ref = payload;
         }
         buf.writeByte(type.ordinal());//请求类型

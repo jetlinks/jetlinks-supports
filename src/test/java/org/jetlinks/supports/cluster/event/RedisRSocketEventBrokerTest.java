@@ -23,7 +23,9 @@ public class RedisRSocketEventBrokerTest {
 
     ReactiveRedisTemplate<Object, Object> reactiveRedisTemplate = RedisHelper.getRedisTemplate();
     Disposable.Composite disposable = Disposables.composite();
-
+    static {
+        //ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
+    }
     @After
     public void shutdown() {
         disposable.dispose();
@@ -75,7 +77,7 @@ public class RedisRSocketEventBrokerTest {
                                                     new String[]{"/test/topic1"}
                 , Subscription.Feature.broker
                 , Subscription.Feature.local
-               // , Subscription.Feature.shared
+                //, Subscription.Feature.shared
         );
 
         AtomicReference<Long> startWith = new AtomicReference<>();
@@ -93,7 +95,8 @@ public class RedisRSocketEventBrokerTest {
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
-            .take(Duration.ofSeconds(10))
+            .take(40L)
+            .timeout(Duration.ofSeconds(10))
             .doOnNext(payload -> payload.bodyToString(true))
             .count()
             .as(StepVerifier::create)

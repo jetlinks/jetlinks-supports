@@ -4,7 +4,6 @@ import lombok.SneakyThrows;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.codec.Codecs;
-import org.jetlinks.core.codec.defaults.DirectCodec;
 import org.jetlinks.core.ipc.IpcDefinition;
 import org.jetlinks.core.ipc.IpcInvoker;
 import org.jetlinks.core.ipc.IpcInvokerBuilder;
@@ -40,7 +39,7 @@ class ServiceConsumer implements Disposable {
             mappings.put(method.getName() + ":" + method.getParameterCount(), createInvoker(method, instance));
         }
 
-        IpcDefinition<Payload, Payload> definition = IpcDefinition.of(address, DirectCodec.instance(), IpcRpcServiceFactory.responseCodec);
+        IpcDefinition<Payload, Payload> definition = IpcDefinition.of(address, IpcRpcServiceFactory.responseCodec, IpcRpcServiceFactory.responseCodec);
         this.disposable = ipcService.listen(definition, createInvoker());
         log = LoggerFactory.getLogger(serviceInterface);
     }

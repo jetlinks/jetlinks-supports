@@ -42,7 +42,7 @@ public class RpcRequest implements Payload {
     private RpcRequest(Type type, long requesterId, long requestId, Payload payload) {
         try {
             ByteBuf body = payload.getBody();
-            ByteBuf byteBuf = Unpooled.buffer(17 + body.capacity());
+            ByteBuf byteBuf = Unpooled.buffer(17 + body.writerIndex());
 
             byteBuf.writeByte(type.ordinal());
             byteBuf.writeBytes(BytesUtils.longToBe(requestId));
@@ -68,7 +68,7 @@ public class RpcRequest implements Payload {
         byteBuf.getBytes(9, reqId);
         this.requestId = BytesUtils.beToLong(msgId);
         this.requesterId = BytesUtils.beToLong(reqId);
-        this.body = byteBuf.copy(17, byteBuf.capacity() - 17);
+        this.body = byteBuf.copy(17, byteBuf.writerIndex() - 17);
         byteBuf.resetReaderIndex();
         ReferenceCountUtil.safeRelease(payload);
     }

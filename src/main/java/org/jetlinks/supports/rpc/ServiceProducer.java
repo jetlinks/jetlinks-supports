@@ -3,9 +3,9 @@ package org.jetlinks.supports.rpc;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.codec.Codecs;
-import org.jetlinks.core.codec.defaults.DirectCodec;
 import org.jetlinks.core.ipc.IpcDefinition;
 import org.jetlinks.core.ipc.IpcInvoker;
+import org.jetlinks.core.ipc.IpcInvokerBuilder;
 import org.jetlinks.core.ipc.IpcService;
 import org.jetlinks.core.rpc.DisposableService;
 import org.jetlinks.supports.ipc.RequestType;
@@ -13,12 +13,14 @@ import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ResolvableType;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -34,14 +36,18 @@ public class ServiceProducer<T> implements DisposableService<T> {
 
     private final Logger log;
 
+    private final Disposable disposable;
+
     @SuppressWarnings("all")
     public ServiceProducer(String address, IpcService ipcService, Class<T> serviceInterface) {
         this.serviceInterface = serviceInterface;
         Map<Method, Function<Object[], Object>> invokers = new HashMap<>();
 
         IpcInvoker<Payload, Payload> remote = ipcService.createInvoker(serviceInterface.getName(),
-                                                                       IpcDefinition.of(address, DirectCodec.instance(), IpcRpcServiceFactory.responseCodec));
+                                                                       IpcDefinition.of(address, IpcRpcServiceFactory.responseCodec, IpcRpcServiceFactory.responseCodec));
+        remote = IpcInvokerBuilder.forTimeout(Duration.ofSeconds(10), remote);
 
+        disposable = remote;
         for (Method method : serviceInterface.getMethods()) {
             invokers.put(method, createInvoker(remote, method));
         }
@@ -130,7 +136,12 @@ public class ServiceProducer<T> implements DisposableService<T> {
 
     @Override
     public void dispose() {
+        disposable.dispose();
+    }
 
+    @Override
+    public boolean isDisposed() {
+        return disposable.isDisposed();
     }
 
     @Override
