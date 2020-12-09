@@ -73,7 +73,7 @@ public class RedisHaManager implements HaManager {
 
         Map<String, ServerNode> maybeOffline = getAllNode()
                 .stream()
-                .filter(node -> System.currentTimeMillis() - node.getLastKeepAlive() > TimeUnit.SECONDS.toMillis(10))
+                .filter(node -> System.currentTimeMillis() - node.getLastKeepAlive() > TimeUnit.SECONDS.toMillis(30))
                 .filter(node -> !node.isSame(current))
                 .collect(Collectors.toMap(ServerNode::getId, Function.identity()));
 
