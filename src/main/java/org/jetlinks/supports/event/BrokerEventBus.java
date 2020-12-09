@@ -367,9 +367,8 @@ public class BrokerEventBus implements EventBus {
                                     }
                                 })
                                 .count()
-                                .defaultIfEmpty(0L)
-                                .doFinally(i -> ReferenceCountUtil.safeRelease(payload))
-                );
+                )
+                .doFinally(i -> ReferenceCountUtil.safeRelease(payload));
     }
 
     @Override
@@ -399,11 +398,11 @@ public class BrokerEventBus implements EventBus {
                                                .doOnNext(payload -> doPublish(topic, sub, payload))
                                                .then(Mono.just(1)))
                                        .count()
-                                       .flatMap(s -> {
+                                       .flatMap((s) -> {
                                            if (s > 0) {
-                                               return cache
-                                                       .doOnNext(ReferenceCountUtil::safeRelease)
-                                                       .then(Mono.just(s));
+                                               return cache.doOnNext(ReferenceCountUtil::safeRelease)
+                                                           .then()
+                                                           .thenReturn(s);
                                            }
                                            return Mono.just(s);
                                        });

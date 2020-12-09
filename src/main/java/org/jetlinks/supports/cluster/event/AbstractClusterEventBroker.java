@@ -138,15 +138,15 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
         private final String brokerId;
         private final String localId;
 
-        private final EmitterProcessor<TopicPayload> processor = EmitterProcessor.create(false);
+        private final EmitterProcessor<TopicPayload> processor = EmitterProcessor.create(Integer.MAX_VALUE, false);
         private final FluxSink<TopicPayload> input = processor.sink(FluxSink.OverflowStrategy.BUFFER);
 
         FluxSink<TopicPayload> output;
 
-        EmitterProcessor<Subscription> subProcessor = EmitterProcessor.create(false);
+        EmitterProcessor<Subscription> subProcessor = EmitterProcessor.create(Integer.MAX_VALUE, false);
         FluxSink<Subscription> subSink = subProcessor.sink(FluxSink.OverflowStrategy.BUFFER);
 
-        EmitterProcessor<Subscription> unsubProcessor = EmitterProcessor.create(false);
+        EmitterProcessor<Subscription> unsubProcessor = EmitterProcessor.create(Integer.MAX_VALUE, false);
         FluxSink<Subscription> unsubSink = unsubProcessor.sink(FluxSink.OverflowStrategy.BUFFER);
 
         Composite disposable = Disposables.composite();
@@ -208,7 +208,10 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
 
             disposable.add(Flux.<TopicPayload>create(sink -> this.output = sink)
                                    .flatMap(payload -> dispatch(localId, brokerId, payload)
-                                           .onErrorContinue((err, res) -> log.error(err.getMessage(), err)))
+                                           .onErrorResume((err) -> {
+                                               log.error(err.getMessage(), err);
+                                               return Mono.empty();
+                                           }))
                                    .onErrorContinue((err, res) -> log.error(err.getMessage(), err))
                                    .subscribe());
         }

@@ -14,9 +14,9 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 class RSocketPayload implements Payload {
 
-    private final io.rsocket.Payload payload;
+    private io.rsocket.Payload payload;
 
-    private final ByteBuf data;
+    private ByteBuf data;
 
     public static RSocketPayload of(io.rsocket.Payload payload) {
         return RSocketPayload.of(payload, Unpooled.unreleasableBuffer(payload.data()));
@@ -24,41 +24,54 @@ class RSocketPayload implements Payload {
 
     @Override
     public Payload slice() {
-        return RSocketPayload.of(payload, payload.sliceData());
+        if (payload == null) {
+            throw new IllegalStateException("payload released");
+        }
+        return RSocketPayload.of(payload, data.slice());
     }
 
     @Nonnull
     @Override
     public ByteBuf getBody() {
+        if (data == null) {
+            throw new IllegalStateException("payload released");
+        }
         return data;
     }
 
     @Override
     public boolean release() {
-        if (payload.refCnt() > 0) {
-            return payload.release();
-        }
-        return true;
+        return payload == null || handleRelease(ReferenceCountUtil.release(payload));
     }
 
     @Override
     public boolean release(int dec) {
-        if (payload.refCnt() >= dec) {
-            return payload.release(dec);
+        return payload == null || handleRelease(ReferenceCountUtil.release(payload, dec));
+    }
+
+    protected boolean handleRelease(boolean released) {
+        if (released) {
+            payload = null;
+            data = null;
         }
-        return true;
+        return released;
     }
 
     @Override
     public RSocketPayload retain() {
-        payload.retain();
+        ReferenceCountUtil.retain(payload);
         return this;
     }
 
     @Override
     public RSocketPayload retain(int inc) {
-        payload.retain(inc);
+        ReferenceCountUtil.retain(payload, inc);
         return this;
+    }
+
+    @Override
+    public int refCnt() {
+        return ReferenceCountUtil.refCnt(payload);
     }
 
     @Override
@@ -69,6 +82,9 @@ class RSocketPayload implements Payload {
     @Override
     public String bodyToString(boolean release) {
         try {
+            if (payload == null) {
+                throw new IllegalStateException("payload released");
+            }
             return data.toString(StandardCharsets.UTF_8);
         } finally {
             if (release) {

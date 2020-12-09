@@ -45,11 +45,11 @@ public class IpcRpcServiceFactoryTest {
                 .expectComplete()
                 .verify();
 //
-        service.genericNumber(4000)
+        service.genericNumber(40)
                 .as(StepVerifier::create)
-                .expectNextCount(4000)
+                .expectNextCount(40)
                 .verifyComplete();
-//
+
         service.createList("1","2")
                .as(StepVerifier::create)
                .expectNext(Arrays.asList("1", "2"))

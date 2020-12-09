@@ -34,16 +34,22 @@ public class RedisClusterEventBroker extends AbstractClusterEventBroker {
 
     @Override
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
-        ByteBuf byteBuf = TopicPayloadCodec.doEncode(payload);
-        byte[] body = ByteBufUtil.getBytes(byteBuf);
-        ReferenceCountUtil.safeRelease(payload);
-        ReferenceCountUtil.safeRelease(byteBuf);
+        try {
+            ByteBuf byteBuf = TopicPayloadCodec.doEncode(payload);
+            byte[] body = ByteBufUtil.getBytes(byteBuf);
+            ReferenceCountUtil.safeRelease(payload);
+            ReferenceCountUtil.safeRelease(byteBuf);
+
 //        return redis
 //                .convertAndSend("/broker/bus/" + localId + "/" + brokerId, body)
 //                .then();
-        return clusterManager
-                .getQueue("/broker/bus/" + localId + "/" + brokerId)
-                .add(Mono.just(body))
-                .then();
+            return clusterManager
+                    .getQueue("/broker/bus/" + localId + "/" + brokerId)
+                    .add(Mono.just(body))
+                    .then();
+        } catch (Throwable e) {
+            log.error(e.getMessage(), e);
+        }
+        return Mono.empty();
     }
 }
