@@ -63,7 +63,16 @@ public class BrokerEventBus implements EventBus {
                                  @NotNull Decoder<T> decoder) {
         return this
                 .subscribe(subscription)
-                .flatMap(payload -> Mono.justOrEmpty(payload.decode(decoder, true)))
+                .flatMap(payload -> {
+                    try {
+                        return Mono.justOrEmpty(payload.decode(decoder, false));
+                    } catch (Throwable e) {
+                        log.error("decode message [{}] error", payload.getTopic(), e);
+                    } finally {
+                        ReferenceCountUtil.safeRelease(payload);
+                    }
+                    return Mono.empty();
+                })
                 .publishOn(publishScheduler);
     }
 

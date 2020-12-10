@@ -146,7 +146,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
             } else {
                 replyProcessor.remove(messageId);
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
             replyFailureHandler.handle(e, message);
         }
     }

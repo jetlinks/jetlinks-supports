@@ -63,7 +63,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
             disposable.add(
                     eventBus
-                            .subscribe(subscription, messageCodec)
+                            .subscribe(subscription,messageCodec)
                             .filter(DeviceMessageReply.class::isInstance)
                             .cast(DeviceMessageReply.class)
                             .subscribe(this::handleReply)
