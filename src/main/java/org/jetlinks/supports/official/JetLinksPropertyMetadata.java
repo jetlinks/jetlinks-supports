@@ -40,7 +40,7 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
     @Setter
     private Map<String, Object> expands;
 
-    public JetLinksPropertyMetadata(){
+    public JetLinksPropertyMetadata() {
 
     }
 
@@ -53,6 +53,7 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
         this.name = another.getName();
         this.description = another.getDescription();
         this.dataType = another.getValueType();
+        this.expands = another.getExpands();
     }
 
     protected Optional<DataTypeCodec<DataType>> getDataTypeCodec(DataType dataType) {
@@ -65,7 +66,8 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
         if (dataTypeJson == null) {
             throw new IllegalArgumentException("属性" + getId() + "类型不能为空");
         }
-        DataType dataType = Optional.ofNullable(dataTypeJson.getString("type"))
+        DataType dataType = Optional
+                .ofNullable(dataTypeJson.getString("type"))
                 .map(DataTypes::lookup)
                 .map(Supplier::get)
                 .orElseGet(UnknownType::new);
@@ -92,7 +94,7 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
         json.put("name", name);
         json.put("description", description);
         json.put("valueType", JetLinksDataTypeCodecs.encode(getValueType()).orElse(null));
-        json.put("expands",expands);
+        json.put("expands", expands);
         return json;
     }
 
@@ -112,7 +114,7 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
     public String toString() {
         //  /* 测试 */ int name,
         return String.join("",
-                getValueType().getId(), " ", getId(), " /* ", getName(), " */ "
+                           getValueType().getId(), " ", getId(), " /* ", getName(), " */ "
         );
 
     }
