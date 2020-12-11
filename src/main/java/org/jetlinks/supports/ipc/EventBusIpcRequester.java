@@ -64,7 +64,7 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
                                                       .local()
                                                       .shared()
                                                       .build())
-                               .doOnCancel(() -> log.debug("cancel accept ipc[{}} response", id))
+                               .doOnCancel(() -> log.debug("cancel accept ipc[{}] response", id))
                                .subscribe(this::handleReply)
         );
     }
