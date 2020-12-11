@@ -123,6 +123,8 @@ public class DefaultSendToDeviceMessageHandler {
             log.warn("unsupported send message to {}", session);
             return;
         }
+        boolean forget = message.getHeader(Headers.sendAndForget).orElse(false);
+
         session
                 .getOperator()
                 .getProtocol()
@@ -180,7 +182,7 @@ public class DefaultSendToDeviceMessageHandler {
                 .flatMap(session::send)
                 .reduce((r1, r2) -> r1 && r2)
                 .flatMap(success -> {
-                    if (alreadyReply.get() || message.getHeader(Headers.sendAndForget).orElse(false)) {
+                    if (alreadyReply.get() || forget) {
                         return Mono.empty();
                     }
                     if (message.getHeader(Headers.async).orElse(false)) {
@@ -199,7 +201,7 @@ public class DefaultSendToDeviceMessageHandler {
                                 ? Mono.empty()
                                 : doReply(createReply(deviceId, message).success());
                     } else {
-                        return alreadyReply.get()
+                        return alreadyReply.get() || forget
                                 ? Mono.empty()
                                 : doReply(createReply(deviceId, message).error(ErrorCode.UNSUPPORTED_MESSAGE));
                     }
