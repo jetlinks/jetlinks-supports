@@ -38,8 +38,12 @@ public class DefaultSendToDeviceMessageHandler {
         //处理发往设备的消息
         handler.handleSendToDeviceMessage(serverId)
                .subscribe(message -> {
-                   if (message instanceof DeviceMessage) {
-                       handleDeviceMessage(((DeviceMessage) message));
+                   try {
+                       if (message instanceof DeviceMessage) {
+                           handleDeviceMessage(((DeviceMessage) message));
+                       }
+                   } catch (Throwable e) {
+                       log.error("handle send to device message error {}", message, e);
                    }
                });
 
@@ -176,7 +180,7 @@ public class DefaultSendToDeviceMessageHandler {
                 .flatMap(session::send)
                 .reduce((r1, r2) -> r1 && r2)
                 .flatMap(success -> {
-                    if (alreadyReply.get()) {
+                    if (alreadyReply.get() || message.getHeader(Headers.sendAndForget).orElse(false)) {
                         return Mono.empty();
                     }
                     if (message.getHeader(Headers.async).orElse(false)) {

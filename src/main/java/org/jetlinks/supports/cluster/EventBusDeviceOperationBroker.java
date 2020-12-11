@@ -54,20 +54,28 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
         return disposable.isDisposed();
     }
 
+    private void doSubscribeReply() {
+        Subscription subscription = Subscription
+                .of("device-message-broker",
+                    new String[]{"/_sys/msg-broker-reply/" + serverId},
+                    Subscription.Feature.broker);
+
+        disposable.add(
+                eventBus
+                        .subscribe(subscription, messageCodec)
+                        .filter(DeviceMessageReply.class::isInstance)
+                        .cast(DeviceMessageReply.class)
+                        .onErrorResume((err) -> {
+                            log.error(err.getMessage(), err);
+                            return Mono.empty();
+                        })
+                        .subscribe(this::handleReply)
+        );
+    }
+
     public void start() {
         {
-            Subscription subscription = Subscription
-                    .of("device-message-broker",
-                        new String[]{"/_sys/msg-broker-reply/" + serverId},
-                        Subscription.Feature.broker);
-
-            disposable.add(
-                    eventBus
-                            .subscribe(subscription,messageCodec)
-                            .filter(DeviceMessageReply.class::isInstance)
-                            .cast(DeviceMessageReply.class)
-                            .subscribe(this::handleReply)
-            );
+            doSubscribeReply();
         }
 
         {
@@ -157,6 +165,11 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
         return eventBus
                 .publish("/_sys/msg-broker-reply/" + serverId, messageCodec, reply)
+                .doOnNext(i -> {
+                    if (i <= 0) {
+                        log.warn("no handler [{}] for reply message : {}", serverId, reply);
+                    }
+                })
                 .then();
     }
 
@@ -188,7 +201,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
         return eventBus
                 .subscribe(subscription, messageCodec)
                 .doOnNext(message -> {
-                    if (message instanceof RepayableDeviceMessage) {
+                    if (message instanceof RepayableDeviceMessage && !message.getHeader(Headers.sendAndForget).orElse(false)) {
                         boolean isSameServer = message
                                 .getHeader(Headers.sendFrom)
                                 .map(sendFrom -> sendFrom.equals(serverId))
