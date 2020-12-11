@@ -162,7 +162,6 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                 .ofNullable(awaits.remove(getAwaitReplyKey(reply)))
                 .flatMap(req -> req.getHeader(Headers.sendFrom))
                 .orElse("*");
-
         return eventBus
                 .publish("/_sys/msg-broker-reply/" + serverId, messageCodec, reply)
                 .doOnNext(i -> {

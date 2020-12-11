@@ -12,6 +12,7 @@ import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
+import org.jetlinks.core.utils.DeviceMessageTracer;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -109,15 +110,16 @@ public class DefaultSendToDeviceMessageHandler {
         if (message instanceof RepayableDeviceMessage) {
             reply = ((RepayableDeviceMessage<?>) message).newReply();
         } else {
-            reply = new CommonDeviceMessageReply<>();
+            reply = new AcknowledgeDeviceMessage();
         }
         reply.messageId(message.getMessageId()).deviceId(deviceId);
         return reply;
     }
 
     protected void doSend(DeviceMessage message, DeviceSession session) {
+        DeviceMessageTracer.trace(message, "send.do.before");
         String deviceId = message.getDeviceId();
-        DeviceMessageReply reply = createReply(deviceId, message);
+        DeviceMessageReply reply = this.createReply(deviceId, message);
         AtomicBoolean alreadyReply = new AtomicBoolean(false);
         if (session.getOperator() == null) {
             log.warn("unsupported send message to {}", session);

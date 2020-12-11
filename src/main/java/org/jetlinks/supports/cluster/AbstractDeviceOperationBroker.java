@@ -10,6 +10,7 @@ import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.exception.DeviceOperationException;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.server.MessageHandler;
+import org.jetlinks.core.utils.DeviceMessageTracer;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
@@ -32,7 +33,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = CacheBuilder
             .newBuilder()
-            .expireAfterWrite(Duration.ofMinutes(10))
+            .expireAfterWrite(Duration.ofMinutes(1))
             .<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>>removalListener(notify -> {
                 if (notify.getCause() == EXPIRED) {
                     try {
@@ -88,6 +89,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
+        DeviceMessageTracer.trace(message,"reply.before");
         if (StringUtils.isEmpty(message.getMessageId())) {
             log.warn("reply message messageId is empty: {}", message);
             return Mono.just(false);
@@ -108,8 +110,8 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     protected void handleReply(DeviceMessageReply message) {
         try {
+            DeviceMessageTracer.trace(message, "reply.after");
             String messageId = getAwaitReplyKey(message);
-
             String partMsgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(null);
             if (partMsgId != null) {
                 log.trace("handle fragment device[{}] message {}", message.getDeviceId(), message);
