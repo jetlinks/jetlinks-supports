@@ -170,9 +170,10 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                     .ifPresent(configs::putAll);
 
             return operator.setConfigs(configs)
+                           .then(operator.getProtocol())
+                           .flatMap(protocol -> protocol.onDeviceRegister(operator))
                            //绑定设备到产品
-                           .then(clusterManager.<String>getSet("device-product-bind:" + deviceInfo.getProductId()).add(deviceInfo
-                                                                                                                               .getId()))
+                           .then(clusterManager.<String>getSet("device-product-bind:" + deviceInfo.getProductId()).add(deviceInfo.getId()))
                            .thenReturn(operator);
         });
     }
@@ -191,24 +192,43 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             Optional.ofNullable(productInfo.getConfiguration())
                     .ifPresent(configs::putAll);
 
-            return operator.setConfigs(configs).thenReturn(operator);
+            return operator
+                    .setConfigs(configs)
+                    .then(operator.getProtocol())
+                    .flatMap(protocol -> protocol.onProductRegister(operator))
+                    .thenReturn(operator);
         });
     }
 
     @Override
     public Mono<Void> unregisterDevice(String deviceId) {
-        return manager.getStorage("device:" + deviceId)
-                      .flatMap(ConfigStorage::clear)
-                      .doOnSuccess(r -> operatorCache.invalidate(deviceId))
-                      .then();
+        return this
+                .getDevice(deviceId)
+                .flatMap(device -> device
+                        .getProtocol()
+                        .flatMap(protocol -> protocol.onDeviceUnRegister(device)))
+                .then(
+                        manager.getStorage("device:" + deviceId)
+                               .flatMap(ConfigStorage::clear)
+                               .doOnSuccess(r -> operatorCache.invalidate(deviceId))
+                )
+                .then();
     }
 
     @Override
     public Mono<Void> unregisterProduct(String productId) {
-        return manager.getStorage("device-product:" + productId)
-                      .flatMap(ConfigStorage::clear)
-                      .doOnSuccess(r -> productOperatorMap.remove(productId))
-                      .then();
+        return this
+                .getProduct(productId)
+                .flatMap(product -> product
+                        .getProtocol()
+                        .flatMap(protocol -> protocol.onProductUnRegister(product)))
+                .then(
+                        manager.getStorage("device-product:" + productId)
+                               .flatMap(ConfigStorage::clear)
+                               .doOnSuccess(r -> productOperatorMap.remove(productId))
+                )
+                .then();
+
     }
 
     public void addInterceptor(DeviceMessageSenderInterceptor interceptor) {
