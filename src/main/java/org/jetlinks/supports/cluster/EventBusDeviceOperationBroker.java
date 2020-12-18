@@ -1,5 +1,6 @@
 package org.jetlinks.supports.cluster;
 
+import com.google.common.cache.CacheBuilder;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.codec.Codecs;
@@ -22,6 +23,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
+import static com.google.common.cache.RemovalCause.EXPIRED;
+
 @Slf4j
 public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker implements Disposable {
 
@@ -37,7 +40,19 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
     private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
 
-    private final Map<String, RepayableDeviceMessage<?>> awaits = new ConcurrentHashMap<>();
+    private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
+            .newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(5))
+            .<String, RepayableDeviceMessage<?>>removalListener(notify -> {
+                if (notify.getCause() == EXPIRED) {
+                    try {
+                        log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());
+                    } catch (Throwable ignore) {
+                    }
+                }
+            })
+            .build()
+            .asMap();
 
     public EventBusDeviceOperationBroker(String serverId, EventBus eventBus) {
         this.serverId = serverId;
@@ -65,10 +80,6 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                         .subscribe(subscription, messageCodec)
                         .filter(DeviceMessageReply.class::isInstance)
                         .cast(DeviceMessageReply.class)
-                        .onErrorResume((err) -> {
-                            log.error(err.getMessage(), err);
-                            return Mono.empty();
-                        })
                         .subscribe(this::handleReply)
         );
     }
@@ -94,20 +105,6 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                                            }))
             );
         }
-
-        long awaitTimeout = Duration.ofMinutes(10).toMillis();
-        disposable.add(Flux.interval(Duration.ofMinutes(10))
-                           .subscribe(ignore -> {
-
-                               awaits.entrySet()
-                                     .stream()
-                                     .filter(e -> System.currentTimeMillis() - e
-                                             .getValue()
-                                             .getTimestamp() > awaitTimeout)
-                                     .map(Map.Entry::getKey)
-                                     .forEach(awaits::remove);
-
-                           }));
 
     }
 
@@ -165,7 +162,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
         return eventBus
                 .publish("/_sys/msg-broker-reply/" + serverId, messageCodec, reply)
                 .doOnNext(i -> {
-                    if (i <= 0) {
+                    if (i <= 0 && !"*".equals(serverId)) {
                         log.warn("no handler [{}] for reply message : {}", serverId, reply);
                     }
                 })
@@ -200,7 +197,9 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
         return eventBus
                 .subscribe(subscription, messageCodec)
                 .doOnNext(message -> {
-                    if (message instanceof RepayableDeviceMessage && !message.getHeader(Headers.sendAndForget).orElse(false)) {
+                    if (message instanceof RepayableDeviceMessage && !message
+                            .getHeader(Headers.sendAndForget)
+                            .orElse(false)) {
                         boolean isSameServer = message
                                 .getHeader(Headers.sendFrom)
                                 .map(sendFrom -> sendFrom.equals(serverId))
