@@ -45,6 +45,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     //集群管理
     private final ClusterManager clusterManager;
 
+    //状态检查器
+    private final CompositeDeviceStateChecker stateChecker = new CompositeDeviceStateChecker();
+
     public ClusterDeviceRegistry(ProtocolSupports supports,
                                  ClusterManager clusterManager,
                                  DeviceOperationBroker handler) {
@@ -65,8 +68,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.manager = storageManager;
         this.operatorCache = cache;
         this.clusterManager = clusterManager;
+        this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
-
 
     public ClusterDeviceRegistry(ProtocolSupports supports,
                                  ClusterManager clusterManager,
@@ -77,6 +80,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.manager = new ClusterConfigStorageManager(clusterManager);
         this.operatorCache = cache;
         this.clusterManager = clusterManager;
+        this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
     @Override
@@ -142,7 +146,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
 
     private DefaultDeviceOperator createOperator(String deviceId) {
-        return new DefaultDeviceOperator(deviceId, supports, manager, handler, this, interceptor);
+        return new DefaultDeviceOperator(deviceId, supports, manager, handler, this, interceptor, stateChecker);
     }
 
     private DefaultDeviceProductOperator createProductOperator(String id) {
@@ -233,5 +237,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     public void addInterceptor(DeviceMessageSenderInterceptor interceptor) {
         this.interceptor.addInterceptor(interceptor);
+    }
+
+    public void addStateChecker(DeviceStateChecker deviceStateChecker){
+        this.stateChecker.addDeviceStateChecker(deviceStateChecker);
     }
 }
