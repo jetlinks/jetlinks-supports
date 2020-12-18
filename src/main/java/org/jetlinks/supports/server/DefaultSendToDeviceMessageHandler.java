@@ -210,17 +210,10 @@ public class DefaultSendToDeviceMessageHandler {
                 }))
                 .onErrorResume(error -> {
                     alreadyReply.set(true);
-                    if (error instanceof DeviceOperationException) {
-                        DeviceOperationException err = ((DeviceOperationException) error);
-                        return this
-                                .doReply(reply.error(err.getCode()))
-                                .onErrorContinue((e, res) -> log.error(e.getMessage(), e));
-                    } else {
+                    if (!(error instanceof DeviceOperationException) || forget) {
                         log.error(error.getMessage(), error);
-                        return this
-                                .doReply(reply.error(error))
-                                .onErrorContinue((e, res) -> log.error(e.getMessage(), e));
                     }
+                    return forget ? Mono.empty() : this.doReply(reply.error(error));
                 })
                 .subscribe();
     }
