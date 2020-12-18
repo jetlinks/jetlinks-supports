@@ -6,7 +6,6 @@ import io.netty.buffer.Unpooled;
 import io.netty.util.ReferenceCountUtil;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codec;
-import org.jetlinks.core.utils.BytesUtils;
 
 import javax.annotation.Nonnull;
 import java.util.List;
@@ -35,10 +34,8 @@ public class MethodRequestCodec implements Codec<MethodRequest> {
             ByteBuf body = payload.getBody();
             int index = body.readerIndex();
 
-            byte[] methodLenBytes = new byte[4]; //方法名长度
-            body.getBytes(index, methodLenBytes);
+            int methodLen = body.getInt(index);
             index += 4;
-            int methodLen = BytesUtils.beToInt(methodLenBytes);
             byte[] methodNameBytes = new byte[methodLen]; //方法名
             body.getBytes(index, methodNameBytes);
             index += methodLen;
@@ -51,13 +48,11 @@ public class MethodRequestCodec implements Codec<MethodRequest> {
             if (!parameterCodecs.isEmpty()) {
                 int argSize = parameterCodecs.size();
                 args = new Object[argSize];
-                byte[] argLenBytes = new byte[4];
                 int argLen;
                 for (int i = 0; i < argSize; i++) {
                     Codec<Object> codec = parameterCodecs.get(i);
-                    body.getBytes(index, argLenBytes);
+                    argLen = body.getInt(index);
                     index += 4;
-                    argLen = BytesUtils.beToInt(argLenBytes);
 
                     if (argLen >= 0) {
                         ByteBuf buf;
@@ -74,7 +69,7 @@ public class MethodRequestCodec implements Codec<MethodRequest> {
             }
             return MethodRequest.of(methodName, args);
         } finally {
-            ReferenceCountUtil.safeRelease(payload);
+            //ReferenceCountUtil.safeRelease(payload);
         }
     }
 
@@ -88,7 +83,7 @@ public class MethodRequestCodec implements Codec<MethodRequest> {
         Object[] args = body.getArgs();
         byte[] name = body.getMethod().getBytes();
         ByteBuf byteBuf = ByteBufAllocator.DEFAULT.buffer();
-        byteBuf.writeBytes(BytesUtils.intToBe(name.length));
+        byteBuf.writeInt(name.length);
         byteBuf.writeBytes(name);
         byteBuf.writeByte(parameterCodecs.size());
 
@@ -99,7 +94,7 @@ public class MethodRequestCodec implements Codec<MethodRequest> {
                 Payload payload = encoder.encode(arg);
                 try {
                     ByteBuf argBuf = payload.getBody();
-                    byteBuf.writeBytes(BytesUtils.intToBe(argBuf.writerIndex()));
+                    byteBuf.writeInt(argBuf.writerIndex());
                     byteBuf.writeBytes(argBuf);
                 } finally {
                     ReferenceCountUtil.safeRelease(payload);

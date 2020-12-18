@@ -71,7 +71,7 @@ class RSocketPayload implements Payload {
 
     @Override
     public int refCnt() {
-        return ReferenceCountUtil.refCnt(payload);
+        return payload == null ? 0 : ReferenceCountUtil.refCnt(payload);
     }
 
     @Override

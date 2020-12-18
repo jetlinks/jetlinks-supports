@@ -1,5 +1,6 @@
 package org.jetlinks.supports.rpc;
 
+import io.netty.util.ReferenceCountUtil;
 import lombok.SneakyThrows;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codec;
@@ -72,21 +73,24 @@ class ServiceConsumer implements Disposable {
     }
 
     private Publisher<Payload> invoke(Payload request) {
+        try {
+            MethodInvoker[] temp = new MethodInvoker[1];
 
-        MethodInvoker[] temp = new MethodInvoker[1];
-
-        MethodRequest methodRequest = MethodRequestCodec
-                .decode(request, (methodName, argCount) -> (temp[0] = getInvoker(methodName, argCount))
-                        .getRequestCodecs());
-        if (log.isDebugEnabled()) {
-            if (methodRequest.getArgs() != null && methodRequest.getArgs().length > 0) {
-                log.debug("invoke local service: {}({})", methodRequest.getMethod(), methodRequest.getArgs());
-            } else {
-                log.debug("invoke local service: {}()", methodRequest.getMethod());
+            MethodRequest methodRequest = MethodRequestCodec
+                    .decode(request, (methodName, argCount) -> (temp[0] = getInvoker(methodName, argCount))
+                            .getRequestCodecs());
+            if (log.isDebugEnabled()) {
+                if (methodRequest.getArgs() != null && methodRequest.getArgs().length > 0) {
+                    log.debug("invoke local service: {}({})", methodRequest.getMethod(), methodRequest.getArgs());
+                } else {
+                    log.debug("invoke local service: {}()", methodRequest.getMethod());
+                }
             }
-        }
 
-        return temp[0].invoke(methodRequest);
+            return temp[0].invoke(methodRequest);
+        }finally {
+            ReferenceCountUtil.safeRelease(request);
+        }
     }
 
     private MethodInvoker createInvoker(Method method, Object instance) {

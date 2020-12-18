@@ -10,7 +10,6 @@ import lombok.Getter;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Decoder;
 import org.jetlinks.core.codec.Encoder;
-import org.jetlinks.core.utils.BytesUtils;
 
 @AllArgsConstructor(staticName = "of")
 @Getter
@@ -36,13 +35,9 @@ public class IpcRequest<T> {
                 throw new IllegalStateException("unknown request type " + type);
             }
             RequestType requestType = types[type];
-            byte[] intArray = new byte[4];
-            body.readBytes(intArray);
-            int invokeId = BytesUtils.beToInt(intArray);
-            body.readBytes(intArray);
-            int messageId = BytesUtils.beToInt(intArray);
-            body.readBytes(intArray);
-            int seq = BytesUtils.beToInt(intArray);
+            int invokeId = body.readInt();
+            int messageId = body.readInt();
+            int seq = body.readInt();
             boolean hasBody = body.readByte() == 1;
             T requestBody = null;
             if (hasBody) {
@@ -69,9 +64,9 @@ public class IpcRequest<T> {
             ref = payload;
         }
         buf.writeByte(type.ordinal());//请求类型
-        buf.writeBytes(BytesUtils.intToBe(consumerId));//invokerId
-        buf.writeBytes(BytesUtils.intToBe(messageId));//messageId
-        buf.writeBytes(BytesUtils.intToBe(seq));//seq
+        buf.writeInt(consumerId);//invokerId
+        buf.writeInt(messageId);//messageId
+        buf.writeInt(seq);//seq
         buf.writeByte(request == null ? 0 : 1);//hasBody
         buf.writeBytes(body);//请求体
         ReferenceCountUtil.safeRelease(ref);

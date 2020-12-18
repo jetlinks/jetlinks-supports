@@ -7,6 +7,7 @@ import org.jetlinks.supports.cluster.ClusterLocalCache;
 import org.jetlinks.supports.cluster.RedisHelper;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import reactor.core.Disposable;
@@ -36,6 +37,7 @@ public class RedisClusterManagerTest {
 
     @Test
     @SneakyThrows
+    @Ignore
     public void testNotify() {
         RedisClusterNotifier notifier1 = new RedisClusterNotifier("test", "server-1", clusterManager);
         RedisClusterNotifier notifier2 = new RedisClusterNotifier("test", "server-2", clusterManager);

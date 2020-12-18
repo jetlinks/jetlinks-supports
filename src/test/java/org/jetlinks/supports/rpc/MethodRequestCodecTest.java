@@ -1,6 +1,7 @@
 package org.jetlinks.supports.rpc;
 
 import io.netty.util.ResourceLeakDetector;
+import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.defaults.IntegerCodec;
 import org.jetlinks.core.codec.defaults.StringCodec;
 import org.junit.Test;
@@ -20,11 +21,12 @@ public class MethodRequestCodecTest {
                 IntegerCodec.INSTANCE, StringCodec.UTF8
         ));
 
-        for (int i = 0; i < 100; i++) {
+        for (int i = 0; i < 1; i++) {
             MethodRequest request = MethodRequest.of("test", new Object[]{102, "hello"});
 
-            MethodRequest decode = codec.encode(request)
-                                        .decode(codec);
+            Payload payload = codec.encode(request);
+
+            MethodRequest decode = payload.decode(codec);
             assertArrayEquals(decode.getArgs(), request.getArgs());
             assertEquals(decode.getMethod(), request.getMethod());
         }
