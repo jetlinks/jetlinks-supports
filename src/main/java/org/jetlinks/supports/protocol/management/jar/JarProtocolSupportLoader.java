@@ -54,12 +54,14 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
         return Mono.defer(() -> {
             try {
                 Map<String, Object> config = definition.getConfiguration();
-                String location = Optional.ofNullable(config.get("location"))
-                        .map(String::valueOf).orElseThrow(() -> new IllegalArgumentException("location"));
+                String location = Optional
+                        .ofNullable(config.get("location"))
+                        .map(String::valueOf)
+                        .orElseThrow(() -> new IllegalArgumentException("location"));
 
                 String provider = Optional.ofNullable(config.get("provider"))
-                        .map(String::valueOf)
-                        .map(String::trim).orElse(null);
+                                          .map(String::valueOf)
+                                          .map(String::trim).orElse(null);
                 URL url;
 
                 if (!location.contains("://")) {
@@ -70,6 +72,12 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
 
                 ProtocolClassLoader loader;
                 URL fLocation = url;
+                {
+                    ProtocolSupportProvider oldProvider = loaded.remove(provider);
+                    if (null != oldProvider) {
+                        oldProvider.dispose();
+                    }
+                }
                 loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
                     if (null != old) {
                         try {
@@ -96,7 +104,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                     log.error(e.getMessage(), e);
                 }
                 return supportProvider.create(serviceContext);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 return Mono.error(e);
             }
         }).subscribeOn(Schedulers.elastic());
