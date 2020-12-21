@@ -10,7 +10,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
 
@@ -54,7 +57,7 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
         }
         Object val = cache.getIfPresent(key);
         if (val != null) {
-            return NULL_VALUE == val ? Mono.empty() : Mono.just((V)val);
+            return NULL_VALUE == val ? Mono.empty() : Mono.just((V) val);
         }
         return clusterCache
                 .get(key)
@@ -110,8 +113,11 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> put(K key, V value) {
-        if (value == null || key == null) {
+        if (key == null) {
             return Mono.just(true);
+        }
+        if (value == null) {
+            return remove(key);
         }
         return Mono
                 .defer(() -> {
@@ -125,8 +131,11 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Mono<Boolean> putIfAbsent(K key, V value) {
-        if (value == null || key == null) {
+        if (key == null) {
             return Mono.just(true);
+        }
+        if (value == null) {
+            return remove(key);
         }
         return Mono
                 .defer(() -> {
@@ -207,10 +216,21 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
             return Mono.just(true);
         }
         return Mono.defer(() -> {
-            cache.putAll(multi);
+            List<K> remove = multi.entrySet()
+                                  .stream()
+                                  .filter(e -> e.getValue() == null)
+                                  .map(Map.Entry::getKey)
+                                  .collect(Collectors.toList());
+            Map<? extends K, ? extends V> newTarget = new HashMap<>(multi);
+
+            if (remove.size() > 0) {
+                cache.invalidateAll(remove);
+                remove.forEach(newTarget::remove);
+            }
+            cache.putAll(newTarget);
             return clusterCache
                     .putAll(multi)
-                    .flatMap(r -> onRemove(multi.keySet()))
+                    .then(onRemove(multi.keySet()))
                     .thenReturn(true);
         });
     }

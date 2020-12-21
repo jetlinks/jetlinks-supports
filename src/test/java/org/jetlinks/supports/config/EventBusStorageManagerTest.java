@@ -59,6 +59,16 @@ public class EventBusStorageManagerTest {
 
         storageManager
                 .getStorage(id)
+                .flatMap(storage -> storage.setConfig("test", null))
+                .then(storageManager2.getStorage(id))
+                .flatMap(storage -> storage.getConfig("test").map(Value::asInt).defaultIfEmpty(1))
+                .as(StepVerifier::create)
+                .expectNext(1)
+                .verifyComplete()
+        ;
+
+        storageManager
+                .getStorage(id)
                 .flatMap(ConfigStorage::clear)
                 .then(storageManager2.getStorage(id))
                 .flatMap(storage -> storage.getConfig("test").map(Value::asInt))
@@ -66,6 +76,7 @@ public class EventBusStorageManagerTest {
                 .expectComplete()
                 .verify()
         ;
+
 
     }
 }
