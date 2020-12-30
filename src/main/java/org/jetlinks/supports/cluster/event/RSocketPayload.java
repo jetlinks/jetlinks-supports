@@ -41,12 +41,12 @@ class RSocketPayload implements Payload {
 
     @Override
     public boolean release() {
-        return payload == null || handleRelease(ReferenceCountUtil.release(payload));
+        return handleRelease(ReferenceCountUtil.release(payload));
     }
 
     @Override
     public boolean release(int dec) {
-        return payload == null || handleRelease(ReferenceCountUtil.release(payload, dec));
+        return handleRelease(ReferenceCountUtil.release(payload, dec));
     }
 
     protected boolean handleRelease(boolean released) {

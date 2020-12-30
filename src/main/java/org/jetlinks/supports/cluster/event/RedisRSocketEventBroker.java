@@ -180,7 +180,7 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                                                 ByteBuffer.wrap(payload.getTopic().getBytes())));
         } catch (Exception e) {
             log.error(e.getMessage(), e);
-        }finally {
+        } finally {
             ReferenceCountUtil.safeRelease(payload);
         }
         return Mono.empty();
@@ -195,7 +195,11 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                                              String broker = payload.getDataUtf8();
                                              log.debug("{} handle broker[{}] event request", serverId, broker);
                                              ReferenceCountUtil.safeRelease(payload);
+
                                              EmitterProcessor<TopicPayload> processor = getOrCreateRemoteSink(broker);
+                                             if (processor.hasDownstreams()) {
+                                                 return Flux.empty();
+                                             }
                                              return processor
                                                      .doOnCancel(() -> log.debug("stop handle broker[{}] event request", broker))
                                                      .flatMap(this::topicPayloadToRSocketPayload)

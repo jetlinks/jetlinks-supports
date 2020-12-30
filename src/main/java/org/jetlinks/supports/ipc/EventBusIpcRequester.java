@@ -31,7 +31,7 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
     private final IpcDefinition<REQ, RES> definition;
     private final Disposable.Composite disposable = Disposables.composite();
     private final Map<Integer, IpcRequestHandler<RES>> pending = new ConcurrentHashMap<>();
-    private final AtomicInteger requestIdInc = new AtomicInteger(0);
+    private final RequestIdSupplier requestIdInc = new RequestIdSupplier();
 
     private final String sendTopic;
 
@@ -124,7 +124,7 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
     Mono<Void> doRequest(RequestType requestType, int requestId, int seq, REQ request) {
         log.trace("do ipc request {} {}", requestType, requestId);
         return eventBus
-                .publish(sendTopic, encodeRequest(requestType, requestId, seq, request))
+                .publish(sendTopic, this.encodeRequest(requestType, requestId, seq, request))
                 .doOnNext(i -> {
                     if (i == 0) {
                         throw new IpcException(IpcCode.ipcServiceUnavailable, "Service " + name + " Unavailable");
@@ -137,7 +137,11 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
 
     IpcRequestHandler<RES> newHandler(int requestId) {
         IpcRequestHandler<RES> handler = new IpcRequestHandler<>();
-        pending.put(requestId, handler);
+        IpcRequestHandler<RES> old = pending.put(requestId, handler);
+        if (old != null) {
+            log.warn("repeat request id :{}", requestId);
+            old.complete();
+        }
         return handler.doOnDispose(() -> pending.remove(requestId));
     }
 
@@ -213,14 +217,7 @@ class EventBusIpcRequester<REQ, RES> implements IpcInvoker<REQ, RES> {
 
 
     public int nextRequestId() {
-        int requestId;
-        do {
-            requestId = requestIdInc.incrementAndGet();
-            if (requestId <= 0) {
-                requestIdInc.set(requestId = 1);
-            }
-        } while (pending.containsKey(requestId));
-        return requestId;
+        return requestIdInc.nextId(pending::containsKey);
     }
 
     @Override

@@ -28,6 +28,10 @@ class IpcResponse<T> {
         return result != null;
     }
 
+    boolean hasError() {
+        return error != null;
+    }
+
     public static <T> IpcResponse<T> decode(Payload payload, Decoder<T> decoder, Decoder<Throwable> errorDecoder) {
         ByteBuf body = payload.getBody();
         try {
@@ -43,20 +47,10 @@ class IpcResponse<T> {
             T requestBody = null;
             Throwable error = null;
             if (hasBody && requestType != ResponseType.error) {
-//                Payload requestBodyPayload = Payload.of(Unpooled.unreleasableBuffer(body));
-                try {
-                    requestBody = decoder.decode(payload);
-                } finally {
-                    // ReferenceCountUtil.safeRelease(requestBodyPayload);
-                }
+                requestBody = decoder.decode(payload);
             }
             if (requestType == ResponseType.error) {
-                //  Payload requestBodyPayload = Payload.of(Unpooled.unreleasableBuffer(body));
-                try {
-                    error = errorDecoder.decode(payload);
-                } finally {
-                    // ReferenceCountUtil.safeRelease(requestBodyPayload);
-                }
+                error = errorDecoder.decode(payload);
             }
             return IpcResponse.of(requestType, seq, messageId, requestBody, error);
         } finally {

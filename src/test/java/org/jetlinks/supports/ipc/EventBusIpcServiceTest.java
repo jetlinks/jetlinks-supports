@@ -11,13 +11,26 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
-import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 public class EventBusIpcServiceTest {
     static {
         ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
+    }
+
+    @Test
+    public void testRequestNoResponse() {
+        doTest(
+                IpcDefinition.of("lowercase", String.class, String.class),
+                IpcInvokerBuilder.forRequest("invoke", str -> Mono.empty()),
+                consumer -> consumer
+                        .request("TEST")
+                        .defaultIfEmpty("1")
+                        .as(StepVerifier::create)
+                        .expectNext("1")
+                        .verifyComplete()
+        );
     }
 
     @Test
