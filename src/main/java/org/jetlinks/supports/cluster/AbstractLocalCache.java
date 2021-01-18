@@ -270,6 +270,9 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
     public Mono<Void> refresh(Collection<? extends K> keys) {
         if (null != keys) {
             cache.invalidateAll(keys);
+            if (keys.size() == 1) {
+                return onRemove(keys.iterator().next());
+            }
             return onRemove(keys);
         }
         return Mono.empty();
