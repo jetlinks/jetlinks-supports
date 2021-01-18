@@ -84,4 +84,13 @@ public class ClusterConfigStorage implements ConfigStorage {
         return cache.clear()
                     .thenReturn(true);
     }
+
+    @Override
+    public Mono<Void> refresh(Collection<String> keys) {
+        return cache.refresh(keys);
+    }
+    @Override
+    public Mono<Void> refresh() {
+        return cache.refresh();
+    }
 }

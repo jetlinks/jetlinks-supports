@@ -12,13 +12,13 @@ import java.util.function.Function;
 
 public class SimpleConfigStorageManager implements ConfigStorageManager {
 
-    private final Function<String, SimpleClusterConfigStorage> storageBuilder;
-    private final ConcurrentMap<String, SimpleClusterConfigStorage> cache = new ConcurrentHashMap<>();
+    private final Function<String, ClusterConfigStorage> storageBuilder;
+    private final ConcurrentMap<String, ClusterConfigStorage> cache = new ConcurrentHashMap<>();
 
     @SuppressWarnings("all")
     public SimpleConfigStorageManager(ClusterManager clusterManager) {
         storageBuilder = id -> {
-            return new SimpleClusterConfigStorage(clusterManager.getCache(id));
+            return new ClusterConfigStorage(clusterManager.getCache(id));
         };
     }
 

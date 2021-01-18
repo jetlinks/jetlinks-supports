@@ -31,14 +31,21 @@ public class EventBusStorageManager implements ConfigStorageManager {
         this(clusterManager, eventBus, () -> CacheBuilder.newBuilder().build());
     }
 
-    @SuppressWarnings("all")
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus,
                                   Supplier<Cache<String, Object>> supplier) {
+        this(clusterManager, eventBus, supplier, true);
+    }
+
+    @SuppressWarnings("all")
+    public EventBusStorageManager(ClusterManager clusterManager,
+                                  EventBus eventBus,
+                                  Supplier<Cache<String, Object>> supplier,
+                                  boolean cacheEmpty) {
         this.cache = (ConcurrentMap) supplier.get().asMap();
         this.cacheSupplier = supplier;
         storageBuilder = id -> {
-            return new ClusterConfigStorage(new EventBusLocalCache<>(id, eventBus, clusterManager, cacheSupplier.get()));
+            return new ClusterConfigStorage(new EventBusLocalCache<>(id, eventBus, clusterManager.getCache(id), cacheSupplier.get(), cacheEmpty));
         };
         eventBus
                 .subscribe(Subscription

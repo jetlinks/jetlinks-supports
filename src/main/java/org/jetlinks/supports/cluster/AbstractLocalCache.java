@@ -21,15 +21,24 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
 
     private final ClusterCache<K, V> clusterCache;
 
+    private final boolean cacheEmpty;
+
     public AbstractLocalCache(ClusterCache<K, V> clusterCache,
-                              Cache<K, Object> localCache) {
+                              Cache<K, Object> localCache,
+                              boolean cacheEmpty) {
         this.cache = localCache;
         this.clusterCache = clusterCache;
+        this.cacheEmpty = cacheEmpty;
+    }
+
+    public AbstractLocalCache(ClusterCache<K, V> clusterCache,
+                              Cache<K, Object> localCache) {
+        this(clusterCache, localCache, true);
     }
 
 
     public void clearLocalCache(K key) {
-        if ("*".equals(key)) {
+        if ("__all".equals(key)) {
             clearAllLocalCache();
         } else if (key != null) {
             cache.invalidate(key);
@@ -61,7 +70,7 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
         }
         return clusterCache
                 .get(key)
-                .switchIfEmpty(Mono.fromRunnable(() -> cache.put(key, NULL_VALUE)))
+                .switchIfEmpty(cacheEmpty ? Mono.fromRunnable(() -> cache.put(key, NULL_VALUE)) : Mono.empty())
                 .doOnNext(v -> cache.put(key, v));
     }
 
@@ -104,7 +113,9 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
                     K k = kvEntry.getKey();
                     V v = kvEntry.getValue();
                     if (v == null) {
-                        cache.put(k, NULL_VALUE);
+                        if (cacheEmpty) {
+                            cache.put(k, NULL_VALUE);
+                        }
                     } else {
                         cache.put(k, v);
                     }
@@ -253,5 +264,22 @@ public abstract class AbstractLocalCache<K, V> implements ClusterCache<K, V> {
                     .clear()
                     .then(onClear());
         });
+    }
+
+    @Override
+    public Mono<Void> refresh(Collection<? extends K> keys) {
+        if (null != keys) {
+            cache.invalidateAll(keys);
+            return onRemove(keys);
+        }
+        return Mono.empty();
+    }
+
+    @Override
+    public Mono<Void> refresh() {
+        //清空本地缓存
+        cache.invalidateAll();
+        //发送清空事件,通知其他节点也清空
+        return onClear();
     }
 }

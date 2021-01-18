@@ -51,7 +51,7 @@ public class ClusterLocalCache<K, V> extends AbstractLocalCache<K, V> {
     @Override
     protected Mono<Void> onClear() {
         return clearTopic
-                .publish(Mono.just((K) "___all"))
+                .publish(Mono.just((K) "__all"))
                 .then();
     }
 
