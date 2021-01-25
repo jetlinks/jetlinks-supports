@@ -45,7 +45,11 @@ public class EventBusStorageManager implements ConfigStorageManager {
         this.cache = (ConcurrentMap) supplier.get().asMap();
         this.cacheSupplier = supplier;
         storageBuilder = id -> {
-            return new ClusterConfigStorage(new EventBusLocalCache<>(id, eventBus, clusterManager.getCache(id), cacheSupplier.get(), cacheEmpty));
+            return new ClusterConfigStorage(new EventBusLocalCache<>(id,
+                                                                     eventBus,
+                                                                     clusterManager.getCache(id),
+                                                                     cacheSupplier.get(),
+                                                                     cacheEmpty));
         };
         eventBus
                 .subscribe(Subscription
@@ -61,6 +65,8 @@ public class EventBusStorageManager implements ConfigStorageManager {
                             EventBusLocalCache eventBusLocalCache = ((EventBusLocalCache) storage.getCache());
                             eventBusLocalCache.clearLocalCache(vars.get("key"));
                         }
+                    } catch (Throwable ignore) {
+
                     } finally {
                         ReferenceCountUtil.safeRelease(payload);
                     }
