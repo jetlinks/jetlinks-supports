@@ -64,7 +64,8 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
     private Mono<Void> handleRequest(TopicPayload payload) {
         try {
 
-            return handleRequest(IpcRequest.decode(payload, definition.requestCodec()))
+            return this
+                    .handleRequest(IpcRequest.decode(payload, definition.requestCodec()))
                     .onErrorResume(err -> {
                         log.error(err.getMessage(), err);
                         return Mono.empty();
@@ -115,9 +116,12 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
         if (result instanceof Mono) {
             return Mono
                     .from(result)
-                    .switchIfEmpty(doReply(consumerId, messageId, -1, ResponseType.complete, null).then(Mono.empty()))
-                    .flatMap(res -> doReply(consumerId, messageId, -1, ResponseType.complete, res))
-                    .onErrorResume(err -> doReply(consumerId, messageId, err));
+                    .switchIfEmpty(Mono.defer(() -> this
+                            .doReply(consumerId, messageId, -1, ResponseType.complete, null)
+                            .then(Mono.empty()))
+                    )
+                    .flatMap(res -> this.doReply(consumerId, messageId, -1, ResponseType.complete, res))
+                    .onErrorResume(err -> this.doReply(consumerId, messageId, err));
         }
         AtomicReference<Integer> seqRef = new AtomicReference<>(-1);
 
@@ -135,7 +139,10 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
                         })
                 )
                 .flatMap(i -> this.doReply(consumerId, messageId, seqRef.get(), ResponseType.complete, null))
-                .doOnError(err -> this.doReply(consumerId, messageId, err).subscribe())
+                .doOnError(err -> {
+                    log.warn("reply [{}.{}] error", consumerId, messageId, err);
+                    this.doReply(consumerId, messageId, err).subscribe();
+                })
                 .then();
     }
 
@@ -147,21 +154,20 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
     }
 
     private Mono<Void> doReply(int consumerId, int messageId, int seq, ResponseType responseType, RES response) {
-        return Mono
-                .defer(() -> this
-                        .doReply(consumerId, IpcResponse
-                                .of(responseType, seq, messageId, response, null)
-                                .toByteBuf(definition.responseCodec(), definition.errorCodec())));
+        return this
+                .doReply(consumerId, IpcResponse
+                        .of(responseType, seq, messageId, response, null)
+                        .toByteBuf(definition.responseCodec(), definition.errorCodec()));
     }
 
     private Mono<Void> doReply(int consumerId, ByteBuf byteBuf) {
         Payload payload = Payload.of(byteBuf);
 
         return eventBus
-                .publish(acceptTopic + "/" + consumerId + "/_reply",payload)
+                .publish(acceptTopic + "/" + consumerId + "/_reply", payload)
                 .doOnNext(i -> {
                     if (i == 0) {
-                        log.warn("reply ipc failed,no consumer[{}] listener",consumerId);
+                        log.warn("reply ipc failed,no consumer[{}] listener", consumerId);
                         ReferenceCountUtil.safeRelease(payload);
                     }
                 })

@@ -56,7 +56,7 @@ public class ClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Boolean> setConfig(String key, Object value) {
-        if (value == null || key == null) {
+        if (key == null) {
             return Mono.just(true);
         }
         return cache.put(key, value);
@@ -83,5 +83,14 @@ public class ClusterConfigStorage implements ConfigStorage {
     public Mono<Boolean> clear() {
         return cache.clear()
                     .thenReturn(true);
+    }
+
+    @Override
+    public Mono<Void> refresh(Collection<String> keys) {
+        return cache.refresh(keys);
+    }
+    @Override
+    public Mono<Void> refresh() {
+        return cache.refresh();
     }
 }

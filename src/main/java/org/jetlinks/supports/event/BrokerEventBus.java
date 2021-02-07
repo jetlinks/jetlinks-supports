@@ -300,21 +300,23 @@ public class BrokerEventBus implements EventBus {
 
     }
 
-    private void doPublish(String topic, SubscriptionInfo info, TopicPayload payload) {
+    private boolean doPublish(String topic, SubscriptionInfo info, TopicPayload payload) {
         try {
             //已经取消订阅则不推送
             if (info.sink.isCancelled()) {
-                return;
+                return false;
             }
             payload.retain();
             info.sink.next(payload);
             if (log.isDebugEnabled()) {
                 log.debug("publish [{}] to [{}] complete", topic, info);
             }
+            return true;
         } catch (Throwable error) {
             log.error("publish [{}] to [{}] event error", topic, info, error);
             ReferenceCountUtil.safeRelease(payload);
         }
+        return false;
     }
 
     private Mono<Long> doPublish(String topic,
@@ -404,14 +406,18 @@ public class BrokerEventBus implements EventBus {
                                        .cache();
                                return subscribers
                                        .flatMap(sub -> cache
-                                               .doOnNext(payload -> doPublish(topic, sub, payload))
-                                               .then(Mono.just(1)))
+                                               .map((payload) -> doPublish(topic, sub, payload))
+                                               .count())
                                        .count()
                                        .flatMap((s) -> {
                                            if (s > 0) {
-                                               return cache.doOnNext(ReferenceCountUtil::safeRelease)
-                                                           .then()
-                                                           .thenReturn(s);
+                                               return cache
+                                                       .map(payload -> {
+                                                           ReferenceCountUtil.safeRelease(payload);
+                                                           return true;
+                                                       })
+                                                       .then()
+                                                       .thenReturn(s);
                                            }
                                            return Mono.just(s);
                                        });

@@ -3,7 +3,10 @@ package org.jetlinks.supports.ipc;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
-import reactor.core.publisher.*;
+import reactor.core.publisher.EmitterProcessor;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Mono;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -16,7 +19,7 @@ class IpcRequestHandler<RES> implements Disposable {
 
     FluxSink<RES> sink = processor.sink();
 
-    private final AtomicInteger seq = new AtomicInteger();
+    private final AtomicInteger seqInc = new AtomicInteger();
 
     private final AtomicInteger totalSeq = new AtomicInteger(-1);
 
@@ -26,45 +29,44 @@ class IpcRequestHandler<RES> implements Disposable {
     Mono<RES> handleRequest() {
         return processor
                 .next()
-                .doAfterTerminate(()->{
-                    disposable.dispose();
-                });
+                .doFinally((s) -> disposable.dispose());
     }
 
     Flux<RES> handleStream() {
         return processor
-                .doAfterTerminate(()->{
-                    disposable.dispose();
-                });
+                .doFinally((s) -> disposable.dispose());
     }
 
     void complete() {
+        if(processor.isDisposed()){
+            log.debug("handler is disposed");
+        }
         processor.onComplete();
         sink.complete();
     }
 
-    void handle(IpcResponse<RES> res) {
+    synchronized void handle(IpcResponse<RES> res) {
         if (res.hasResult()) {
             sink.next(res.getResult());
         }
-        if (res.getError() != null) {
+        if (res.hasError()) {
             error(res.getError());
         } else {
             int resSeq = res.getSeq();
-            int seq = resSeq < 0 ? 0 : this.seq.incrementAndGet();
+            int seq = resSeq < 0 ? -1 : this.seqInc.getAndIncrement();
             if (res.getType() == ResponseType.complete) {
-                if (seq >= resSeq || totalSeq.get() != -1) {
+                if (resSeq < 0 || seq > resSeq || totalSeq.get() != -1) {
                     complete();
                 } else {
-                    log.debug("ipc response complete early,seq[{}],total[{}]", this.seq, resSeq);
+                    log.debug("ipc response complete early,seq[{}],total[{}]", this.seqInc, resSeq);
                     totalSeq.set(resSeq);
                 }
             } else {
-                if (totalSeq.get() > 0 && seq >= totalSeq.get()) {
-                    sink.complete();
+                int total = totalSeq.get();
+                if (total >= 0 && seq + 1 >= total) {
+                    complete();
                 }
             }
-
         }
     }
 

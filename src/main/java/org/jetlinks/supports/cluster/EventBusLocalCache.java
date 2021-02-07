@@ -41,7 +41,15 @@ public class EventBusLocalCache<K, V> extends AbstractLocalCache<K, V> {
                               EventBus eventBus,
                               ClusterCache<K, V> clusterCache,
                               Cache<K, Object> localCache) {
-        super(clusterCache, localCache);
+        this(name, eventBus, clusterCache, localCache, true);
+    }
+
+    public EventBusLocalCache(String name,
+                              EventBus eventBus,
+                              ClusterCache<K, V> clusterCache,
+                              Cache<K, Object> localCache,
+                              boolean cacheEmpty) {
+        super(clusterCache, localCache, cacheEmpty);
         this.eventBus = eventBus;
         this.topicPrefix = "/_sys/cluster_cache/" + name;
     }
@@ -63,14 +71,14 @@ public class EventBusLocalCache<K, V> extends AbstractLocalCache<K, V> {
     @Override
     protected Mono<Void> onRemove(Collection<? extends K> key) {
         return eventBus
-                .publish(topicPrefix + "/remove/*", encoder, notifyData)
+                .publish(topicPrefix + "/remove/__all", encoder, notifyData)
                 .then();
     }
 
     @Override
     protected Mono<Void> onClear() {
         return eventBus
-                .publish(topicPrefix + "/remove/*", encoder, notifyData)
+                .publish(topicPrefix + "/remove/__all", encoder, notifyData)
                 .then();
     }
 }

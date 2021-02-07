@@ -7,10 +7,8 @@ import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
 
@@ -38,14 +36,14 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
     @Override
     public Flux<Map.Entry<K, V>> get(Collection<K> key) {
         return hash.multiGet(redisKey, key)
-                .flatMapIterable(list -> {
-                    Object[] keyArr = key.toArray();
-                    List<Map.Entry<K, V>> entries = new ArrayList<>(keyArr.length);
-                    for (int i = 0; i < list.size(); i++) {
-                        entries.add(new RedisSimpleEntry((K) keyArr[i], list.get(i)));
-                    }
-                    return entries;
-                });
+                   .flatMapIterable(list -> {
+                       Object[] keyArr = key.toArray();
+                       List<Map.Entry<K, V>> entries = new ArrayList<>(keyArr.length);
+                       for (int i = 0; i < list.size(); i++) {
+                           entries.add(new RedisSimpleEntry((K) keyArr[i], list.get(i)));
+                       }
+                       return entries;
+                   });
     }
 
     @Override
@@ -62,19 +60,19 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
     public Mono<V> getAndRemove(K key) {
         // TODO: 2020/8/24 使用script实现?
         return hash.get(redisKey, key)
-                .flatMap(v -> remove(key).thenReturn(v));
+                   .flatMap(v -> remove(key).thenReturn(v));
     }
 
     @Override
     public Mono<Boolean> remove(K key) {
         return hash.remove(redisKey, key)
-                .thenReturn(true);
+                   .thenReturn(true);
     }
 
     @Override
     public Mono<Boolean> remove(Collection<K> key) {
         return hash.remove(redisKey, key.toArray())
-                .thenReturn(true);
+                   .thenReturn(true);
     }
 
     @Override
@@ -100,19 +98,31 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
         if (CollectionUtils.isEmpty(multi)) {
             return Mono.just(true);
         }
+        List<K> remove = multi.entrySet()
+                              .stream()
+                              .filter(e -> e.getValue() == null)
+                              .map(Map.Entry::getKey)
+                              .collect(Collectors.toList());
+        if (remove.size() > 0) {
+            Map<K, V> newTarget = new HashMap<>(multi);
+            remove.forEach(newTarget::remove);
+            return hash
+                    .remove(redisKey, remove.toArray())
+                    .then(hash.putAll(redisKey, newTarget));
+        }
         return hash.putAll(redisKey, multi);
     }
 
     @Override
     public Mono<Integer> size() {
         return hash.size(redisKey)
-                .map(Number::intValue);
+                   .map(Number::intValue);
     }
 
     @Override
     public Flux<Map.Entry<K, V>> entries() {
         return hash.scan(redisKey)
-                .map(RedisHashEntry::new);
+                   .map(RedisHashEntry::new);
     }
 
     @Override
