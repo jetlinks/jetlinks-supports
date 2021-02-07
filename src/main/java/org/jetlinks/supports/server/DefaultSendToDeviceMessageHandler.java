@@ -81,7 +81,7 @@ public class DefaultSendToDeviceMessageHandler {
                         // https://github.com/jetlinks/jetlinks-pro/issues/19
                         children.setHeaders(message.getHeaders());
 
-                        ChildrenDeviceSession childrenDeviceSession = sessionManager.getSession(deviceId, operator.getDeviceId());
+                        ChildrenDeviceSession childrenDeviceSession = sessionManager.getSession(operator.getDeviceId(), deviceId);
                         if (null != childrenDeviceSession) {
                             doSend(children, childrenDeviceSession);
                             return Mono.just(true);
