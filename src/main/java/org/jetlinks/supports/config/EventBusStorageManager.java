@@ -4,6 +4,7 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import io.netty.util.ReferenceCountUtil;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.config.ConfigStorageManager;
@@ -17,6 +18,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+@Slf4j
 public class EventBusStorageManager implements ConfigStorageManager {
 
     private final ConcurrentMap<String, ClusterConfigStorage> cache;
@@ -53,20 +55,26 @@ public class EventBusStorageManager implements ConfigStorageManager {
         };
         eventBus
                 .subscribe(Subscription
-                                   .of("event-bus-storage-listener",
-                                       new String[]{"/_sys/cluster_cache/*/*/*"},
-                                       Subscription.Feature.broker))
+                                   .builder()
+                                   .subscriberId("event-bus-storage-listener")
+                                   .topics("/_sys/cluster_cache/*/*/*")
+                                   .justBroker()
+                                   .build()
+                )
                 .subscribe(payload -> {
                     try {
                         Map<String, String> vars = payload.getTopicVars("/_sys/cluster_cache/{name}/{type}/{key}");
 
                         ClusterConfigStorage storage = cache.get(vars.get("name"));
                         if (storage != null) {
+                            log.trace("clear local cache :{}", vars);
                             EventBusLocalCache eventBusLocalCache = ((EventBusLocalCache) storage.getCache());
                             eventBusLocalCache.clearLocalCache(vars.get("key"));
+                        } else {
+                            log.trace("ignore clear local cache :{}", vars);
                         }
-                    } catch (Throwable ignore) {
-
+                    } catch (Throwable error) {
+                        log.warn("clearn local cache error", error);
                     } finally {
                         ReferenceCountUtil.safeRelease(payload);
                     }
