@@ -210,4 +210,27 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         this.expands = json.getJSONObject("expands");
 
     }
+
+    @Override
+    public DeviceMetadata merge(DeviceMetadata metadata) {
+        JetLinksDeviceMetadata deviceMetadata = new JetLinksDeviceMetadata(this);
+
+        for (PropertyMetadata property : metadata.getProperties()) {
+            deviceMetadata.properties.put(property.getId(), property);
+        }
+
+        for (FunctionMetadata func : metadata.getFunctions()) {
+            deviceMetadata.functions.put(func.getId(), func);
+        }
+
+        for (EventMetadata event : metadata.getEvents()) {
+            deviceMetadata.events.put(event.getId(), event);
+        }
+
+        for (PropertyMetadata tag : metadata.getTags()) {
+            deviceMetadata.tags.put(tag.getId(), tag);
+        }
+
+        return deviceMetadata;
+    }
 }
