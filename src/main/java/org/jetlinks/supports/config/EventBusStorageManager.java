@@ -84,6 +84,6 @@ public class EventBusStorageManager implements ConfigStorageManager {
     @Override
     @SneakyThrows
     public Mono<ConfigStorage> getStorage(String id) {
-        return Mono.just(cache.computeIfAbsent(id, storageBuilder));
+        return Mono.fromSupplier(() -> cache.computeIfAbsent(id, storageBuilder));
     }
 }
