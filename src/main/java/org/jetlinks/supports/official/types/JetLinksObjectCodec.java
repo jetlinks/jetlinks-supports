@@ -41,11 +41,14 @@ public class JetLinksObjectCodec extends AbstractDataTypeCodec<ObjectType> {
     @Override
     protected void doEncode(Map<String, Object> encoded, ObjectType type) {
         super.doEncode(encoded, type);
-        encoded.put("properties", type
-                .getProperties()
-                .stream()
-                .map(JetLinksPropertyMetadata::new)
-                .map(PropertyMetadata::toJson)
-                .collect(Collectors.toList()));
+        if (type.getProperties() != null) {
+            encoded.put("properties", type
+                    .getProperties()
+                    .stream()
+                    .map(JetLinksPropertyMetadata::new)
+                    .map(PropertyMetadata::toJson)
+                    .collect(Collectors.toList()));
+        }
+
     }
 }
