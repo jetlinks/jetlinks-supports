@@ -22,6 +22,7 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
 
     private JSONObject json;
 
+    @Setter
     private transient DataType dataType;
 
     @Getter

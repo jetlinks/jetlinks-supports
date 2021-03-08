@@ -84,6 +84,12 @@ import reactor.core.publisher.Mono;
  */
 public class JetLinksDeviceMetadataCodec implements DeviceMetadataCodec {
 
+    private static final JetLinksDeviceMetadataCodec INSTANCE = new JetLinksDeviceMetadataCodec();
+
+    public static JetLinksDeviceMetadataCodec getInstance(){
+        return INSTANCE;
+    }
+
     @Override
     public String getId() {
         return "jetlinks";
