@@ -40,7 +40,6 @@ public class JetLinksEventMetadata implements EventMetadata {
     @Setter
     private Map<String, Object> expands;
 
-
     public JetLinksEventMetadata(JSONObject jsonObject) {
         fromJson(jsonObject);
     }

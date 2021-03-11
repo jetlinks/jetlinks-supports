@@ -1,6 +1,7 @@
 package org.jetlinks.supports.official;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import org.hswebframework.web.dict.EnumDict;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.PropertyMetadata;
 import org.jetlinks.core.metadata.types.*;
@@ -11,11 +12,11 @@ import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
-public class DeviceMedataParser {
+public class DeviceMetadataParser {
 
-
-    public static PropertyMetadata withField(Field field) {
+    public static PropertyMetadata withField(Field field,ResolvableType type) {
         Schema schema = field.getAnnotation(Schema.class);
         String id = field.getName();
         String name = schema == null ? field.getName() : schema.description();
@@ -23,7 +24,7 @@ public class DeviceMedataParser {
         JetLinksPropertyMetadata metadata = new JetLinksPropertyMetadata();
         metadata.setId(id);
         metadata.setName(name);
-        metadata.setDataType(withType(ResolvableType.forField(field)));
+        metadata.setDataType(withType(type));
 
         return metadata;
 
@@ -31,10 +32,21 @@ public class DeviceMedataParser {
 
     public static DataType withType(ResolvableType type) {
         Class<?> clazz = type.toClass();
-        if (clazz.isAssignableFrom(List.class)) {
+        if (clazz == Object.class) {
+            return null;
+        }
+        if (List.class.isAssignableFrom(clazz)) {
             ArrayType arrayType = new ArrayType();
             arrayType.setElementType(withType(type.getGeneric(0)));
             return arrayType;
+        }
+        if (clazz.isArray()) {
+            ArrayType arrayType = new ArrayType();
+            arrayType.setElementType(withType(ResolvableType.forType(clazz.getComponentType())));
+            return arrayType;
+        }
+        if (Map.class.isAssignableFrom(clazz)) {
+            return new ObjectType();
         }
         if (clazz == String.class || clazz == Character.class) {
             return new StringType();
@@ -60,13 +72,29 @@ public class DeviceMedataParser {
         if (clazz == Date.class || clazz == LocalDateTime.class) {
             return new DateTimeType();
         }
+        if (clazz == Boolean.class || clazz == boolean.class) {
+            return new BooleanType();
+        }
+        if (clazz.isEnum()) {
+            EnumType enumType = new EnumType();
+            for (Object constant : clazz.getEnumConstants()) {
+                if (constant instanceof EnumDict) {
+                    EnumDict<?> dict = ((EnumDict<?>) constant);
+                    enumType.addElement(EnumType.Element.of(String.valueOf(dict.getValue()), dict.getText()));
+                } else {
+                    Enum<?> dict = ((Enum<?>) constant);
+                    enumType.addElement(EnumType.Element.of(String.valueOf(dict.ordinal()), dict.name()));
+                }
+            }
+            return enumType;
+        }
 
         ObjectType objectType = new ObjectType();
 
         ReflectionUtils.doWithFields(type.toClass(), field -> {
             Schema schema = field.getAnnotation(Schema.class);
             if (schema != null && !schema.hidden()) {
-                objectType.addPropertyMetadata(withField(field));
+                objectType.addPropertyMetadata(withField(field,ResolvableType.forField(field,type)));
             }
         });
         return objectType;

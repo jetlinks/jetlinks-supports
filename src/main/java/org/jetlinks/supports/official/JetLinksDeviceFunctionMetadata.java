@@ -24,8 +24,10 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
 
     private transient FunctionMetadata another;
 
+    @Setter
     private List<PropertyMetadata> inputs;
 
+    @Setter
     private DataType output;
 
     @Getter
@@ -47,6 +49,8 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     @Getter
     @Setter
     private Map<String, Object> expands;
+
+    public JetLinksDeviceFunctionMetadata(){}
 
     public JetLinksDeviceFunctionMetadata(JSONObject jsonObject) {
         fromJson(jsonObject);
