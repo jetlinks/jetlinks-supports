@@ -126,7 +126,13 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
             return eventBus
                     .publish("/_sys/device-state-check/".concat(deviceGatewayServerId), request)
-                    .thenMany(processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
+                    .flatMapMany(i -> {
+                        if (i == 0) {
+                            log.warn("JetLinks server [{}] not found", deviceGatewayServerId);
+                            return Mono.empty();
+                        }
+                        return processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList()));
+                    })
                     .timeout(Duration.ofSeconds(5), Flux.empty())
                     .doFinally((s) -> {
                         log.trace("check device state complete take {}ms", System.currentTimeMillis() - startWith);

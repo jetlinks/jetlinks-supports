@@ -18,6 +18,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import javax.annotation.Nonnull;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
@@ -79,8 +80,10 @@ public class DefaultSendToDeviceMessageHandler {
                         children.setChildDeviceMessage(message);
                         // 没有传递header
                         // https://github.com/jetlinks/jetlinks-pro/issues/19
-                        children.setHeaders(message.getHeaders());
-
+                        if (null != message.getHeaders()) {
+                            children.setHeaders(new ConcurrentHashMap<>(message.getHeaders()));
+                        }
+                        message.addHeader(Headers.dispatchToParent, true);
                         ChildrenDeviceSession childrenDeviceSession = sessionManager.getSession(operator.getDeviceId(), deviceId);
                         if (null != childrenDeviceSession) {
                             doSend(children, childrenDeviceSession);
@@ -92,13 +95,11 @@ public class DefaultSendToDeviceMessageHandler {
                             return Mono.just(true);
                         }
                         //回复离线
-                        return doReply(createReply(deviceId, message)
-                                               .error(ErrorCode.CLIENT_OFFLINE));
+                        return doReply(createReply(deviceId, message).error(ErrorCode.CLIENT_OFFLINE));
                     })
                     .switchIfEmpty(Mono.defer(() -> {
                         log.warn("device[{}] not connected,send message fail", message.getDeviceId());
-                        return doReply(createReply(deviceId, message)
-                                               .error(ErrorCode.CLIENT_OFFLINE));
+                        return doReply(createReply(deviceId, message).error(ErrorCode.CLIENT_OFFLINE));
                     }))
                     .subscribe();
 
