@@ -37,6 +37,9 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
     @Override
     protected void doEncode(Map<String, Object> encoded, EnumType type) {
         super.doEncode(encoded, type);
+        if(type.getElements()==null){
+            return;
+        }
         encoded.put("elements", type.getElements()
                 .stream()
                 .map(EnumType.Element::toMap).collect(Collectors.toList()));
