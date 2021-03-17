@@ -3,14 +3,13 @@ package org.jetlinks.supports.official;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import lombok.Setter;
+import org.hswebframework.web.dict.EnumDict;
 import org.jetlinks.core.metadata.DataType;
-import org.jetlinks.core.metadata.types.IntType;
-import org.jetlinks.core.metadata.types.ObjectType;
-import org.jetlinks.core.metadata.types.StringType;
+import org.jetlinks.core.metadata.types.*;
 import org.junit.Test;
 import org.springframework.core.ResolvableType;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertTrue;
 
 public class DeviceMetadataParserTest {
 
@@ -35,6 +34,18 @@ public class DeviceMetadataParserTest {
                 objectType.getProperty("id").get().getValueType() instanceof StringType
         );
 
+        assertTrue(
+                objectType.getProperty("enums").get().getValueType() instanceof EnumType
+        );
+
+        assertTrue(
+                objectType.getProperty("dict").get().getValueType() instanceof EnumType
+        );
+
+        assertTrue(
+                objectType.getProperty("dicts").get().getValueType() instanceof ArrayType
+        );
+
     }
 
     @Getter
@@ -46,6 +57,14 @@ public class DeviceMetadataParserTest {
         @Schema(description = "obj")
         private Entity obj;
 
+        @Schema(description = "enums")
+        private SimpleEnum enums;
+
+        @Schema(description = "dict")
+        private DicEnum dict;
+
+        @Schema(description = "dicts")
+        private DicEnum[] dicts;
     }
 
     @Getter
@@ -62,5 +81,21 @@ public class DeviceMetadataParserTest {
 
         @Schema(description = "id")
         private T id;
+    }
+    enum DicEnum implements EnumDict<String> {
+        a,b,v;
+
+        @Override
+        public String getValue() {
+            return name();
+        }
+
+        @Override
+        public String getText() {
+            return name().toUpperCase();
+        }
+    }
+    enum SimpleEnum{
+        a,b,v
     }
 }
