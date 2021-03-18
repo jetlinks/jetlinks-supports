@@ -52,17 +52,17 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         this.properties = another.getProperties()
                                  .stream()
                                  .map(JetLinksPropertyMetadata::new)
-                                 .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a));
+                                 .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a,LinkedHashMap::new));
 
         this.functions = another.getFunctions()
                                 .stream()
                                 .map(JetLinksDeviceFunctionMetadata::new)
-                                .collect(Collectors.toMap(JetLinksDeviceFunctionMetadata::getId, Function.identity(), (a, b) -> a));
+                                .collect(Collectors.toMap(JetLinksDeviceFunctionMetadata::getId, Function.identity(), (a, b) -> a,LinkedHashMap::new));
 
         this.events = another.getEvents()
                              .stream()
                              .map(JetLinksEventMetadata::new)
-                             .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a));
+                             .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a,LinkedHashMap::new));
 
     }
 
@@ -132,11 +132,11 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
             events = Optional
                     .ofNullable(jsonObject.getJSONArray("events"))
                     .map(Collection::stream)
-                    .map(stream -> stream
+                    .<Map<String,EventMetadata>>map(stream -> stream
                             .map(JSONObject.class::cast)
                             .map(JetLinksEventMetadata::new)
                             .map(EventMetadata.class::cast)
-                            .collect(Collectors.toMap(EventMetadata::getId, Function.identity(), (a, b) -> a))
+                            .collect(Collectors.toMap(EventMetadata::getId, Function.identity(), (a, b) -> a,LinkedHashMap::new))
                     )
                     .orElse(Collections.emptyMap());
         }
