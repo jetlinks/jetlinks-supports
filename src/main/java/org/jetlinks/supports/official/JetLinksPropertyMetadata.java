@@ -3,12 +3,15 @@ package org.jetlinks.supports.official;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.collections.MapUtils;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.DataTypeCodec;
+import org.jetlinks.core.metadata.MergeOption;
 import org.jetlinks.core.metadata.PropertyMetadata;
 import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.core.metadata.types.UnknownType;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -118,5 +121,17 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
                            getValueType().getId(), " ", getId(), " /* ", getName(), " */ "
         );
 
+    }
+
+    @Override
+    public PropertyMetadata merge(PropertyMetadata another, MergeOption... option) {
+        JetLinksPropertyMetadata metadata = new JetLinksPropertyMetadata(this);
+        if (metadata.expands == null) {
+            metadata.expands = new HashMap<>();
+        }
+        if (MapUtils.isNotEmpty(another.getExpands())) {
+            another.getExpands().forEach(metadata.expands::putIfAbsent);
+        }
+        return metadata;
     }
 }

@@ -3,11 +3,14 @@ package org.jetlinks.supports.official;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.collections.MapUtils;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.EventMetadata;
+import org.jetlinks.core.metadata.MergeOption;
 import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.core.metadata.types.UnknownType;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -90,5 +93,17 @@ public class JetLinksEventMetadata implements EventMetadata {
         this.description = json.getString("description");
         this.expands = json.getJSONObject("expands");
 
+    }
+
+    @Override
+    public EventMetadata merge(EventMetadata another, MergeOption... option) {
+        JetLinksEventMetadata metadata = new JetLinksEventMetadata(this);
+        if (metadata.expands == null) {
+            metadata.expands = new HashMap<>();
+        }
+        if (MapUtils.isNotEmpty(another.getExpands())) {
+            another.getExpands().forEach(metadata.expands::putIfAbsent);
+        }
+        return metadata;
     }
 }
