@@ -174,7 +174,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                            .then(operator.getProtocol())
                            .flatMap(protocol -> protocol.onDeviceRegister(operator))
                            //绑定设备到产品
-                           .then(clusterManager.<String>getSet("device-product-bind:" + deviceInfo.getProductId()).add(deviceInfo.getId()))
+                           .then(clusterManager.<String>getSet("device-product-bind:" + deviceInfo.getProductId()).add(deviceInfo
+                                                                                                                               .getId()))
                            .thenReturn(operator);
         });
     }
@@ -211,8 +212,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                 .then(
                         manager.getStorage("device:" + deviceId)
                                .flatMap(ConfigStorage::clear)
-                               .doOnSuccess(r -> operatorCache.invalidate(deviceId))
                 )
+                .doFinally(r -> operatorCache.invalidate(deviceId))
                 .then();
     }
 
@@ -226,8 +227,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                 .then(
                         manager.getStorage("device-product:" + productId)
                                .flatMap(ConfigStorage::clear)
-                               .doOnSuccess(r -> productOperatorMap.remove(productId))
                 )
+                .doFinally(s -> productOperatorMap.remove(productId))
                 .then();
 
     }
@@ -236,7 +237,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.interceptor.addInterceptor(interceptor);
     }
 
-    public void addStateChecker(DeviceStateChecker deviceStateChecker){
+    public void addStateChecker(DeviceStateChecker deviceStateChecker) {
         this.stateChecker.addDeviceStateChecker(deviceStateChecker);
     }
 }
