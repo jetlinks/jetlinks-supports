@@ -89,10 +89,18 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
-        DeviceMessageTracer.trace(message,"reply.before");
+        DeviceMessageTracer.trace(message, "reply.before");
         if (StringUtils.isEmpty(message.getMessageId())) {
             log.warn("reply message messageId is empty: {}", message);
             return Mono.just(false);
+        }
+
+        Mono<Boolean> then = Mono.empty();
+        if (message instanceof ChildDeviceMessageReply) {
+            Message childDeviceMessage = ((ChildDeviceMessageReply) message).getChildDeviceMessage();
+            if (childDeviceMessage instanceof DeviceMessageReply) {
+                then = reply(((DeviceMessageReply) childDeviceMessage));
+            }
         }
         return Mono
                 .defer(() -> {
@@ -105,7 +113,8 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                     return this
                             .doReply(message)
                             .thenReturn(true);
-                });
+                })
+                .then(then);
     }
 
     protected void handleReply(DeviceMessageReply message) {
