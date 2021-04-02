@@ -37,7 +37,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
             .<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>>removalListener(notify -> {
                 if (notify.getCause() == EXPIRED) {
                     try {
-                        log.debug("discard await reply message[{}] processor", notify.getKey());
+                        AbstractDeviceOperationBroker.log.debug("discard await reply message[{}] processor", notify.getKey());
                         notify.getValue().onComplete();
                     } catch (Throwable ignore) {
                     }
@@ -60,7 +60,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                 .computeIfAbsent(id, ignore -> UnicastProcessor.create())
                 .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
                 .doFinally(signal -> {
-                    log.trace("reply device message {} {} take {}ms", deviceId, messageId, System.currentTimeMillis() - startWith);
+                    AbstractDeviceOperationBroker.log.trace("reply device message {} {} take {}ms", deviceId, messageId, System.currentTimeMillis() - startWith);
                     replyProcessor.remove(id);
                     fragmentCounter.remove(id);
                 });
@@ -163,6 +163,6 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
     }
 
     @Setter
-    private ReplyFailureHandler replyFailureHandler = (error, message) -> log.warn("unhandled reply message:{}", message, error);
+    private ReplyFailureHandler replyFailureHandler = (error, message) -> AbstractDeviceOperationBroker.log.warn("unhandled reply message:{}", message, error);
 
 }

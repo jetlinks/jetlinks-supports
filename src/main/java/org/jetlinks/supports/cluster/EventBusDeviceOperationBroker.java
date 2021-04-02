@@ -46,7 +46,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
             .<String, RepayableDeviceMessage<?>>removalListener(notify -> {
                 if (notify.getCause() == EXPIRED) {
                     try {
-                        log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());
+                        EventBusDeviceOperationBroker.log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());
                     } catch (Throwable ignore) {
                     }
                 }
