@@ -102,7 +102,7 @@ public class JetLinksEventMetadata implements EventMetadata {
             metadata.expands = new HashMap<>();
         }
         if (MapUtils.isNotEmpty(another.getExpands())) {
-            another.getExpands().forEach(metadata.expands::putIfAbsent);
+            another.getExpands().forEach(metadata.expands::put);
         }
         return metadata;
     }

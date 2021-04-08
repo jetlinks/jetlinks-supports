@@ -150,7 +150,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
             function.expands = new HashMap<>();
         }
         if (MapUtils.isNotEmpty(another.getExpands())) {
-            another.getExpands().forEach(function.expands::putIfAbsent);
+            another.getExpands().forEach(function.expands::put);
         }
         Map<String, PropertyMetadata> inputs = new LinkedHashMap<>();
 
