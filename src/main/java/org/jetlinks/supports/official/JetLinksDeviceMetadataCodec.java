@@ -86,7 +86,7 @@ public class JetLinksDeviceMetadataCodec implements DeviceMetadataCodec {
 
     private static final JetLinksDeviceMetadataCodec INSTANCE = new JetLinksDeviceMetadataCodec();
 
-    public static JetLinksDeviceMetadataCodec getInstance(){
+    public static JetLinksDeviceMetadataCodec getInstance() {
         return INSTANCE;
     }
 
@@ -95,13 +95,21 @@ public class JetLinksDeviceMetadataCodec implements DeviceMetadataCodec {
         return "jetlinks";
     }
 
+    public DeviceMetadata doDecode(String json) {
+        return new JetLinksDeviceMetadata(JSON.parseObject(json));
+    }
+
     @Override
     public Mono<DeviceMetadata> decode(String source) {
-        return Mono.just(new JetLinksDeviceMetadata(JSON.parseObject(source)));
+        return Mono.just(doDecode(source));
+    }
+
+    public String doEncode(DeviceMetadata metadata) {
+        return new JetLinksDeviceMetadata(metadata).toJson().toJSONString();
     }
 
     @Override
     public Mono<String> encode(DeviceMetadata metadata) {
-        return Mono.just(new JetLinksDeviceMetadata(metadata).toJson().toJSONString());
+        return Mono.just(doEncode(metadata));
     }
 }

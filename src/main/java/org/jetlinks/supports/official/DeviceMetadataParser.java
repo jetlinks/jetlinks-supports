@@ -83,7 +83,7 @@ public class DeviceMetadataParser {
                     enumType.addElement(EnumType.Element.of(String.valueOf(dict.getValue()), dict.getText()));
                 } else {
                     Enum<?> dict = ((Enum<?>) constant);
-                    enumType.addElement(EnumType.Element.of(String.valueOf(dict.ordinal()), dict.name()));
+                    enumType.addElement(EnumType.Element.of(dict.name(), dict.name()));
                 }
             }
             return enumType;
