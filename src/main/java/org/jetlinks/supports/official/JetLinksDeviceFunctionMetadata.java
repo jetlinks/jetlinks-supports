@@ -4,7 +4,6 @@ import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.collections.CollectionUtils;
-import org.apache.commons.collections.MapUtils;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.core.metadata.types.UnknownType;
@@ -60,7 +59,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         this.id = another.getId();
         this.name = another.getName();
         this.description = another.getDescription();
-        this.expands = getExpands();
+        this.expands = another.getExpands()==null?null:new HashMap<>(another.getExpands());
         this.another = another;
         this.async = another.isAsync();
     }
@@ -149,9 +148,8 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         if (function.expands == null) {
             function.expands = new HashMap<>();
         }
-        if (MapUtils.isNotEmpty(another.getExpands())) {
-            another.getExpands().forEach(function.expands::put);
-        }
+        MergeOption.ExpandsMerge.doWith(DeviceMetadataType.function, another.getExpands(), function.expands, option);
+
         Map<String, PropertyMetadata> inputs = new LinkedHashMap<>();
 
         if (CollectionUtils.isNotEmpty(function.getInputs())) {
@@ -169,7 +167,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
                     if (MergeOption.has(MergeOption.ignoreExists, option)) {
                         return v;
                     }
-                    return v.merge(input);
+                    return v.merge(input,option);
                 });
             }
         }
