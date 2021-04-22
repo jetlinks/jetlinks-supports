@@ -234,6 +234,10 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     public DeviceMetadata merge(DeviceMetadata metadata, MergeOption... options) {
         JetLinksDeviceMetadata deviceMetadata = new JetLinksDeviceMetadata(this);
 
+        if (MergeOption.has(MergeOption.overwriteProperty, options)) {
+            deviceMetadata.properties.clear();
+        }
+
         for (PropertyMetadata property : metadata.getProperties()) {
             doMerge(deviceMetadata.properties, property, PropertyMetadata::merge, options);
         }
