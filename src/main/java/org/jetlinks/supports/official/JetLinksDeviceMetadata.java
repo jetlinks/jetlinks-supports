@@ -241,6 +241,16 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         for (PropertyMetadata property : metadata.getProperties()) {
             doMerge(deviceMetadata.properties, property, PropertyMetadata::merge, options);
         }
+        //属性过滤
+        if (MergeOption.PropertyFilter.has(options)) {
+            Map<String, PropertyMetadata> temp = new LinkedHashMap<>(deviceMetadata.properties);
+            deviceMetadata.properties.clear();
+            for (Map.Entry<String, PropertyMetadata> entry : temp.entrySet()) {
+                if (MergeOption.PropertyFilter.doFilter(entry.getValue(), options)) {
+                    deviceMetadata.properties.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }
 
         for (FunctionMetadata func : metadata.getFunctions()) {
             doMerge(deviceMetadata.functions, func, FunctionMetadata::merge, options);
