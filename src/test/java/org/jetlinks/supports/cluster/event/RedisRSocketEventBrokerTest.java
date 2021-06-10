@@ -11,7 +11,6 @@ import org.jetlinks.supports.cluster.RedisHelper;
 import org.jetlinks.supports.cluster.redis.RedisClusterManager;
 import org.jetlinks.supports.event.BrokerEventBus;
 import org.jetlinks.supports.ipc.EventBusIpcService;
-import org.junit.After;
 import org.junit.Test;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import reactor.core.Disposable;
@@ -33,13 +32,13 @@ public class RedisRSocketEventBrokerTest {
         //ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
     }
 
-    @After
-    public void shutdown() {
-        disposable.dispose();
+//    @After
+//    public void shutdown() {
+//        disposable.dispose();
 //        reactiveRedisTemplate.execute(connection -> {
 //            return connection.serverCommands().flushDb();
 //        }).blockLast();
-    }
+//    }
 
 
     @Test
