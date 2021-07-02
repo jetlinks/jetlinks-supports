@@ -47,7 +47,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
         this.localConsumerPercent = localConsumerPercent;
     }
 
-    private static final RedisScript<List<?>> lifoPollScript = RedisScript.of(
+    private static final RedisScript<List> lifoPollScript = RedisScript.of(
             String.join("\n"
                     , "local val = redis.call('lrange',KEYS[1],0,KEYS[2]);"
                     , "redis.call('ltrim',KEYS[1],KEYS[2]+1,-1);"
@@ -55,7 +55,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
             , List.class
     );
 
-    private static final RedisScript<List<?>> fifoPollScript = RedisScript.of(
+    private static final RedisScript<List> fifoPollScript = RedisScript.of(
             String.join("\n"
                     , "local size = redis.call('llen',KEYS[1]);"
                     , "if size == 0 then"
