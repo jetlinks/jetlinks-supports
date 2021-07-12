@@ -19,6 +19,11 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * http://www.h2database.com/html/mvstore.html
+ *
+ * @param <T> Type
+ */
 class MVStoreQueue<T> implements FileQueue<T> {
 
     private MVStore store;
@@ -71,6 +76,15 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
 
     @Override
+    public void flush() {
+        if (store.isClosed()) {
+            return;
+        }
+        store.commit();
+        store.sync();
+    }
+
+    @Override
     public synchronized void close() {
         if (store.isClosed()) {
             return;
@@ -85,6 +99,9 @@ class MVStoreQueue<T> implements FileQueue<T> {
     }
 
     private T decode(byte[] data) {
+        if (data == null) {
+            return null;
+        }
         Payload payload = Payload.of(data);
         try {
             return codec.decode(payload);
@@ -139,7 +156,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
     }
 
     @Override
-    public synchronized boolean add(T t) {
+    public boolean add(T t) {
         mvMap.put(index.incrementAndGet(), encode(t));
         return true;
     }
@@ -174,13 +191,13 @@ class MVStoreQueue<T> implements FileQueue<T> {
     }
 
     @Override
-    public synchronized void clear() {
+    public void clear() {
         mvMap.clear();
         index.set(0);
     }
 
     @Override
-    public synchronized boolean offer(T t) {
+    public boolean offer(T t) {
         add(t);
         return true;
     }
@@ -196,11 +213,11 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public synchronized T poll() {
-        if (mvMap.isEmpty()) {
+        byte[] removed = mvMap.remove(mvMap.firstKey());
+        if (removed == null) {
             index.set(0);
             return null;
         }
-        byte[] removed = mvMap.remove(mvMap.firstKey());
         return decode(removed);
     }
 
@@ -214,7 +231,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
     }
 
     @Override
-    public synchronized T peek() {
+    public T peek() {
         byte[] removed = mvMap.get(mvMap.firstKey());
         return decode(removed);
     }
