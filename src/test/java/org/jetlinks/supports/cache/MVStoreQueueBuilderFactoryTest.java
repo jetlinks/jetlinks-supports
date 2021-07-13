@@ -6,10 +6,12 @@ import org.jetlinks.core.codec.defaults.StringCodec;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxProcessor;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -27,13 +29,14 @@ public class MVStoreQueueBuilderFactoryTest {
                 .path(Paths.get("./target/.queue"))
                 .codec(StringCodec.UTF8)
                 .build();
-        int numberOf = 100_0000;
+        int numberOf = 20_0000;
         long time = System.currentTimeMillis();
         Duration writeTime = Flux
                 .range(0, numberOf)
-                .doOnNext(i -> strings.add("data:" + i))
-//                .flatMap(i -> Mono
-//                        .fromCompletionStage(CompletableFuture.runAsync(() -> strings.add("data:" + i),Runnable::run)))
+//                .doOnNext(i -> strings.add("data:" + i))
+                .flatMap(i -> Mono
+                        .fromCompletionStage(CompletableFuture.runAsync(() -> strings.add("data:" + i)))
+                )
                 .then()
                 .as(StepVerifier::create)
                 .verifyComplete();
@@ -43,10 +46,10 @@ public class MVStoreQueueBuilderFactoryTest {
 
         Duration pollTime = Flux
                 .range(0, numberOf)
-                .map(i -> strings.poll())
-//                .flatMap(i -> {
-//                    return Mono.fromCompletionStage(CompletableFuture.supplyAsync(strings::poll, Runnable::run));
-//                })
+//                .map(i -> strings.poll())
+                .flatMap(i -> {
+                    return Mono.fromCompletionStage(CompletableFuture.supplyAsync(strings::poll));
+                })
                 .as(StepVerifier::create)
                 .expectNextCount(numberOf)
                 .verifyComplete();
@@ -57,8 +60,6 @@ public class MVStoreQueueBuilderFactoryTest {
         System.out.println(System.currentTimeMillis() - time);
         strings.flush();
         strings.close();
-        Thread.sleep(10000);
-
     }
 
     @Test
@@ -68,7 +69,7 @@ public class MVStoreQueueBuilderFactoryTest {
                 .name("test-flux")
                 .path(Paths.get("./target/.queue"))
                 .codec(StringCodec.UTF8)
-                .buildFluxProcessor();
+                .buildFluxProcessor(true);
 
         processor.onNext("test");
         processor

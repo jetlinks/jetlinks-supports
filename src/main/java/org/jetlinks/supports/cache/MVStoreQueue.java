@@ -33,8 +33,6 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     private final Codec<T> codec;
 
-    private final Path filePath;
-
     private final String name;
 
     private final Path storageFile;
@@ -44,7 +42,6 @@ class MVStoreQueue<T> implements FileQueue<T> {
                  String name,
                  Codec<T> codec) {
         Files.createDirectories(filePath);
-        this.filePath = filePath;
         this.name = name;
         this.storageFile = filePath.resolve(name);
         this.codec = codec;
@@ -64,6 +61,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
         store = new MVStore.Builder()
                 .fileName(path)
+                // TODO: 2021/7/13 配置化
                 .cacheSize(1)
                 .autoCommitDisabled()
                 .open();
@@ -93,6 +91,12 @@ class MVStoreQueue<T> implements FileQueue<T> {
         store.close();
     }
 
+    private void checkClose() {
+        if (store.isClosed()) {
+            throw new IllegalStateException("file queue " + name + " is closed");
+        }
+    }
+
     private byte[] encode(T data) {
         return codec.encode(data)
                     .getBytes(true);
@@ -103,31 +107,39 @@ class MVStoreQueue<T> implements FileQueue<T> {
             return null;
         }
         Payload payload = Payload.of(data);
+        T val = null;
         try {
-            return codec.decode(payload);
+            val = codec.decode(payload);
         } finally {
-            payload.release();
+            if (!(val instanceof Payload)) {
+                payload.release();
+            }
         }
+        return val;
     }
 
     @Override
     public int size() {
+        checkClose();
         return mvMap.size();
     }
 
     @Override
     public boolean isEmpty() {
+        checkClose();
         return mvMap.isEmpty();
     }
 
     @Override
     public boolean contains(Object o) {
+        checkClose();
         return mvMap.containsValue(o);
     }
 
     @Override
     @Nonnull
     public Iterator<T> iterator() {
+        checkClose();
         Cursor<Long, byte[]> cursor = mvMap.cursor(mvMap.firstKey());
 
         return new Iterator<T>() {
@@ -152,12 +164,20 @@ class MVStoreQueue<T> implements FileQueue<T> {
     @Override
     @Nonnull
     public <T1> T1[] toArray(@Nonnull T1[] a) {
+        checkClose();
         return stream().toArray((i) -> a);
     }
 
     @Override
     public boolean add(T t) {
-        mvMap.put(index.incrementAndGet(), encode(t));
+        checkClose();
+        if (null == t) {
+            return false;
+        }
+        byte[] val = encode(t);
+        do {
+            val = mvMap.put(index.incrementAndGet(), val);
+        } while (val != null);
         return true;
     }
 
@@ -168,12 +188,13 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public boolean containsAll(Collection<?> c) {
-
+        checkClose();
         return mvMap.values().containsAll(c);
     }
 
     @Override
     public boolean addAll(Collection<? extends T> c) {
+        checkClose();
         for (T t : c) {
             add(t);
         }
@@ -192,48 +213,64 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public void clear() {
+        if(mvMap.isClosed()){
+            return;
+        }
         mvMap.clear();
         index.set(0);
     }
 
     @Override
     public boolean offer(T t) {
-        add(t);
-        return true;
+        checkClose();
+        return add(t);
     }
 
     @Override
     public T remove() {
+        checkClose();
         T data = poll();
         if (data == null) {
-            throw new NoSuchElementException("No such element in file " + filePath);
+            throw new NoSuchElementException("No such element in file " + storageFile);
         }
         return data;
     }
 
     @Override
-    public synchronized T poll() {
-        byte[] removed = mvMap.remove(mvMap.firstKey());
-        if (removed == null) {
-            index.set(0);
+    public T poll() {
+        if(mvMap.isClosed()){
             return null;
         }
+        byte[] removed;
+        synchronized (this) {
+            Long key = mvMap.firstKey();
+            removed = key == null ? null : mvMap.remove(key);
+            if (removed == null) {
+                index.set(0);
+                return null;
+            }
+        }
         return decode(removed);
+
     }
 
     @Override
     public T element() {
+        if(mvMap.isClosed()){
+            return null;
+        }
         T data = peek();
         if (data == null) {
-            throw new NoSuchElementException("No such element in file " + filePath);
+            throw new NoSuchElementException("No such element in file " + storageFile);
         }
         return data;
     }
 
     @Override
     public T peek() {
-        byte[] removed = mvMap.get(mvMap.firstKey());
-        return decode(removed);
+        checkClose();
+        byte[] value = mvMap.get(mvMap.firstKey());
+        return decode(value);
     }
 
 
