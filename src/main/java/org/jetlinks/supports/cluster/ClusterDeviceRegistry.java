@@ -28,7 +28,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     private final ConfigStorageManager manager;
 
     //缓存
-    private final Cache<String, DeviceOperator> operatorCache;
+    private final Cache<String, Mono<DeviceOperator>> operatorCache;
 
     //产品
     private final Map<String, DeviceProductOperator> productOperatorMap = Caches.newCache();
@@ -59,7 +59,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                                  ConfigStorageManager storageManager,
                                  ClusterManager clusterManager,
                                  DeviceOperationBroker handler,
-                                 Cache<String, DeviceOperator> cache) {
+                                 Cache<String, Mono<DeviceOperator>> cache) {
         this.supports = supports;
         this.handler = handler;
         this.manager = storageManager;
@@ -71,7 +71,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     public ClusterDeviceRegistry(ProtocolSupports supports,
                                  ClusterManager clusterManager,
                                  DeviceOperationBroker handler,
-                                 Cache<String, DeviceOperator> cache) {
+                                 Cache<String, Mono<DeviceOperator>> cache) {
         this.supports = supports;
         this.handler = handler;
         this.manager = new ClusterConfigStorageManager(clusterManager);
@@ -110,16 +110,20 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             return Mono.empty();
         }
         {
-            DeviceOperator deviceOperator = operatorCache.getIfPresent(deviceId);
+
+            Mono<DeviceOperator> deviceOperator = operatorCache.getIfPresent(deviceId);
             if (null != deviceOperator) {
-                return Mono.just(deviceOperator);
+                return deviceOperator;
             }
         }
         DeviceOperator deviceOperator = createOperator(deviceId);
         return deviceOperator
                 .getSelfConfig(DeviceConfigKey.productId)
-                .doOnNext(r -> operatorCache.put(deviceId, deviceOperator))
-                .map((r) -> deviceOperator);
+                .doOnNext(r -> operatorCache.put(deviceId, Mono
+                        .just(deviceOperator)
+                        .filterWhen(device -> device.getSelfConfig(DeviceConfigKey.productId).hasElement())
+                ))
+                .map(ignore -> deviceOperator);
 
     }
 
@@ -157,7 +161,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     public Mono<DeviceOperator> register(DeviceInfo deviceInfo) {
         return Mono.defer(() -> {
             DefaultDeviceOperator operator = createOperator(deviceInfo.getId());
-            operatorCache.put(operator.getDeviceId(), operator);
+            operatorCache.put(operator.getDeviceId(), Mono
+                    .<DeviceOperator>just(operator)
+                    .filterWhen(device -> device.getSelfConfig(DeviceConfigKey.productId).hasElement()));
 
             Map<String, Object> configs = new HashMap<>();
             Optional.ofNullable(deviceInfo.getMetadata())
