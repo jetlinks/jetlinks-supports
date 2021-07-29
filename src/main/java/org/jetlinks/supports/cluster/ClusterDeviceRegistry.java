@@ -18,7 +18,10 @@ import reactor.core.publisher.Mono;
 import reactor.util.function.Tuple2;
 
 import java.time.Duration;
-import java.util.*;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
 public class ClusterDeviceRegistry implements DeviceRegistry {
     //全局拦截器
@@ -151,10 +154,21 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     }
 
     private DefaultDeviceProductOperator createProductOperator(String id) {
-        return new DefaultDeviceProductOperator(id, supports, manager, () -> clusterManager
-                .<String>getSet("device-product-bind:" + id)
+        return new DefaultDeviceProductOperator(id, supports, manager, () -> getDeviceByProductId(id));
+    }
+
+    protected Flux<DeviceOperator> getDeviceByProductId(String productId) {
+        return clusterManager
+                .<String>getSet("device-product-bind:" + productId)
                 .values()
-                .flatMap(this::getDevice));
+                .flatMap(this::getDevice);
+    }
+
+    protected Mono<Void> onDeviceRegister(DeviceOperator device, DeviceInfo info) {
+        return clusterManager
+                .<String>getSet("device-product-bind:" + info.getProductId())
+                .add(info.getId())
+                .then();
     }
 
     @Override
@@ -180,8 +194,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                            .then(operator.getProtocol())
                            .flatMap(protocol -> protocol.onDeviceRegister(operator))
                            //绑定设备到产品
-                           .then(clusterManager.<String>getSet("device-product-bind:" + deviceInfo.getProductId()).add(deviceInfo
-                                                                                                                               .getId()))
+                           .then(onDeviceRegister(operator, deviceInfo))
                            .thenReturn(operator);
         });
     }

@@ -118,7 +118,7 @@ public interface BinaryCodecs {
 
 
     /**
-     * 将报文转换为{@link byte}
+     * 将报文转换为{@link Byte}
      *
      * @param offset 偏移量
      * @return byte codec
