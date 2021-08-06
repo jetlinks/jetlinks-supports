@@ -21,6 +21,7 @@ import javax.annotation.Nonnull;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 @Slf4j
 @AllArgsConstructor
@@ -133,7 +134,7 @@ public class DefaultSendToDeviceMessageHandler {
         DeviceSession fSession = session.unwrap(DeviceSession.class);
         boolean forget = message.getHeader(Headers.sendAndForget).orElse(false);
 
-        fSession
+        Mono<Boolean> handler = fSession
                 .getOperator()
                 .getProtocol()
                 .flatMap(protocolSupport -> protocolSupport.getMessageCodec(fSession.getTransport()))
@@ -220,8 +221,27 @@ public class DefaultSendToDeviceMessageHandler {
                         log.error(error.getMessage(), error);
                     }
                     return forget ? Mono.empty() : this.doReply(reply.error(error));
-                })
-                .subscribe();
+                });
+
+        //自设备断开连接
+        if (message instanceof ChildDeviceMessage && ((ChildDeviceMessage) message).getChildDeviceMessage() instanceof DisconnectDeviceMessage) {
+            ChildDeviceMessage child = ((ChildDeviceMessage) message);
+            DisconnectDeviceMessage msg = (DisconnectDeviceMessage) ((ChildDeviceMessage) message).getChildDeviceMessage();
+
+            handler = registry
+                    .getDevice(msg.getDeviceId())
+                    .flatMap(operator -> operator
+                            .getSelfConfig(DeviceConfigKey.selfManageState)
+                            .filter(Boolean.FALSE::equals)
+                            .map(self -> sessionManager
+                                    .unRegisterChildren(deviceId, operator.getDeviceId())
+                                    .then(doReply(reply.success()))
+                            ))
+                    .defaultIfEmpty(handler)
+                    .flatMap(Function.identity());
+        }
+
+        handler.subscribe();
     }
 
 
