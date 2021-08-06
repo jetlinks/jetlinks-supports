@@ -5,10 +5,12 @@ import io.scalecube.cluster.ClusterImpl;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
+import io.scalecube.services.Microservices;
 import io.scalecube.transport.netty.tcp.TcpTransportFactory;
 import lombok.SneakyThrows;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 public class ScalecubeTest {
 

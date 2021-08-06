@@ -101,14 +101,34 @@
 
         <dependency>
             <groupId>io.scalecube</groupId>
-            <artifactId>scalecube-cluster</artifactId>
-            <version>2.6.9</version>
+            <artifactId>scalecube-services</artifactId>
+            <version>${scalecube.version}</version>
         </dependency>
 
         <dependency>
             <groupId>io.scalecube</groupId>
-            <artifactId>scalecube-services</artifactId>
-            <version>2.10.19</version>
+            <artifactId>scalecube-services-discovery</artifactId>
+            <version>${scalecube.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.scalecube</groupId>
+            <artifactId>scalecube-services-transport-rsocket</artifactId>
+            <version>${scalecube.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.scalecube</groupId>
+            <artifactId>scalecube-services-bytebuf-codec</artifactId>
+            <version>${scalecube.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.scalecube</groupId>
+            <artifactId>scalecube-services-transport-jackson</artifactId>
+            <version>${scalecube.version}</version>
+            <scope>test</scope>
         </dependency>
 
     </dependencies>
