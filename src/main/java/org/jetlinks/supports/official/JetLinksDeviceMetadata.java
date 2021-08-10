@@ -65,6 +65,11 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
                              .map(JetLinksEventMetadata::new)
                              .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
+        this.tags = another.getTags()
+                             .stream()
+                             .map(JetLinksPropertyMetadata::new)
+                             .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+
     }
 
     @Override
