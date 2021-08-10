@@ -195,6 +195,7 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         json.put("properties", getProperties().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("functions", getFunctions().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("events", getEvents().stream().map(Jsonable::toJson).collect(Collectors.toList()));
+        json.put("tags", getTags().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("expands", expands);
         return json;
     }
