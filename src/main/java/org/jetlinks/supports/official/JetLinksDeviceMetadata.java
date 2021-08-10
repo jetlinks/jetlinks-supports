@@ -211,6 +211,7 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         this.properties = null;
         this.events = null;
         this.functions = null;
+        this.tags = null;
         this.id = json.getString("id");
         this.name = json.getString("name");
         this.description = json.getString("description");
