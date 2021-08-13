@@ -240,6 +240,12 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                     if (isLocalConsumer() && push(v)) {
                         return Mono.just(1);
                     } else {
+                        if(!useScript){
+                            return this.operations
+                                    .opsForList()
+                                    .leftPush(id, v)
+                                    .then(getOperations().convertAndSend("queue:data:produced", id));
+                        }
                         return getOperations().execute(pushAndPublish, Arrays.asList(id), Arrays.asList(v, id));
                     }
                 })
