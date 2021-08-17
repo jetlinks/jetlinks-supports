@@ -65,6 +65,11 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
                              .map(JetLinksEventMetadata::new)
                              .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
+        this.tags = another.getTags()
+                             .stream()
+                             .map(JetLinksPropertyMetadata::new)
+                             .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+
     }
 
     @Override
@@ -195,6 +200,7 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         json.put("properties", getProperties().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("functions", getFunctions().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("events", getEvents().stream().map(Jsonable::toJson).collect(Collectors.toList()));
+        json.put("tags", getTags().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("expands", expands);
         return json;
     }
@@ -205,6 +211,7 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
         this.properties = null;
         this.events = null;
         this.functions = null;
+        this.tags = null;
         this.id = json.getString("id");
         this.name = json.getString("name");
         this.description = json.getString("description");

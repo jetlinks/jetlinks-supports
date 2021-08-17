@@ -1,5 +1,6 @@
 package org.jetlinks.supports.cluster.redis;
 
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cluster.ClusterQueue;
 import org.reactivestreams.Publisher;
@@ -78,14 +79,17 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
             , Long.class
     );
 
-    private boolean useScript;
+    @Setter
+    private boolean useScript = "true".equals(System.getProperty("jetlinks.cluster.redus.queue.batch.enabled","true"));
 
     public RedisClusterQueue(String id, ReactiveRedisTemplate<String, T> operations) {
         this.id = id;
         this.operations = operations;
-
-        LettuceConnectionFactory factory = (LettuceConnectionFactory) operations.getConnectionFactory();
-        useScript = !factory.isClusterAware();
+        if (useScript && operations.getConnectionFactory() instanceof LettuceConnectionFactory) {
+            //cluster不用script
+            LettuceConnectionFactory factory = (LettuceConnectionFactory) operations.getConnectionFactory();
+            useScript = !factory.isClusterAware();
+        }
     }
 
     protected void tryPoll() {
@@ -180,8 +184,8 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     @Override
     public Mono<Integer> size() {
         return operations.opsForList()
-                .size(id)
-                .map(Number::intValue);
+                         .size(id)
+                         .map(Number::intValue);
     }
 
     @Override
@@ -223,7 +227,9 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     private boolean isLocalConsumer() {
-        return subscribers.size() > 0 && (localConsumerPercent == 1F || ThreadLocalRandom.current().nextFloat() < localConsumerPercent);
+        return subscribers.size() > 0 && (localConsumerPercent == 1F || ThreadLocalRandom
+                .current()
+                .nextFloat() < localConsumerPercent);
     }
 
     @Override
@@ -234,6 +240,12 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                     if (isLocalConsumer() && push(v)) {
                         return Mono.just(1);
                     } else {
+                        if(!useScript){
+                            return this.operations
+                                    .opsForList()
+                                    .leftPush(id, v)
+                                    .then(getOperations().convertAndSend("queue:data:produced", id));
+                        }
                         return getOperations().execute(pushAndPublish, Arrays.asList(id), Arrays.asList(v, id));
                     }
                 })
@@ -243,16 +255,16 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     @Override
     public Mono<Boolean> addBatch(Publisher<? extends Collection<T>> publisher) {
         return Flux.from(publisher)
-                .flatMap(v -> {
-                            if (isLocalConsumer() && push(v)) {
-                                return Mono.just(1);
+                   .flatMap(v -> {
+                                if (isLocalConsumer() && push(v)) {
+                                    return Mono.just(1);
+                                }
+                                return this.operations
+                                        .opsForList()
+                                        .leftPushAll(id, v)
+                                        .then(getOperations().convertAndSend("queue:data:produced", id));
                             }
-                            return this.operations
-                                    .opsForList()
-                                    .leftPushAll(id, v)
-                                    .then(getOperations().convertAndSend("queue:data:produced", id));
-                        }
-                )
-                .then(Mono.just(true));
+                   )
+                   .then(Mono.just(true));
     }
 }
