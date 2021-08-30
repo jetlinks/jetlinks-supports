@@ -51,6 +51,16 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     public JetLinksDeviceFunctionMetadata() {
     }
 
+    public JetLinksDeviceFunctionMetadata(String id, String name,List<PropertyMetadata> inputs,DataType output) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(name, "name cannot be null");
+        Objects.requireNonNull(inputs, "inputs cannot be null");
+        this.id = id;
+        this.name = name;
+        this.inputs = inputs;
+        this.output = output;
+    }
+
     public JetLinksDeviceFunctionMetadata(JSONObject jsonObject) {
         fromJson(jsonObject);
     }

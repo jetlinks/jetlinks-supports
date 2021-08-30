@@ -41,6 +41,11 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
     @Setter
     private Map<String, Object> expands;
 
+    public JetLinksDeviceMetadata(String id, String name) {
+        this.id = id;
+        this.name = name;
+    }
+
     public JetLinksDeviceMetadata(JSONObject jsonObject) {
         this.jsonObject = jsonObject;
     }
@@ -66,9 +71,9 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
                              .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
         this.tags = another.getTags()
-                             .stream()
-                             .map(JetLinksPropertyMetadata::new)
-                             .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+                           .stream()
+                           .map(JetLinksPropertyMetadata::new)
+                           .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
     }
 
@@ -182,6 +187,34 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
             getTags();
         }
         return tags.get(id);
+    }
+
+    public void addProperty(PropertyMetadata metadata) {
+        if (this.properties == null) {
+            this.properties = new LinkedHashMap<>();
+        }
+        this.properties.put(metadata.getId(), new JetLinksPropertyMetadata(metadata));
+    }
+
+    public void addFunction(FunctionMetadata metadata) {
+        if (this.functions == null) {
+            this.functions = new LinkedHashMap<>();
+        }
+        this.functions.put(metadata.getId(), new JetLinksDeviceFunctionMetadata(metadata));
+    }
+
+    public void addEvent(EventMetadata metadata) {
+        if (this.events == null) {
+            this.events = new LinkedHashMap<>();
+        }
+        this.events.put(metadata.getId(), new JetLinksEventMetadata(metadata));
+    }
+
+    public void addTag(PropertyMetadata metadata) {
+        if (this.tags == null) {
+            this.tags = new LinkedHashMap<>();
+        }
+        this.tags.put(metadata.getId(), new JetLinksPropertyMetadata(metadata));
     }
 
     public Map<String, Object> getExpands() {
