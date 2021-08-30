@@ -14,10 +14,7 @@ import org.jetlinks.core.utils.DeviceMessageTracer;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxProcessor;
-import reactor.core.publisher.Mono;
-import reactor.core.publisher.UnicastProcessor;
+import reactor.core.publisher.*;
 
 import java.time.Duration;
 import java.util.Collection;
@@ -31,14 +28,14 @@ import static com.google.common.cache.RemovalCause.EXPIRED;
 @Slf4j
 public abstract class AbstractDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
 
-    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = CacheBuilder
+    private final Map<String, Sinks.Many<DeviceMessageReply>> replyProcessor = CacheBuilder
             .newBuilder()
             .expireAfterWrite(Duration.ofMinutes(1))
-            .<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>>removalListener(notify -> {
+            .<String, Sinks.Many<DeviceMessageReply>>removalListener(notify -> {
                 if (notify.getCause() == EXPIRED) {
                     try {
                         AbstractDeviceOperationBroker.log.debug("discard await reply message[{}] processor", notify.getKey());
-                        notify.getValue().onComplete();
+                        notify.getValue().tryEmitComplete();
                     } catch (Throwable ignore) {
                     }
                 }
@@ -57,7 +54,8 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
         long startWith = System.currentTimeMillis();
         String id = getAwaitReplyKey(deviceId, messageId);
         return replyProcessor
-                .computeIfAbsent(id, ignore -> UnicastProcessor.create())
+                .computeIfAbsent(id, ignore -> Sinks.many().multicast().onBackpressureBuffer())
+                .asFlux()
                 .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
                 .doFinally(signal -> {
                     AbstractDeviceOperationBroker.log.trace("reply device message {} {} take {}ms", deviceId, messageId, System.currentTimeMillis() - startWith);
@@ -125,10 +123,10 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
             if (partMsgId != null) {
                 log.trace("handle fragment device[{}] message {}", message.getDeviceId(), message);
                 partMsgId = getAwaitReplyKey(message.getDeviceId(), partMsgId);
-                FluxProcessor<DeviceMessageReply, DeviceMessageReply> processor = replyProcessor
+                Sinks.Many<DeviceMessageReply> processor = replyProcessor
                         .getOrDefault(partMsgId, replyProcessor.get(messageId));
 
-                if (processor == null || processor.isDisposed()) {
+                if (processor == null || processor.currentSubscriberCount() == 0) {
                     replyProcessor.remove(partMsgId);
                     return;
                 }
@@ -136,11 +134,11 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                 AtomicInteger counter = fragmentCounter.computeIfAbsent(partMsgId, r -> new AtomicInteger(partTotal));
 
                 try {
-                    processor.onNext(message);
+                    processor.emitNext(message, Sinks.EmitFailureHandler.FAIL_FAST);
                 } finally {
                     if (counter.decrementAndGet() <= 0 || message.getHeader(Headers.fragmentLast).orElse(false)) {
                         try {
-                            processor.onComplete();
+                            processor.tryEmitComplete();
                         } finally {
                             replyProcessor.remove(partMsgId);
                             fragmentCounter.remove(partMsgId);
@@ -149,11 +147,11 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                 }
                 return;
             }
-            FluxProcessor<DeviceMessageReply, DeviceMessageReply> processor = replyProcessor.get(messageId);
+            Sinks.Many<DeviceMessageReply> processor = replyProcessor.get(messageId);
 
-            if (processor != null && !processor.isDisposed()) {
-                processor.onNext(message);
-                processor.onComplete();
+            if (processor != null) {
+                processor.tryEmitNext(message);
+                processor.tryEmitComplete();
             } else {
                 replyProcessor.remove(messageId);
             }

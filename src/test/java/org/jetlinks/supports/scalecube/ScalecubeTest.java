@@ -82,6 +82,8 @@ public class ScalecubeTest {
             .flatMap(member -> carol.send(member, greetingMsg))
             .subscribe(null, Throwable::printStackTrace);
 
+        alice.shutdown();
+
 
 
         // Avoid exit main thread immediately ]:->
