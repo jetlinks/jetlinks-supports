@@ -34,16 +34,26 @@ public class InMemoryConfigStorage implements ConfigStorage {
                 .map(Values::of)
                 ;
     }
-
     @Override
     public Mono<Boolean> setConfigs(Map<String, Object> values) {
-        return Mono.fromRunnable(() -> storage.putAll(values)).thenReturn(true);
+        values.forEach(this::doSetConfig);
+        return Mono.just(true);
+    }
+
+
+    public void doSetConfig(String key, Object value) {
+        if (key == null || value == null) {
+            return;
+        }
+        storage.put(key, value);
     }
 
     @Override
     public Mono<Boolean> setConfig(String key, Object value) {
-        return Mono.fromRunnable(() -> storage.put(key, value)).thenReturn(true);
+        this.doSetConfig(key, value);
+        return Mono.just(true);
     }
+
 
     @Override
     public Mono<Boolean> remove(String key) {
