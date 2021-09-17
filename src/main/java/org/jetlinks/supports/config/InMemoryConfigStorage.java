@@ -58,8 +58,8 @@ public class InMemoryConfigStorage implements ConfigStorage {
     @Override
     public Mono<Boolean> remove(String key) {
         return Mono.justOrEmpty(key)
-                .map(storage::remove)
-                .then().thenReturn(true);
+                   .doOnNext(storage::remove)
+                   .thenReturn(true);
     }
 
     @Override
@@ -71,8 +71,9 @@ public class InMemoryConfigStorage implements ConfigStorage {
     @Override
     public Mono<Boolean> remove(Collection<String> key) {
         return Flux.fromIterable(key)
-                .doOnNext(storage::remove)
-                .then().thenReturn(true);
+                   .doOnNext(storage::remove)
+                   .then()
+                   .thenReturn(true);
     }
 
     @Override
