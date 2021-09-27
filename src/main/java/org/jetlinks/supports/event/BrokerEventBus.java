@@ -79,7 +79,7 @@ public class BrokerEventBus implements EventBus {
     @Override
     public Flux<TopicPayload> subscribe(Subscription subscription) {
         return Flux
-                .create(sink -> {
+                .<TopicPayload>create(sink -> {
                     Disposable.Composite disposable = Disposables.composite();
                     String subscriberId = subscription.getSubscriber();
                     for (String topic : subscription.getTopics()) {
@@ -116,7 +116,8 @@ public class BrokerEventBus implements EventBus {
                               subscriberId,
                               subscription.getFeatures(),
                               subscription.getTopics());
-                });
+                })
+                .doOnDiscard(TopicPayload.class,ReferenceCountUtil::safeRelease);
     }
 
     public void addBroker(EventBroker broker) {
@@ -410,16 +411,15 @@ public class BrokerEventBus implements EventBus {
                                                .count())
                                        .count()
                                        .flatMap((s) -> {
-                                           if (s > 0) {
+                                          // if (s > 0) {
                                                return cache
                                                        .map(payload -> {
                                                            ReferenceCountUtil.safeRelease(payload);
                                                            return true;
                                                        })
-                                                       .then()
-                                                       .thenReturn(s);
-                                           }
-                                           return Mono.just(s);
+                                                       .then(Mono.just(s));
+                                         //  }
+                                         //  return Mono.just(s);
                                        });
                            }
                 )
