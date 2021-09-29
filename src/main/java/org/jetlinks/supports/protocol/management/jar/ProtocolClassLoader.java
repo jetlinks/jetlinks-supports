@@ -21,4 +21,10 @@ public class ProtocolClassLoader extends URLClassLoader {
         super.close();
     }
 
+
+    public Class<?> loadSelfClass(String name) throws ClassNotFoundException {
+        Class<?> clazz = super.findClass(name);
+        resolveClass(clazz);
+        return clazz;
+    }
 }
