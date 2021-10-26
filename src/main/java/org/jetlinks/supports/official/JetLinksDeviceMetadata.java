@@ -8,6 +8,7 @@ import org.jetlinks.core.metadata.*;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
@@ -187,6 +188,21 @@ public class JetLinksDeviceMetadata implements DeviceMetadata {
             getTags();
         }
         return tags.get(id);
+    }
+
+    @Override
+    public PropertyMetadata findProperty(Predicate<PropertyMetadata> predicate) {
+        if (this.properties == null) {
+            getProperties();
+        }
+
+        for (Map.Entry<String, PropertyMetadata> value : this.properties.entrySet()) {
+            PropertyMetadata val = value.getValue();
+            if (predicate.test(val)) {
+                return val;
+            }
+        }
+        return null;
     }
 
     public void addProperty(PropertyMetadata metadata) {

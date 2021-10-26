@@ -26,12 +26,10 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import javax.validation.constraints.NotNull;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /**
@@ -117,7 +115,7 @@ public class BrokerEventBus implements EventBus {
                               subscription.getFeatures(),
                               subscription.getTopics());
                 })
-                .doOnDiscard(TopicPayload.class,ReferenceCountUtil::safeRelease);
+                .doOnDiscard(TopicPayload.class, ReferenceCountUtil::safeRelease);
     }
 
     public void addBroker(EventBroker broker) {
@@ -220,10 +218,10 @@ public class BrokerEventBus implements EventBus {
                                                         handleBrokerSubscription(
                                                                 subscription,
                                                                 SubscriptionInfo.of(
-                                                                        subscription.getSubscriber(),
-                                                                        EnumDict.toMask(subscription.getFeatures()),
-                                                                        subscriber.sink(),
-                                                                        true)
+                                                                                        subscription.getSubscriber(),
+                                                                                        EnumDict.toMask(subscription.getFeatures()),
+                                                                                        subscriber.sink(),
+                                                                                        true)
                                                                                 .connection(broker, connection),
                                                                 connection
                                                         ))
@@ -320,67 +318,55 @@ public class BrokerEventBus implements EventBus {
         return false;
     }
 
-    private Mono<Long> doPublish(String topic,
-                                 Predicate<SubscriptionInfo> predicate,
-                                 Function<Flux<SubscriptionInfo>, Mono<Long>> subscriberConsumer) {
-        return root
-                .findTopic(topic)
-                .flatMapIterable(Topic::getSubscribers)
-                .filter(sub -> {
-                    //订阅者来自代理,但是代理已经挂了,应该自动取消订阅?
-                    if (sub.isBroker() && !sub.getEventConnection().isAlive()) {
-                        sub.dispose();
-                        return false;
-                    }
-                    return predicate.test(sub);
-                })
-                //根据订阅者标识进行分组,以进行订阅模式判断
-                .groupBy(SubscriptionInfo::getSubscriber, Integer.MAX_VALUE)
-                .flatMap(group -> group
-                                 .groupBy(sub -> sub.hasFeature(Subscription.Feature.shared))
-                                 .flatMap(groups -> {
-                                     //共享订阅
-                                     if (Boolean.TRUE.equals(groups.key())) {
-                                         return selectSharedSubscription(groups);
-                                     }
-                                     return groups;
-                                 }),
-                         Integer.MAX_VALUE)
-                // 防止多次推送给同一个消费者,
-                // 比如同一个消费者订阅了: /device/1/2 和/device/1/*/
-                // 推送 /device/1/2,会获取到2个相同到订阅者
-                .distinct(SubscriptionInfo::getSink)
-                .as(subscriberConsumer);
-
-    }
-
-    private Flux<SubscriptionInfo> selectSharedSubscription(Flux<SubscriptionInfo> subscriptionInfoFlux) {
-        return subscriptionInfoFlux
-                .collectList()
-                //随机转发订阅者
-                .flatMapMany(subs -> Flux.just(subs.get(ThreadLocalRandom.current().nextInt(0, subs.size()))));
+    private long doPublish(String topic,
+                           Predicate<SubscriptionInfo> predicate,
+                           Consumer<SubscriptionInfo> subscriberConsumer) {
+        Map<String, List<SubscriptionInfo>> sharedMap = new HashMap<>();
+        Set<Object> distinct = new HashSet<>(64);
+        root.findTopic(topic, subs -> {
+            for (SubscriptionInfo sub : subs.getSubscribers()) {
+                if (sub.isBroker() && !sub.getEventConnection().isAlive()) {
+                    sub.dispose();
+                    continue;
+                }
+                if (!predicate.test(sub) || !distinct.add(sub.sink)) {
+                    continue;
+                }
+                if (sub.hasFeature(Subscription.Feature.shared)) {
+                    sharedMap
+                            .computeIfAbsent(sub.subscriber, ignore -> new ArrayList<>(8))
+                            .add(sub);
+                    continue;
+                }
+                subscriberConsumer.accept(sub);
+            }
+        }, () -> {
+            for (List<SubscriptionInfo> value : sharedMap.values()) {
+                subscriberConsumer.accept(value.get(ThreadLocalRandom.current().nextInt(0, value.size())));
+            }
+        });
+        return distinct.size();
     }
 
     private Mono<Long> doPublishFromBroker(TopicPayload payload, Predicate<SubscriptionInfo> predicate) {
-        return this
+        long total = this
                 .doPublish(
                         payload.getTopic(),
                         predicate,
-                        flux -> flux
-                                .doOnNext(info -> {
-                                    try {
-                                        payload.retain();
-                                        info.sink.next(payload);
-                                        if (log.isDebugEnabled()) {
-                                            log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), info);
-                                        }
-                                    } catch (Throwable e) {
-                                        log.warn("broker publish [{}] to [{}] error", payload.getTopic(), info, e);
-                                    }
-                                })
-                                .count()
-                )
-                .doFinally(i -> ReferenceCountUtil.safeRelease(payload));
+                        info -> {
+                            try {
+                                payload.retain();
+                                info.sink.next(payload);
+                                if (log.isDebugEnabled()) {
+                                    log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), info);
+                                }
+                            } catch (Throwable e) {
+                                log.warn("broker publish [{}] to [{}] error", payload.getTopic(), info, e);
+                            }
+                        }
+                );
+        ReferenceCountUtil.safeRelease(payload);
+        return Mono.just(total);
     }
 
     @Override
@@ -396,39 +382,55 @@ public class BrokerEventBus implements EventBus {
     }
 
     @Override
-    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream, Scheduler publisher) {
-        return this
+    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T event) {
+        return this.publish(topic, encoder, event, publishScheduler);
+    }
+
+    @Override
+    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T payload, Scheduler scheduler) {
+        TopicPayload topicPayload = TopicPayload.of(topic, Payload.of(payload, encoder));
+        long subs = this
                 .doPublish(topic,
                            sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
-                           subscribers -> {
-                               Flux<TopicPayload> cache = Flux
-                                       .from(eventStream)
-                                       .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
-                                       .cache();
-                               return subscribers
-                                       .flatMap(sub -> cache
-                                               .map((payload) -> doPublish(topic, sub, payload))
-                                               .count())
-                                       .count()
-                                       .flatMap((s) -> {
-                                          // if (s > 0) {
-                                               return cache
-                                                       .map(payload -> {
-                                                           ReferenceCountUtil.safeRelease(payload);
-                                                           return true;
-                                                       })
-                                                       .then(Mono.just(s));
-                                         //  }
-                                         //  return Mono.just(s);
-                                       });
-                           }
-                )
-                .as(res -> {
-                    if (log.isTraceEnabled()) {
-                        return res.doOnNext(subs -> log.trace("topic [{}] has {} subscriber", topic, subs));
-                    }
-                    return res;
+                           sub -> doPublish(topic, sub, topicPayload)
+                );
+        ReferenceCountUtil.safeRelease(topicPayload);
+        if (log.isTraceEnabled()) {
+            log.trace("topic [{}] has {} subscriber", topic, subs);
+        }
+        return Mono.just(subs);
+    }
+
+    @Override
+    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream, Scheduler publisher) {
+        Flux<TopicPayload> cache = Flux
+                .from(eventStream)
+                .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
+                .cache();
+        return Flux
+                .<SubscriptionInfo>create(sink -> {
+                    this.doPublish(topic,
+                                   sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
+                                   sink::next
+                    );
+                    sink.complete();
+                })
+                .flatMap(sub -> cache
+                        .doOnNext(payload -> doPublish(topic, sub, payload))
+                        .count())
+                .count()
+                .flatMap((s) -> {
+                    // if (s > 0) {
+                    return cache
+                            .map(payload -> {
+                                ReferenceCountUtil.safeRelease(payload);
+                                return true;
+                            })
+                            .then(Mono.just(s));
+                    //  }
+                    //  return Mono.just(s);
                 });
+
     }
 
     @AllArgsConstructor(staticName = "of")
@@ -440,7 +442,7 @@ public class BrokerEventBus implements EventBus {
         FluxSink<TopicPayload> sink;
         @Getter
         boolean broker;
-        Disposable.Composite disposable;
+        Composite disposable;
 
         //broker only
         EventBroker eventBroker;
