@@ -76,21 +76,22 @@ public class RedisClusterEventBrokerTest {
         AtomicReference<Long> startWith = new AtomicReference<>();
 
         Flux.merge(
-                eventBus.subscribe(subscription)
-                , eventBus2.subscribe(subscription)
-                , eventBus3.subscribe(subscription)
-        )
+                    eventBus.subscribe(subscription)
+                    , eventBus2.subscribe(subscription)
+                    , eventBus3.subscribe(subscription)
+            )
             .doOnSubscribe(sub -> {
                 Mono.delay(Duration.ofSeconds(1))
                     .doOnNext(i -> startWith.set(System.currentTimeMillis()))
-                    .thenMany(Flux.range(0, 10)
+                    .thenMany(Flux.range(0, 100)
                                   .flatMap(l -> eventBus2.publish("/test/topic1", new ReadPropertyMessage())))
                     .subscribe();
             })
-            .take(Duration.ofSeconds(10))
+            .take(300)
+            .timeout(Duration.ofSeconds(10))
             .map(payload -> payload.bodyToString(true))
             .as(StepVerifier::create)
-            .expectNextCount(30L)
+            .expectNextCount(300L)
             .verifyComplete();
         System.out.println(System.currentTimeMillis() - startWith.get());
 

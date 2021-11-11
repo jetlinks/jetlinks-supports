@@ -44,6 +44,15 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
 
     }
 
+    public JetLinksPropertyMetadata(String id, String name, DataType type) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(name, "name cannot be null");
+        Objects.requireNonNull(type, "type cannot be null");
+        this.id = id;
+        this.name = name;
+        this.dataType = type;
+    }
+
     public JetLinksPropertyMetadata(JSONObject json) {
         fromJson(json);
     }

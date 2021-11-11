@@ -61,6 +61,7 @@ public class JarProtocolSupportLoaderTest {
                 .block();
 
 
+
         Assert.assertNotNull(support);
         Assert.assertEquals(support.getId(), "test");
 

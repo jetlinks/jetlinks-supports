@@ -3,8 +3,8 @@ package org.jetlinks.supports.official;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.apache.commons.collections.MapUtils;
 import org.jetlinks.core.metadata.DataType;
+import org.jetlinks.core.metadata.DeviceMetadataType;
 import org.jetlinks.core.metadata.EventMetadata;
 import org.jetlinks.core.metadata.MergeOption;
 import org.jetlinks.core.metadata.types.DataTypes;
@@ -12,6 +12,7 @@ import org.jetlinks.core.metadata.types.UnknownType;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -42,6 +43,15 @@ public class JetLinksEventMetadata implements EventMetadata {
     @Getter
     @Setter
     private Map<String, Object> expands;
+
+    public JetLinksEventMetadata(String id, String name, DataType type) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(name, "name cannot be null");
+        Objects.requireNonNull(type, "type cannot be null");
+        this.id = id;
+        this.name = name;
+        this.type = type;
+    }
 
     public JetLinksEventMetadata(JSONObject jsonObject) {
         fromJson(jsonObject);
@@ -101,9 +111,9 @@ public class JetLinksEventMetadata implements EventMetadata {
         if (metadata.expands == null) {
             metadata.expands = new HashMap<>();
         }
-        if (MapUtils.isNotEmpty(another.getExpands())) {
-            another.getExpands().forEach(metadata.expands::put);
-        }
+
+        MergeOption.ExpandsMerge.doWith(DeviceMetadataType.event, another.getExpands(), metadata.expands, option);
+
         return metadata;
     }
 }

@@ -7,6 +7,8 @@ import org.springframework.data.redis.core.ReactiveRedisOperations;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.RedisSerializer;
+import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
@@ -35,6 +37,8 @@ public class RedisClusterManager implements ClusterManager {
 
     private ReactiveRedisTemplate<String, ?> queueRedisTemplate;
 
+    private Disposable.Composite disposable = Disposables.composite();
+
     public RedisClusterManager(String name, ServerNode serverNode, ReactiveRedisTemplate<?, ?> operations) {
         this.clusterName = name;
         this.commonOperations = operations;
@@ -44,12 +48,17 @@ public class RedisClusterManager implements ClusterManager {
         this.stringOperations = new ReactiveRedisTemplate<>(operations.getConnectionFactory(), RedisSerializationContext.string());
 
         this.queueRedisTemplate = new ReactiveRedisTemplate<>(operations.getConnectionFactory(),
-                RedisSerializationContext.<String, Object>newSerializationContext()
-                        .key(RedisSerializer.string())
-                        .value((RedisSerializationContext.SerializationPair<Object>) operations.getSerializationContext().getValueSerializationPair())
-                        .hashKey(RedisSerializer.string())
-                        .hashValue(operations.getSerializationContext().getHashValueSerializationPair())
-                        .build());
+                                                              RedisSerializationContext
+                                                                      .<String, Object>newSerializationContext()
+                                                                      .key(RedisSerializer.string())
+                                                                      .value((RedisSerializationContext.SerializationPair<Object>) operations
+                                                                              .getSerializationContext()
+                                                                              .getValueSerializationPair())
+                                                                      .hashKey(RedisSerializer.string())
+                                                                      .hashValue(operations
+                                                                                         .getSerializationContext()
+                                                                                         .getHashValueSerializationPair())
+                                                                      .build());
     }
 
     public RedisClusterManager(String name, String serverId, ReactiveRedisTemplate<?, ?> operations) {
@@ -66,25 +75,28 @@ public class RedisClusterManager implements ClusterManager {
         this.haManager.startup();
 
         //定时尝试拉取队列数据
-        Flux.interval(Duration.ofSeconds(5))
-                .flatMap(i -> Flux.fromIterable(queues.values()))
-                .subscribe(RedisClusterQueue::tryPoll);
+        disposable.add(Flux.interval(Duration.ofSeconds(5))
+                           .flatMap(i -> Flux.fromIterable(queues.values()))
+                           .subscribe(RedisClusterQueue::tryPoll)
+        );
 
-        this.queueRedisTemplate
+        disposable.add(this.queueRedisTemplate
                 .<String>listenToPattern("queue:data:produced")
-                .doOnError(err->{
-                    log.error(err.getMessage(),err);
+                .doOnError(err -> {
+                    log.error(err.getMessage(), err);
                 })
                 .subscribe(sub -> {
                     RedisClusterQueue queue = queues.get(sub.getMessage());
                     if (queue != null) {
                         queue.tryPoll();
                     }
-                });
+                })
+        );
     }
 
     public void shutdown() {
         this.haManager.shutdown();
+        disposable.dispose();
     }
 
     @Override

@@ -91,7 +91,10 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 ProtocolSupportProvider supportProvider;
                 log.debug("load protocol support from : {}", location);
                 if (provider != null) {
-                    supportProvider = (ProtocolSupportProvider) Class.forName(provider, true, loader).newInstance();
+                    //直接从classLoad获取,防止冲突
+                    @SuppressWarnings("all")
+                    Class<ProtocolSupportProvider> providerType = (Class) loader.loadSelfClass(provider);
+                    supportProvider = providerType.getDeclaredConstructor().newInstance();
                 } else {
                     supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
                 }

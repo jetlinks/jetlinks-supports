@@ -2,15 +2,15 @@ package org.jetlinks.supports.protocol;
 
 import org.jetlinks.core.ProtocolSupport;
 import org.jetlinks.core.ProtocolSupports;
-import org.jetlinks.core.cache.Caches;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class StaticProtocolSupports implements ProtocolSupports {
 
-    protected Map<String, ProtocolSupport> supports = Caches.newCache();
+    protected Map<String, ProtocolSupport> supports = new ConcurrentHashMap<>();
 
     @Override
     public boolean isSupport(String protocol) {

@@ -3,6 +3,7 @@ package org.jetlinks.supports.cluster.redis;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cluster.ClusterQueue;
+import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Publisher;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
@@ -38,6 +39,8 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     private volatile float localConsumerPercent = 1F;
 
     private long lastRequestSize = maxBatchSize;
+
+    private boolean hasLocalProducer;
 
     private Mod mod = Mod.FIFO;
 
@@ -80,7 +83,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     );
 
     @Setter
-    private boolean useScript = "true".equals(System.getProperty("jetlinks.cluster.redus.queue.batch.enabled","true"));
+    private boolean useScript = "true".equals(System.getProperty("jetlinks.cluster.redus.queue.batch.enabled", "true"));
 
     public RedisClusterQueue(String id, ReactiveRedisTemplate<String, T> operations) {
         this.id = id;
@@ -172,7 +175,9 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                     doPoll(sink.requestedFromDownstream());
                 })
                 .doOnRequest(i -> {
-                    doPoll(lastRequestSize = i);
+                    if (!hasLocalProducer) {
+                        doPoll(lastRequestSize = i);
+                    }
                 });
     }
 
@@ -234,30 +239,34 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
 
     @Override
     public Mono<Boolean> add(Publisher<T> publisher) {
+        hasLocalProducer = true;
         return Flux
                 .from(publisher)
                 .flatMap(v -> {
                     if (isLocalConsumer() && push(v)) {
-                        return Mono.just(1);
+                        return Reactors.ALWAYS_ONE;
                     } else {
-                        if(!useScript){
-                            return this.operations
+                        if (!useScript) {
+                            return this
+                                    .operations
                                     .opsForList()
                                     .leftPush(id, v)
                                     .then(getOperations().convertAndSend("queue:data:produced", id));
                         }
-                        return getOperations().execute(pushAndPublish, Arrays.asList(id), Arrays.asList(v, id));
+                        return getOperations()
+                                .execute(pushAndPublish, Arrays.asList(id), Arrays.asList(v, id));
                     }
                 })
-                .then(Mono.just(true));
+                .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
     public Mono<Boolean> addBatch(Publisher<? extends Collection<T>> publisher) {
+        hasLocalProducer = true;
         return Flux.from(publisher)
                    .flatMap(v -> {
                                 if (isLocalConsumer() && push(v)) {
-                                    return Mono.just(1);
+                                    return Reactors.ALWAYS_ONE;
                                 }
                                 return this.operations
                                         .opsForList()
@@ -265,6 +274,6 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                                         .then(getOperations().convertAndSend("queue:data:produced", id));
                             }
                    )
-                   .then(Mono.just(true));
+                   .then(Reactors.ALWAYS_TRUE);
     }
 }
