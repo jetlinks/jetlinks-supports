@@ -38,7 +38,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
 
     @Override
     @SuppressWarnings("all")
-    public <T> DisposableService<T> createProducer(String address, Class<T> serviceInterface) {
+    public <T> DisposableService<T> createConsumer(String address, Class<T> serviceInterface) {
         if (!serviceInterface.isInterface()) {
             throw new UnsupportedOperationException("only support interface class");
         }
@@ -110,7 +110,7 @@ public class DefaultRpcServiceFactory implements RpcServiceFactory {
     }
 
     @Override
-    public <T> Disposable createConsumer(String address, Class<T> serviceInterface, T instance) {
+    public <T> Disposable createProducer(String address, Class<T> serviceInterface, T instance) {
 
         Map<String, Function<Payload, Publisher<Payload>>> handlers = new HashMap<>();
 

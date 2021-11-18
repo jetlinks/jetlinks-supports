@@ -29,11 +29,11 @@ public class IpcRpcServiceFactoryTest {
         IpcRpcServiceFactory factory2 = new IpcRpcServiceFactory(new EventBusIpcService(2, eventBus));
 
 
-        TestService service = factory.createProducer("test", TestService.class).getService();
+        TestService service = factory.createConsumer("test", TestService.class).getService();
 
         TestServiceConsumer consumer = new TestServiceConsumer();
 
-        Disposable disposable = factory2.createConsumer("test", TestService.class, consumer);
+        Disposable disposable = factory2.createProducer("test", TestService.class, consumer);
 
         service.sayHello()
                 .as(StepVerifier::create)

@@ -10,4 +10,7 @@ public interface TestApi {
      @ServiceMethod("lowercase")
      Mono<String> lowercase(Long data);
 
+     @ServiceMethod
+     Mono<String> add(Long[] data);
+
 }

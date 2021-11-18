@@ -29,6 +29,7 @@ import java.util.function.Function;
 
 @AllArgsConstructor
 @Slf4j
+@Deprecated
 public class EventBusRpcService implements RpcService {
 
     private final EventBus eventBus;

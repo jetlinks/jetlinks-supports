@@ -222,7 +222,14 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
                                 })
                                 : this.operations.execute(lifoPollScript, Arrays.asList(id, String.valueOf(size)))
                 )
-                        .flatMap(Flux::fromIterable)
+                        .handle((list, synchronousSink) -> {
+                            for (Object o : list) {
+                                if (o != null) {
+                                    synchronousSink.next(o);
+                                }
+                            }
+                            synchronousSink.complete();
+                        })
                         .map(i -> (T) i);
 
     }

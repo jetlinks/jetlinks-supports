@@ -40,13 +40,13 @@ public class IpcRpcServiceFactory implements RpcServiceFactory {
     }
 
     @Override
-    public <T> DisposableService<T> createProducer(String address, Class<T> serviceInterface) {
+    public <T> DisposableService<T> createConsumer(String address, Class<T> serviceInterface) {
         return new ServiceProducer<>(address, ipcService, serviceInterface);
     }
 
 
     @Override
-    public <T> Disposable createConsumer(String address, Class<T> serviceInterface, T instance) {
+    public <T> Disposable createProducer(String address, Class<T> serviceInterface, T instance) {
         return new ServiceConsumer(ipcService, address, instance, serviceInterface);
     }
 }
