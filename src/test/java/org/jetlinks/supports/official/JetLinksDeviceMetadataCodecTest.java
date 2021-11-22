@@ -1,10 +1,7 @@
 package org.jetlinks.supports.official;
 
 import lombok.SneakyThrows;
-import org.jetlinks.core.metadata.DataType;
-import org.jetlinks.core.metadata.DeviceMetadata;
-import org.jetlinks.core.metadata.EventMetadata;
-import org.jetlinks.core.metadata.FunctionMetadata;
+import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.BooleanType;
 import org.junit.Assert;
 import org.junit.Test;
@@ -24,7 +21,7 @@ public class JetLinksDeviceMetadataCodecTest {
 
         JetLinksDeviceMetadataCodec metadataCodec = new JetLinksDeviceMetadataCodec();
         DeviceMetadata deviceMetadata = metadataCodec.decode(metadata).block();
-
+        assertNotNull(deviceMetadata);
         Assert.assertTrue(deviceMetadata.getEvent("fire_alarm").isPresent());
 
         EventMetadata eventMetadata = deviceMetadata.getEvent("fire_alarm").get();
@@ -36,6 +33,11 @@ public class JetLinksDeviceMetadataCodecTest {
         DataType type= deviceMetadata.getFunction("playVoice").map(FunctionMetadata::getOutput).get();
 
         Assert.assertTrue(type instanceof BooleanType);
+
+        PropertyMetadata prop = deviceMetadata.getPropertyOrNull("name");
+
+        assertNotNull(prop);
+        assertNotNull(prop.getValueType().getExpand("maxLength"));
 
     }
 }
