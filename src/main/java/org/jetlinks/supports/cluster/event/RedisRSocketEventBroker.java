@@ -17,9 +17,9 @@ import org.jetlinks.core.cluster.ServerNode;
 import org.jetlinks.core.event.TopicPayload;
 import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import reactor.core.Disposable;
+import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 
 import java.nio.ByteBuffer;
@@ -45,9 +45,8 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     private final ConcurrentMap<String, RSocketAddress> remotes = new ConcurrentHashMap<>();
 
-
-    private final Map<String, Sinks.Many<TopicPayload>> remoteSinkMap = new ConcurrentHashMap<>();
-    private final Map<String, Sinks.Many<TopicPayload>> localSinkMap = new ConcurrentHashMap<>();
+    private final Map<String, EmitterProcessor<TopicPayload>> remoteSink = new ConcurrentHashMap<>();
+    private final Map<String, EmitterProcessor<TopicPayload>> localSink = new ConcurrentHashMap<>();
 
     public RedisRSocketEventBroker(ClusterManager clusterManager,
                                    ReactiveRedisConnectionFactory factory,
@@ -76,12 +75,12 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                 })
                 .subscribe(payload -> {
                     try {
-                        Sinks.Many<TopicPayload> processor = getOrCreateLocalSink(remote);
-                        if (processor.currentSubscriberCount() == 0) {
+                        EmitterProcessor<TopicPayload> processor = getOrCreateLocalSink(remote);
+                        if (!processor.hasDownstreams()) {
                             ReferenceCountUtil.safeRelease(payload);
                         } else {
                             String topic = payload.getMetadataUtf8();
-                            processor.tryEmitNext(TopicPayload.of(topic, RSocketPayload.of(payload)));
+                            processor.onNext(TopicPayload.of(topic, RSocketPayload.of(payload)));
                         }
                     } catch (Throwable e) {
                         log.error("handle broker [{}] event error", remote, e);
@@ -99,9 +98,9 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
         }
 
         {
-            Sinks.Many<TopicPayload> processor = getOrCreateLocalSink(remote);
+            EmitterProcessor<TopicPayload> processor = getOrCreateLocalSink(remote);
             RSocket socket = sockets.get(remote);
-            if (socket != null && !socket.isDisposed() && processor.currentSubscriberCount() > 0) {
+            if (socket != null && !socket.isDisposed() && processor.hasDownstreams()) {
                 if (polling.get(remote) != null && polling.get(remote).isDisposed()) {
                     doStartPollEvent(remote, socket);
                 }
@@ -197,14 +196,14 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
                                              log.debug("{} handle broker[{}] event request", serverId, broker);
                                              ReferenceCountUtil.safeRelease(payload);
 
-                                             Sinks.Many<TopicPayload> processor = getOrCreateRemoteSink(broker);
-                                             if (processor.currentSubscriberCount() > 0) {
+                                             EmitterProcessor<TopicPayload> processor = getOrCreateRemoteSink(broker);
+                                             if (processor.hasDownstreams()) {
                                                  return Flux.empty();
                                              }
                                              return processor
-                                                     .asFlux()
                                                      .doOnCancel(() -> log.debug("stop handle broker[{}] event request", broker))
-                                                     .flatMap(this::topicPayloadToRSocketPayload);
+                                                     .flatMap(this::topicPayloadToRSocketPayload)
+                                                     ;
                                          }
                 ))
                 .bind(TcpServerTransport.create(address.getPort()))
@@ -243,30 +242,31 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     }
 
-    private Sinks.Many<TopicPayload> getOrCreateRemoteSink(String brokerId) {
-        return remoteSinkMap
+    private EmitterProcessor<TopicPayload> getOrCreateRemoteSink(String brokerId) {
+        return remoteSink
                 .compute(brokerId, (k, val) -> {
-                    if (val != null) {
+                    if (val != null && !val.isDisposed()) {
                         return val;
                     }
-                    return Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE, false);
+                    return EmitterProcessor.create(Integer.MAX_VALUE, false);
                 });
     }
 
-    private Sinks.Many<TopicPayload> getOrCreateLocalSink(String brokerId) {
-        return localSinkMap
+    private EmitterProcessor<TopicPayload> getOrCreateLocalSink(String brokerId) {
+        return localSink
                 .compute(brokerId, (k, val) -> {
-                    if (val != null) {
+                    if (val != null && !val.isDisposed()) {
                         return val;
                     }
-                    return Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE, false);
+                    return EmitterProcessor.create(Integer.MAX_VALUE, false);
                 });
     }
 
     @Override
     protected Flux<TopicPayload> listen(String localId, String brokerId) {
         return Flux.merge(
-                this.getOrCreateLocalSink(brokerId).asFlux(),
+                this.getOrCreateLocalSink(brokerId)
+                ,
                 super.listen(localId, brokerId)
         );
     }
@@ -277,13 +277,13 @@ public class RedisRSocketEventBroker extends RedisClusterEventBroker {
             ReferenceCountUtil.safeRelease(payload);
             return Mono.empty();
         }
-        Sinks.Many<TopicPayload> processor = remoteSinkMap.get(brokerId);
-        if (processor == null || processor.currentSubscriberCount()==0) {
+        EmitterProcessor<TopicPayload> processor = remoteSink.get(brokerId);
+        if (processor == null || !processor.hasDownstreams() || processor.isDisposed()) {
             log.debug("no rsocket broker [{}] event listener,fallback to redis", brokerId);
             connectRemote(brokerId);
             return super.dispatch(localId, brokerId, payload);
         }
-        processor.tryEmitNext(payload);
+        processor.onNext(payload);
         return Mono.empty();
     }
 }

@@ -18,10 +18,7 @@ import org.jetlinks.supports.cluster.redis.DeviceCheckResponse;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
-import reactor.util.concurrent.Queues;
+import reactor.core.publisher.*;
 
 import java.time.Duration;
 import java.util.*;
@@ -35,8 +32,9 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
     private final ClusterManager clusterManager;
     private final String serverId;
 
-    private final Map<String, Sinks.Many<DeviceMessageReply>> replaySinksMany = new ConcurrentHashMap<>();
-    private final Map<String, Sinks.Many<DeviceCheckResponse>> checkSinksMany = new ConcurrentHashMap<>();
+
+    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = new ConcurrentHashMap<>();
+    private final Map<String, FluxProcessor<DeviceCheckResponse, DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
 
 
     private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
@@ -51,10 +49,10 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
         //接收设备状态检查
         clusterManager.<DeviceCheckResponse>getTopic("device:state:check:result:".concat(serverId)).subscribe()
                 .subscribe(msg ->
-                        Optional.ofNullable(checkSinksMany.remove(msg.getRequestId()))
+                        Optional.ofNullable(checkRequests.remove(msg.getRequestId()))
                                 .ifPresent(processor -> {
-                                    processor.tryEmitNext(msg);
-                                    processor.tryEmitComplete();
+                                    processor.onNext(msg);
+                                    processor.onComplete();
                                 }));
         //接收消息返回
         clusterManager.getTopic("device:msg:reply")
@@ -76,13 +74,13 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
             String uid = UUID.randomUUID().toString();
 
             DeviceCheckRequest request = new DeviceCheckRequest(serverId, uid, new ArrayList<>(deviceIdList));
-            Sinks.Many<DeviceCheckResponse> processor = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, true);
+            EmitterProcessor<DeviceCheckResponse> processor = EmitterProcessor.create(true);
 
-            checkSinksMany.put(uid, processor);
+            checkRequests.put(uid, processor);
 
             return clusterManager.getTopic("device:state:checker:".concat(deviceGatewayServerId))
                     .publish(Mono.just(request))
-                    .flatMapMany(m -> processor.asFlux().flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
+                    .flatMapMany(m -> processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
                     .timeout(Duration.ofSeconds(5), Flux.empty());
         });
     }
@@ -106,12 +104,11 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
     @Override
     public Flux<DeviceMessageReply> handleReply(String deviceId,String messageId, Duration timeout) {
-        return replaySinksMany
-                .computeIfAbsent(messageId, ignore -> Sinks.many().unicast().onBackpressureBuffer())
-                .asFlux()
+        return replyProcessor
+                .computeIfAbsent(messageId, ignore -> UnicastProcessor.create())
                 .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
                 .doFinally(signal -> {
-                    replaySinksMany.remove(messageId);
+                    replyProcessor.remove(messageId);
                     fragmentCounter.remove(messageId);
                 });
     }
@@ -152,7 +149,7 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
         }
         return Mono.defer(() -> {
             message.addHeader(Headers.replyFrom, serverId);
-            if (replaySinksMany.containsKey(message.getMessageId())) {
+            if (replyProcessor.containsKey(message.getMessageId())) {
                 handleReply(message);
                 return Mono.just(true);
             }
@@ -174,42 +171,36 @@ public class ClusterDeviceOperationBroker implements DeviceOperationBroker, Mess
 
             String partMsgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(null);
             if (partMsgId != null) {
-                Sinks.Many<DeviceMessageReply> replyMany = replaySinksMany.getOrDefault(partMsgId, replaySinksMany.get(messageId));
+                FluxProcessor<DeviceMessageReply, DeviceMessageReply> processor = replyProcessor.getOrDefault(partMsgId, replyProcessor.get(messageId));
 
-                if (replyMany == null) {
-                    replaySinksMany.remove(partMsgId);
+                if (processor == null || processor.isDisposed()) {
+                    replyProcessor.remove(partMsgId);
                     return;
                 }
+                int partTotal = message.getHeader(Headers.fragmentNumber).orElse(1);
+                AtomicInteger counter = fragmentCounter.computeIfAbsent(partMsgId, r -> new AtomicInteger(partTotal));
 
                 try {
-                    Sinks.EmitResult result = replyMany.tryEmitNext(message);
-                    if (result.isFailure()) {
-                        replaySinksMany.remove(partMsgId);
-                        return;
-                    }
+                    processor.onNext(message);
                 } finally {
-                    int partTotal = message.getHeader(Headers.fragmentNumber).orElse(1);
-                    AtomicInteger counter = fragmentCounter.computeIfAbsent(partMsgId, r -> new AtomicInteger(partTotal));
                     if (counter.decrementAndGet() <= 0 || message.getHeader(Headers.fragmentLast).orElse(false)) {
                         try {
-                            replyMany.tryEmitComplete();
+                            processor.onComplete();
                         } finally {
-                            replaySinksMany.remove(partMsgId);
+                            replyProcessor.remove(partMsgId);
                             fragmentCounter.remove(partMsgId);
                         }
                     }
                 }
                 return;
             }
-            Sinks.Many<DeviceMessageReply> processor = replaySinksMany.get(messageId);
+            FluxProcessor<DeviceMessageReply, DeviceMessageReply> processor = replyProcessor.get(messageId);
 
-            if (processor != null) {
-                Sinks.EmitResult result = processor.tryEmitNext(message);
-                if (!result.isFailure()) {
-                    processor.tryEmitComplete();
-                }
+            if (processor != null && !processor.isDisposed()) {
+                processor.onNext(message);
+                processor.onComplete();
             } else {
-                replaySinksMany.remove(messageId);
+                replyProcessor.remove(messageId);
             }
         } catch (Exception e) {
             replyFailureHandler.handle(e, message);
