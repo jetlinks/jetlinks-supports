@@ -110,6 +110,6 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
             } catch (Throwable e) {
                 return Mono.error(e);
             }
-        }).subscribeOn(Schedulers.elastic());
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 }
