@@ -20,10 +20,10 @@ import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.RedisSerializer;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.util.concurrent.Queues;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,11 +34,10 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
     protected final ReactiveRedisOperations<String, byte[]> redis;
 
     private final String id;
-    private final EmitterProcessor<EventConnection> processor = EmitterProcessor.create(false);
+
+    private final Sinks.Many<EventConnection> eventConnectionMany = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
 
     private final Map<String, ClusterConnecting> connections = new ConcurrentHashMap<>();
-
-    private final FluxSink<EventConnection> sink = processor.sink(FluxSink.OverflowStrategy.BUFFER);
 
     protected final ClusterManager clusterManager;
 
@@ -107,7 +106,8 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                 .computeIfAbsent(remoteId, _id -> {
                     log.debug("handle redis connection:{}", remoteId);
                     ClusterConnecting connection = new ClusterConnecting(localId, _id);
-                    sink.next(onConnectionCreated(connection));
+//                    sink.next(onConnectionCreated(connection));
+                    eventConnectionMany.tryEmitNext(onConnectionCreated(connection));
                     return connection;
                 });
     }
@@ -123,7 +123,7 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
 
     @Override
     public Flux<EventConnection> accept() {
-        return Flux.concat(Flux.fromIterable(connections.values()), processor).distinct();
+        return Flux.concat(Flux.fromIterable(connections.values()), eventConnectionMany.asFlux()).distinct();
     }
 
     protected abstract Flux<TopicPayload> listen(String localId, String brokerId);
@@ -138,18 +138,15 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
         private final String brokerId;
         private final String localId;
 
-        private final EmitterProcessor<TopicPayload> processor = EmitterProcessor.create(Integer.MAX_VALUE, false);
-        private final FluxSink<TopicPayload> input = processor.sink(FluxSink.OverflowStrategy.BUFFER);
+        private final Sinks.Many<TopicPayload> inputSinkMany = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE, false);
 
-        FluxSink<TopicPayload> output;
+        Sinks.Many<Subscription> subscriptionMany = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE, false);
 
-        EmitterProcessor<Subscription> subProcessor = EmitterProcessor.create(Integer.MAX_VALUE, false);
-        FluxSink<Subscription> subSink = subProcessor.sink(FluxSink.OverflowStrategy.BUFFER);
-
-        EmitterProcessor<Subscription> unsubProcessor = EmitterProcessor.create(Integer.MAX_VALUE, false);
-        FluxSink<Subscription> unsubSink = unsubProcessor.sink(FluxSink.OverflowStrategy.BUFFER);
+        Sinks.Many<Subscription> unsubscriptionMany = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE, false);
 
         Composite disposable = Disposables.composite();
+
+        Sinks.Many<TopicPayload> outputSinkMany = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE, false);
 
         private final String allSubsInfoKey;
 
@@ -159,18 +156,18 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
             //本地->其他节点的订阅信息
             allSubsInfoKey = "/broker/" + localId + "/" + brokerId + "/subs";
 
-            disposable.add(subProcessor::onComplete);
-            disposable.add(unsubProcessor::onComplete);
-            disposable.add(processor::onComplete);
+            disposable.add(subscriptionMany::tryEmitComplete);
+            disposable.add(unsubscriptionMany::tryEmitComplete);
+            disposable.add(inputSinkMany::tryEmitComplete);
 
             disposable.add(listen(localId, brokerId)
                                    .doOnNext(msg -> {
-                                       if (!processor.hasDownstreams()) {
+                                       if (inputSinkMany.currentSubscriberCount() == 0) {
                                            msg.release();
                                            return;
                                        }
                                        log.trace("{} handle cluster [{}] event {}", localId, brokerId, msg.getTopic());
-                                       input.next(msg);
+                                       inputSinkMany.tryEmitNext(msg);
                                    })
                                    .onErrorContinue((err, res) -> log.error(err.getMessage(), err))
                                    .subscribe());
@@ -183,12 +180,12 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                                                .of(msg.getMessage())
                                                .decode(subscriptionCodec);
                                        if (subscription != null) {
-                                           if (msg.getChannel().endsWith("unsub") && unsubProcessor.hasDownstreams()) {
-                                               unsubSink.next(subscription);
+                                           if (msg.getChannel().endsWith("unsub") && unsubscriptionMany.currentSubscriberCount() > 0) {
+                                               unsubscriptionMany.tryEmitNext(subscription);
                                                return;
                                            }
-                                           if (msg.getChannel().endsWith("sub") && subProcessor.hasDownstreams()) {
-                                               subSink.next(subscription);
+                                           if (msg.getChannel().endsWith("sub") && subscriptionMany.currentSubscriberCount() > 0) {
+                                               subscriptionMany.tryEmitNext(subscription);
                                                return;
                                            }
                                        }
@@ -201,12 +198,12 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                                    .members(loadSubsInfoKey)
                                    .doOnNext(msg -> {
                                        Subscription subscription = Payload.of(msg).decode(subscriptionCodec);
-                                       subSink.next(subscription);
+                                       subscriptionMany.tryEmitNext(subscription);
                                    })
                                    .onErrorContinue((err, v) -> log.warn(err.getMessage(), err))
                                    .subscribe());
 
-            disposable.add(Flux.<TopicPayload>create(sink -> this.output = sink)
+            disposable.add(outputSinkMany.asFlux()
                                    .flatMap(payload -> dispatch(localId, brokerId, payload)
                                            .onErrorResume((err) -> {
                                                log.error(err.getMessage(), err);
@@ -241,7 +238,7 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
 
         @Override
         public Flux<TopicPayload> subscribe() {
-            return processor;
+            return inputSinkMany.asFlux();
         }
 
         @Override
@@ -271,17 +268,17 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
 
         @Override
         public Flux<Subscription> handleSubscribe() {
-            return subProcessor;
+            return subscriptionMany.asFlux();
         }
 
         @Override
         public Flux<Subscription> handleUnSubscribe() {
-            return unsubProcessor;
+            return unsubscriptionMany.asFlux();
         }
 
         @Override
-        public FluxSink<TopicPayload> sink() {
-            return output;
+        public Sinks.Many<TopicPayload> sinksMany() {
+            return outputSinkMany;
         }
 
         @Override

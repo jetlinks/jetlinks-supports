@@ -21,7 +21,6 @@ import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
@@ -137,13 +136,11 @@ public class ScalecubeEventBusBroker implements EventBroker {
 
         private final Disposable.Composite disposable = Disposables.composite();
 
-        private FluxSink<TopicPayload> publisher;
+        private Sinks.Many<TopicPayload> publisher = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE, false);
 
         public MemberEventConnection(Member member) {
             this.member = member;
-            doOnDispose(Flux.<TopicPayload>create(sink -> {
-                                publisher = sink;
-                            })
+            doOnDispose(publisher.asFlux()
                             .flatMap(this::doPublish)
                             .subscribe()
             );
@@ -200,7 +197,7 @@ public class ScalecubeEventBusBroker implements EventBroker {
         }
 
         @Override
-        public FluxSink<TopicPayload> sink() {
+        public Sinks.Many<TopicPayload> sinksMany() {
             return publisher;
         }
 

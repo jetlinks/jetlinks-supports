@@ -12,9 +12,9 @@ import org.jetlinks.core.ipc.IpcDefinition;
 import org.jetlinks.core.ipc.IpcInvoker;
 import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.util.Map;
 import java.util.Optional;
@@ -30,7 +30,7 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
 
     private final IpcInvoker<REQ, RES> invoker;
 
-    private final Map<Integer, EmitterProcessor<REQ>> pendingChannel = new ConcurrentHashMap<>();
+    private final Map<Integer, Sinks.Many<REQ>> pendingChannelSinksManyMap = new ConcurrentHashMap<>();
 
     private final String acceptTopic;
 
@@ -95,18 +95,18 @@ class EventBusIpcResponder<REQ, RES> implements Disposable {
             case noArgRequestStream:
                 return this.handleInvoke(consumerId, messageId, invoker.requestStream());
             case requestChannel:
-                pendingChannel
+                pendingChannelSinksManyMap
                         .computeIfAbsent(messageId, ignore -> {
-                            EmitterProcessor<REQ> processor = EmitterProcessor.create(Integer.MAX_VALUE);
-                            this.handleInvoke(consumerId, messageId, invoker.requestChannel(processor))
+                            Sinks.Many<REQ> processor = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE);
+                            this.handleInvoke(consumerId, messageId, invoker.requestChannel(processor.asFlux()))
                                 .subscribe();
                             return processor;
                         })
-                        .onNext(request.getRequest());
+                        .tryEmitNext(request.getRequest());
                 return Mono.empty();
             case cancel:
-                Optional.ofNullable(pendingChannel.remove(messageId))
-                        .ifPresent(EmitterProcessor::onComplete);
+                Optional.ofNullable(pendingChannelSinksManyMap.remove(messageId))
+                        .ifPresent(Sinks.Many::tryEmitComplete);
             default:
                 return Mono.empty();
         }

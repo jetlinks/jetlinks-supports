@@ -8,10 +8,10 @@ import org.jetlinks.core.cluster.ServerNode;
 import org.springframework.data.redis.core.ReactiveHashOperations;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import reactor.core.Disposable;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.util.concurrent.Queues;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -43,9 +43,8 @@ public class RedisHaManager implements HaManager {
     private final ReactiveHashOperations<String, String, ServerNode> inRedisNode;
     private final String allNodeHashKey;
 
-
-    private final FluxProcessor<ServerNode, ServerNode> onlineProcessor = EmitterProcessor.create(false);
-    private final FluxProcessor<ServerNode, ServerNode> offlineProcessor = EmitterProcessor.create(false);
+    private final Sinks.Many<ServerNode> onlineSinksMany = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
+    private final Sinks.Many<ServerNode> offlineSinksMany = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
     private volatile boolean started = false;
 
     public RedisHaManager(String name,
@@ -144,8 +143,8 @@ public class RedisHaManager implements HaManager {
                                     .remove(allNodeHashKey, serverNode.getId())
                                     .subscribe();
                             electionLeader();
-                            if (offlineProcessor.hasDownstreams()) {
-                                offlineProcessor.onNext(serverNode);
+                            if (offlineSinksMany.currentSubscriberCount() > 0) {
+                                offlineSinksMany.tryEmitNext(serverNode);
                             }
                         }
                     });
@@ -169,8 +168,8 @@ public class RedisHaManager implements HaManager {
                          electionLeader();
                          log.debug("[{}]:server node [{}] online", haName, serverNode.getId());
                          //node join
-                         if (onlineProcessor.hasDownstreams()) {
-                             onlineProcessor.onNext(serverNode);
+                         if (onlineSinksMany.currentSubscriberCount() > 0) {
+                             onlineSinksMany.tryEmitNext(serverNode);
                          }
                      }
 
@@ -186,13 +185,15 @@ public class RedisHaManager implements HaManager {
 
     @Override
     public Flux<ServerNode> subscribeServerOnline() {
-        return onlineProcessor
+        return onlineSinksMany
+                .asFlux()
                 .filter(node -> !node.getId().equals(current.getId()));
     }
 
     @Override
     public Flux<ServerNode> subscribeServerOffline() {
-        return offlineProcessor
+        return offlineSinksMany
+                .asFlux()
                 .filter(node -> !node.getId().equals(current.getId()));
     }
 

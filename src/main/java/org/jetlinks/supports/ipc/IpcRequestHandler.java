@@ -3,21 +3,18 @@ package org.jetlinks.supports.ipc;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 class IpcRequestHandler<RES> implements Disposable {
 
-    EmitterProcessor<RES> processor = EmitterProcessor.create(Integer.MAX_VALUE);
+    Sinks.Many<RES> processorSinksMany = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE);
 
     Disposable.Composite disposable = Disposables.composite();
-
-    FluxSink<RES> sink = processor.sink();
 
     private final AtomicInteger seqInc = new AtomicInteger();
 
@@ -27,27 +24,25 @@ class IpcRequestHandler<RES> implements Disposable {
     }
 
     Mono<RES> handleRequest() {
-        return processor
+        return processorSinksMany
+                .asFlux()
                 .next()
                 .doFinally((s) -> disposable.dispose());
     }
 
     Flux<RES> handleStream() {
-        return processor
+        return processorSinksMany
+                .asFlux()
                 .doFinally((s) -> disposable.dispose());
     }
 
     void complete() {
-        if(processor.isDisposed()){
-            log.debug("handler is disposed");
-        }
-        processor.onComplete();
-        sink.complete();
+        processorSinksMany.tryEmitComplete();
     }
 
     synchronized void handle(IpcResponse<RES> res) {
         if (res.hasResult()) {
-            sink.next(res.getResult());
+            processorSinksMany.tryEmitNext(res.getResult());
         }
         if (res.hasError()) {
             error(res.getError());
@@ -71,7 +66,7 @@ class IpcRequestHandler<RES> implements Disposable {
     }
 
     void error(Throwable err) {
-        sink.error(err);
+        processorSinksMany.tryEmitError(err);
     }
 
     IpcRequestHandler<RES> doOnDispose(Disposable disposable) {
