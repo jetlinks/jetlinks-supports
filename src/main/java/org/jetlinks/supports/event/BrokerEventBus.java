@@ -22,6 +22,7 @@ import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -84,8 +85,8 @@ public class BrokerEventBus implements EventBus {
                         Topic<SubscriptionInfo> topicInfo = root.append(topic);
                         SubscriptionInfo subInfo = SubscriptionInfo.of(
                                 subscriberId,
-                                EnumDict.toMask(subscription.getFeatures()),
                                 sink,
+                                EnumDict.toMask(subscription.getFeatures()),
                                 false
                         );
                         topicInfo.subscribe(subInfo);
@@ -220,7 +221,7 @@ public class BrokerEventBus implements EventBus {
                                                                 SubscriptionInfo.of(
                                                                                         subscription.getSubscriber(),
                                                                                         EnumDict.toMask(subscription.getFeatures()),
-                                                                                        subscriber.sink(),
+                                                                                        subscriber.sinksMany(),
                                                                                         true)
                                                                                 .connection(broker, connection),
                                                                 connection
@@ -302,11 +303,11 @@ public class BrokerEventBus implements EventBus {
     private boolean doPublish(String topic, SubscriptionInfo info, TopicPayload payload) {
         try {
             //已经取消订阅则不推送
-            if (info.sink.isCancelled()) {
+            if (info.topicPayloadMany.currentSubscriberCount() == 0) {
                 return false;
             }
             payload.retain();
-            info.sink.next(payload);
+            info.topicPayloadMany.tryEmitNext(payload);
             if (log.isDebugEnabled()) {
                 log.debug("publish [{}] to [{}] complete", topic, info);
             }
@@ -329,7 +330,7 @@ public class BrokerEventBus implements EventBus {
                     sub.dispose();
                     continue;
                 }
-                if (!predicate.test(sub) || !distinct.add(sub.sink)) {
+                if (!predicate.test(sub) || !distinct.add(sub.topicPayloadMany)) {
                     continue;
                 }
                 if (sub.hasFeature(Subscription.Feature.shared)) {
@@ -356,7 +357,7 @@ public class BrokerEventBus implements EventBus {
                         info -> {
                             try {
                                 payload.retain();
-                                info.sink.next(payload);
+                                info.topicPayloadMany.tryEmitNext(payload);
                                 if (log.isDebugEnabled()) {
                                     log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), info);
                                 }
@@ -440,6 +441,7 @@ public class BrokerEventBus implements EventBus {
         String subscriber;
         long features;
         FluxSink<TopicPayload> sink;
+        Sinks.Many<TopicPayload> topicPayloadMany;
         @Getter
         boolean broker;
         Composite disposable;
@@ -474,19 +476,36 @@ public class BrokerEventBus implements EventBus {
         }
 
         public static SubscriptionInfo of(Subscription subscription,
-                                          FluxSink<TopicPayload> sink,
+                                          Sinks.Many<TopicPayload> topicPayloadMany,
                                           boolean remote) {
             return of(subscription.getSubscriber(),
                       EnumDict.toMask(subscription.getFeatures()),
-                      sink,
+                      topicPayloadMany,
                       remote);
         }
 
         public static SubscriptionInfo of(String subscriber,
                                           long features,
+                                          Sinks.Many<TopicPayload> topicPayloadMany,
+                                          boolean remote) {
+            return new SubscriptionInfo(subscriber, features, topicPayloadMany, remote);
+        }
+
+        public static SubscriptionInfo of(String subscriber,
                                           FluxSink<TopicPayload> sink,
+                                          long features,
                                           boolean remote) {
             return new SubscriptionInfo(subscriber, features, sink, remote);
+        }
+
+        public SubscriptionInfo(String subscriber,
+                                long features,
+                                Sinks.Many<TopicPayload> topicPayloadMany,
+                                boolean broker) {
+            this.subscriber = subscriber;
+            this.features = features;
+            this.topicPayloadMany = topicPayloadMany;
+            this.broker = broker;
         }
 
         public SubscriptionInfo(String subscriber,

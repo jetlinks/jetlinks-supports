@@ -10,11 +10,11 @@ import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.concurrent.Queues;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -52,9 +52,9 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
     @Setter
     private DeviceRegistry registry;
 
-    private FluxProcessor<DeviceSession, DeviceSession> onDeviceRegister = EmitterProcessor.create(false);
+    private Sinks.Many<DeviceSession> onDeviceRegisterSinksMany = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
 
-    private FluxProcessor<DeviceSession, DeviceSession> onDeviceUnRegister = EmitterProcessor.create(false);
+    private Sinks.Many<DeviceSession> onDeviceUnRegisterSinksMany = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
 
     private String serverId;
 
@@ -205,8 +205,8 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                         .offline()
                         .doFinally(s -> {
                             //通知
-                            if (onDeviceRegister.hasDownstreams()) {
-                                onDeviceRegister.onNext(session);
+                            if (onDeviceRegisterSinksMany.currentSubscriberCount() != 0) {
+                                onDeviceRegisterSinksMany.tryEmitNext(session);
                             }
                         })
                         .thenReturn(session));
@@ -254,8 +254,8 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                 .online(session.getServerId().orElse(serverId), session.getId())
                 .doFinally(s -> {
                     //通知
-                    if (onDeviceRegister.hasDownstreams()) {
-                        onDeviceRegister.onNext(session);
+                    if (onDeviceRegisterSinksMany.currentSubscriberCount() != 0) {
+                        onDeviceRegisterSinksMany.tryEmitNext(session);
                     }
                 })
                 .subscribe();
@@ -265,14 +265,16 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
 
     @Override
     public Flux<DeviceSession> onRegister() {
-        return onDeviceRegister
+        return onDeviceRegisterSinksMany
+                .asFlux()
                 .map(Function.identity())
                 .doOnError(err -> log.error(err.getMessage(), err));
     }
 
     @Override
     public Flux<DeviceSession> onUnRegister() {
-        return onDeviceUnRegister
+        return onDeviceUnRegisterSinksMany
+                .asFlux()
                 .map(Function.identity())
                 .doOnError(err -> log.error(err.getMessage(), err));
     }
@@ -313,8 +315,8 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                     .offline()
                     .doFinally(s -> {
                         //通知
-                        if (onDeviceUnRegister.hasDownstreams()) {
-                            onDeviceUnRegister.onNext(session);
+                        if (onDeviceUnRegisterSinksMany.currentSubscriberCount() != 0) {
+                            onDeviceUnRegisterSinksMany.tryEmitNext(session);
                         }
                     })
                     .subscribe();
@@ -324,8 +326,8 @@ public class DefaultDeviceSessionManager implements DeviceSessionManager {
                     .flatMap(childrenDeviceSession -> childrenDeviceSession.getOperator()
                             .offline()
                             .doFinally(s -> {
-                                if (onDeviceUnRegister.hasDownstreams()) {
-                                    onDeviceUnRegister.onNext(childrenDeviceSession);
+                                if (onDeviceUnRegisterSinksMany.currentSubscriberCount() != 0) {
+                                    onDeviceUnRegisterSinksMany.tryEmitNext(childrenDeviceSession);
                                 }
                                 scheduleJobQueue.add(childrenDeviceSession::close);
                             })

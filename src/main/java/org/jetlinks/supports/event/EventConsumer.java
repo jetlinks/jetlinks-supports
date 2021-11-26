@@ -3,8 +3,7 @@ package org.jetlinks.supports.event;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
-import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 /**
  * 事件消费者
@@ -18,6 +17,6 @@ public interface EventConsumer extends EventConnection {
 
     Flux<Subscription> handleUnSubscribe();
 
-    FluxSink<TopicPayload> sink();
+    Sinks.Many<TopicPayload> sinksMany();
 
 }

@@ -9,10 +9,9 @@ import org.jetlinks.core.message.DeviceMessage;
 import org.jetlinks.core.message.property.ReportPropertyMessage;
 import org.junit.Test;
 import reactor.core.Disposable;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
@@ -156,10 +155,10 @@ public class BrokerEventBusTest {
 
         class TestEventConnection implements EventConnection, EventConsumer {
 
-            EmitterProcessor<TopicPayload> processor = EmitterProcessor.create();
+            Sinks.Many<TopicPayload> topicPayloadMany = Sinks.many().multicast().onBackpressureBuffer();
 
             TestEventConnection() {
-                processor.doOnNext(i -> {
+                topicPayloadMany.asFlux().doOnNext(i -> {
                              ReferenceCountUtil.safeRelease(i);
                              counter.incrementAndGet();
                          })
@@ -197,8 +196,8 @@ public class BrokerEventBusTest {
             }
 
             @Override
-            public FluxSink<TopicPayload> sink() {
-                return processor.sink(FluxSink.OverflowStrategy.BUFFER);
+            public Sinks.Many<TopicPayload> sinksMany() {
+                return topicPayloadMany;
             }
 
             @Override
