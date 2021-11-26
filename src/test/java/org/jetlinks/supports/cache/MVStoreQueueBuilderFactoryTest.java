@@ -5,8 +5,8 @@ import org.jetlinks.core.cache.FileQueue;
 import org.jetlinks.core.codec.defaults.StringCodec;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.nio.file.Paths;
@@ -64,16 +64,15 @@ public class MVStoreQueueBuilderFactoryTest {
 
     @Test
     public void testFlux() {
-        Sinks.Many<String> processor = FileQueue
+        FluxProcessor<String, String> processor = FileQueue
                 .<String>builder()
                 .name("test-flux")
                 .path(Paths.get("./target/.queue"))
                 .codec(StringCodec.UTF8)
                 .buildFluxProcessor(true);
 
-        processor.tryEmitNext("test");
+        processor.onNext("test");
         processor
-                .asFlux()
                 .take(1)
                 .as(StepVerifier::create)
                 .expectNext("test")

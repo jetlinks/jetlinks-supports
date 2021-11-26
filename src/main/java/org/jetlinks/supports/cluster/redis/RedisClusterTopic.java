@@ -4,10 +4,7 @@ import org.jetlinks.core.cluster.ClusterTopic;
 import org.reactivestreams.Publisher;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
-import reactor.util.concurrent.Queues;
+import reactor.core.publisher.*;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -17,14 +14,17 @@ public class RedisClusterTopic<T> implements ClusterTopic<T> {
 
     private final ReactiveRedisOperations<Object, T> operations;
 
-    private final Sinks.Many<TopicMessage<T>> topicMessageMany;
+    private final FluxProcessor<TopicMessage<T>, TopicMessage<T>> processor;
+
+    private final FluxSink<TopicMessage<T>> sink;
 
     private final AtomicBoolean subscribed = new AtomicBoolean();
 
     public RedisClusterTopic(String topic, ReactiveRedisOperations<Object, T> operations) {
         this.topicName = topic;
         this.operations = operations;
-        topicMessageMany = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
+        processor = EmitterProcessor.create(false);
+        sink = processor.sink(FluxSink.OverflowStrategy.BUFFER);
     }
 
     private Disposable disposable;
@@ -34,11 +34,11 @@ public class RedisClusterTopic<T> implements ClusterTopic<T> {
             disposable = operations
                     .listenToPattern(topicName)
                     .subscribe(data -> {
-                        if (topicMessageMany.currentSubscriberCount() == 0) {
+                        if (!processor.hasDownstreams()) {
                             disposable.dispose();
                             subscribed.compareAndSet(true, false);
                         } else {
-                            topicMessageMany.tryEmitNext(new TopicMessage<T>() {
+                            sink.next(new TopicMessage<T>() {
                                 @Override
                                 public String getTopic() {
                                     return data.getChannel();
@@ -56,8 +56,7 @@ public class RedisClusterTopic<T> implements ClusterTopic<T> {
 
     @Override
     public Flux<TopicMessage<T>> subscribePattern() {
-        return topicMessageMany
-                .asFlux()
+        return processor
                 .doOnSubscribe((r) -> doSubscribe());
     }
 
