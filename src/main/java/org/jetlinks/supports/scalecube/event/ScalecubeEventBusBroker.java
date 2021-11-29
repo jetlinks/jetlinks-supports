@@ -9,6 +9,7 @@ import lombok.AllArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
+import org.jetlinks.core.NativePayload;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
@@ -59,11 +60,17 @@ public class ScalecubeEventBusBroker implements EventBroker {
                         MemberEventConnection connection = cachedConnections.get(from);
                         if (null != connection) {
                             log.trace("publish from {} : {}", from, topic);
+                            Object data = message.data();
+                            TopicPayload topicPayload;
+                            if (data instanceof byte[]) {
+                                topicPayload = TopicPayload.of(topic, Payload.of((byte[]) message.data()));
+                            } else {
+                                topicPayload = TopicPayload.of(topic, NativePayload.of(data));
+                            }
                             connection
                                     .subscriber
-                                    .emitNext(
-                                            TopicPayload.of(topic, Payload.of((byte[]) message.data())),
-                                            RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED
+                                    .emitNext(topicPayload,
+                                              RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED
                                     );
                         }
                     }
@@ -98,14 +105,14 @@ public class ScalecubeEventBusBroker implements EventBroker {
                 if (event.isLeaving() || event.isRemoved()) {
                     MemberEventConnection connection = cachedConnections.remove(event.member().id());
                     if (connection != null) {
-                        log.debug("remove event broker {}",event.member().address());
+                        log.debug("remove event broker {}", event.member().address());
                         connection.dispose();
                     }
                 }
                 if (event.isAdded() || event.isUpdated()) {
                     cachedConnections.compute(event.member().id(), (key, old) -> {
                         if (old == null) {
-                            log.debug("add event broker {}",event.member().address());
+                            log.debug("add event broker {}", event.member().address());
                             MemberEventConnection connection = new MemberEventConnection(event.member());
                             connections.tryEmitNext(connection);
                             return connection;
@@ -151,13 +158,21 @@ public class ScalecubeEventBusBroker implements EventBroker {
 
         private Mono<Void> doPublish(TopicPayload payload) {
             try {
+                String topic = payload.getTopic();
+                Object payloadObj;
+                if (payload.getPayload() instanceof NativePayload) {
+                    payloadObj = ((NativePayload<?>) payload.getPayload()).getNativeObject();
+                    payload.release();
+                } else {
+                    payloadObj = payload.getBytes();
+                }
                 return cluster
                         .send(member, Message
                                 .builder()
                                 .qualifier(PUB_QUALIFIER)
-                                .header(TOPIC_HEADER, payload.getTopic())
+                                .header(TOPIC_HEADER, topic)
                                 .header(FROM_HEADER, cluster.member().id())
-                                .data(payload.getBytes())
+                                .data(payloadObj)
                                 .build())
                         .onErrorResume(err -> {
                             log.error(err.getMessage(), err);

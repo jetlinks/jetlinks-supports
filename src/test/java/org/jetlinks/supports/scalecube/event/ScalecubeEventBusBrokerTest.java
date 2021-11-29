@@ -74,28 +74,29 @@ public class ScalecubeEventBusBrokerTest {
     public void test() {
         int total = 1_000;
 
-        Duration d = Flux.merge(
-                                 eventBus1
-                                         .subscribe(Subscription
-                                                            .builder()
-                                                            .justBroker()
-                                                            .topics("/test")
-                                                            .subscriberId("test")
-                                                            .build(), String.class)
-                                         .map(s -> "from1@" + s),
-                                 eventBus2
-                                         .subscribe(Subscription
-                                                            .builder()
-                                                            .justBroker()
-                                                            .topics("/test")
-                                                            .subscriberId("test")
-                                                            .build(), String.class)
-                                         .map(s -> "from2@" + s)
-                         )
+        Duration d = Flux
+                .merge(
+                        eventBus1
+                                .subscribe(Subscription
+                                                   .builder()
+                                                   .justBroker()
+                                                   .topics("/test")
+                                                   .subscriberId("test")
+                                                   .build(), String.class)
+                                .map(s -> "from1@" + s),
+                        eventBus2
+                                .subscribe(Subscription
+                                                   .builder()
+                                                   .justBroker()
+                                                   .topics("/test")
+                                                   .subscriberId("test")
+                                                   .build(), String.class)
+                                .map(s -> "from2@" + s)
+                )
                 .doOnSubscribe(s -> Mono
                         .delay(Duration.ofSeconds(1))
                         .thenMany(
-                                Flux.range(0, total/2)
+                                Flux.range(0, total / 2)
                                     .flatMap(i -> eventBus3.publish("/test", "hello:" + i))
                         )
                         .subscribe())
