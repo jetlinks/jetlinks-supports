@@ -28,6 +28,8 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     private volatile Map<String, PropertyMetadata> tags;
 
+    private volatile List<PropertyMetadata> propertyMetadataList;
+
     @Getter
     @Setter
     private String id;
@@ -92,11 +94,13 @@ public class DefaultThingsMetadata implements ThingMetadata {
                             .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
                     )
                     .orElse(Collections.emptyMap());
+            this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(properties.values()));
         }
         if (properties == null) {
             this.properties = new HashMap<>();
+            this.propertyMetadataList = Collections.emptyList();
         }
-        return new ArrayList<>(properties.values());
+        return this.propertyMetadataList;
     }
 
     @Override

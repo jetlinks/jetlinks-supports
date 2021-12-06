@@ -7,6 +7,8 @@ import org.jetlinks.core.defaults.DefaultDeviceProductOperator;
 import org.jetlinks.core.device.*;
 import org.jetlinks.core.message.interceptor.DeviceMessageSenderInterceptor;
 import org.jetlinks.supports.config.InMemoryConfigStorageManager;
+import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.HashMap;
@@ -28,7 +30,7 @@ public class InMemoryDeviceRegistry implements DeviceRegistry {
 
     private final DeviceOperationBroker handler;
 
-    public static InMemoryDeviceRegistry create(){
+    public static InMemoryDeviceRegistry create() {
         return new InMemoryDeviceRegistry();
     }
 
@@ -50,6 +52,11 @@ public class InMemoryDeviceRegistry implements DeviceRegistry {
     @Override
     public Mono<DeviceProductOperator> getProduct(String productId) {
         return Mono.fromSupplier(() -> productOperatorMap.get(productId));
+    }
+
+    @Override
+    public Mono<DeviceProductOperator> getProduct(String productId, String version) {
+        return Mono.fromSupplier(() -> productOperatorMap.get(productId + ":" + version));
     }
 
     @Override
@@ -79,8 +86,15 @@ public class InMemoryDeviceRegistry implements DeviceRegistry {
     @Override
     public Mono<DeviceProductOperator> register(ProductInfo productInfo) {
         return Mono.defer(() -> {
-            DefaultDeviceProductOperator operator = new DefaultDeviceProductOperator(productInfo.getId(), supports, manager);
-            productOperatorMap.put(operator.getId(), operator);
+            String cacheId = StringUtils.isEmpty(productInfo.getVersion())
+                    ? productInfo.getId()
+                    : productInfo.getId() + ":" + productInfo.getVersion();
+
+            DefaultDeviceProductOperator operator = new DefaultDeviceProductOperator(productInfo.getId(),
+                                                                                     supports,
+                                                                                     manager.getStorage(cacheId),
+                                                                                     Flux::empty);
+            productOperatorMap.put(cacheId, operator);
             Map<String, Object> configs = new HashMap<>();
             Optional.ofNullable(productInfo.getMetadata())
                     .ifPresent(conf -> configs.put(DeviceConfigKey.metadata.getKey(), conf));
@@ -94,6 +108,7 @@ public class InMemoryDeviceRegistry implements DeviceRegistry {
         });
     }
 
+
     @Override
     public Mono<Void> unregisterDevice(String deviceId) {
         return Mono.justOrEmpty(deviceId)
@@ -104,6 +119,13 @@ public class InMemoryDeviceRegistry implements DeviceRegistry {
     @Override
     public Mono<Void> unregisterProduct(String productId) {
         return Mono.justOrEmpty(productId)
+                   .map(productOperatorMap::remove)
+                   .then();
+    }
+
+    @Override
+    public Mono<Void> unregisterProduct(String productId, String version) {
+        return Mono.justOrEmpty(productId + ":" + version)
                    .map(productOperatorMap::remove)
                    .then();
     }

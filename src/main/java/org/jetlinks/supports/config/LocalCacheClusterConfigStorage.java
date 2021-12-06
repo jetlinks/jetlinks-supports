@@ -10,10 +10,7 @@ import org.jetlinks.core.event.EventBus;
 import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Mono;
 
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @AllArgsConstructor
@@ -122,6 +119,15 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                         map.put(key, value);
                     }
                     return map;
+                })
+                .defaultIfEmpty(Collections.emptyMap())
+                .doOnNext(map -> {
+                    needLoadKeys.removeAll(map.keySet());
+                    if (needLoadKeys.size() > 0) {
+                        for (String needLoadKey : needLoadKeys) {
+                            getOrCreateCache(needLoadKey).setValue(null);
+                        }
+                    }
                 })
                 .map(Values::of);
     }
