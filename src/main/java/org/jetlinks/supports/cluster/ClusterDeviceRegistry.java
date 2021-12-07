@@ -317,7 +317,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                 .flatMap(protocol -> protocol.onDeviceUnRegister(device))
                 .then(
                         device
-                                .unwrap(DefaultDeviceProductOperator.class)
+                                .unwrap(DefaultDeviceOperator.class)
                                 .getReactiveStorage()
                                 .flatMap(ConfigStorage::clear)
                 )
