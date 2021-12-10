@@ -94,8 +94,12 @@ public class DefaultThingsMetadata implements ThingMetadata {
                             .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
                     )
                     .orElse(Collections.emptyMap());
-            this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(properties.values()));
         }
+
+        if (this.propertyMetadataList == null && this.properties != null) {
+            this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
+        }
+
         if (properties == null) {
             this.properties = new HashMap<>();
             this.propertyMetadataList = Collections.emptyList();
