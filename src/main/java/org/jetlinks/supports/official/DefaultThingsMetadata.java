@@ -64,6 +64,8 @@ public class DefaultThingsMetadata implements ThingMetadata {
                                  .map(JetLinksPropertyMetadata::new)
                                  .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
+        this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
+
         this.functions = another.getFunctions()
                                 .stream()
                                 .map(JetLinksDeviceFunctionMetadata::new)
@@ -100,7 +102,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
             this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
         }
 
-        if (properties == null) {
+        if (this.properties == null) {
             this.properties = new HashMap<>();
             this.propertyMetadataList = Collections.emptyList();
         }
