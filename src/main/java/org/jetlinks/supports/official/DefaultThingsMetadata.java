@@ -4,6 +4,7 @@ import com.alibaba.fastjson.JSONObject;
 import io.vavr.Function3;
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.collections.CollectionUtils;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.things.ThingMetadata;
 
@@ -64,8 +65,6 @@ public class DefaultThingsMetadata implements ThingMetadata {
                                  .map(JetLinksPropertyMetadata::new)
                                  .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
-        this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
-
         this.functions = another.getFunctions()
                                 .stream()
                                 .map(JetLinksDeviceFunctionMetadata::new)
@@ -85,8 +84,11 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     @Override
     public List<PropertyMetadata> getProperties() {
-        if (properties == null && jsonObject != null) {
-            properties = Optional
+        if (CollectionUtils.isNotEmpty(this.propertyMetadataList)) {
+            return this.propertyMetadataList;
+        }
+        if (this.properties == null && jsonObject != null) {
+            this.properties = Optional
                     .ofNullable(jsonObject.getJSONArray("properties"))
                     .map(Collection::stream)
                     .<Map<String, PropertyMetadata>>map(stream -> stream
@@ -100,13 +102,9 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
         if (this.propertyMetadataList == null && this.properties != null) {
             this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
+            return this.propertyMetadataList;
         }
-
-        if (this.properties == null) {
-            this.properties = new HashMap<>();
-            this.propertyMetadataList = Collections.emptyList();
-        }
-        return this.propertyMetadataList;
+        return Collections.emptyList();
     }
 
     @Override
@@ -221,6 +219,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
             this.properties = new LinkedHashMap<>();
         }
         this.properties.put(metadata.getId(), new JetLinksPropertyMetadata(metadata));
+        this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
     }
 
     public void addFunction(FunctionMetadata metadata) {
