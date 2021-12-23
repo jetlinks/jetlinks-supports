@@ -56,6 +56,9 @@ public class InMemoryDeviceRegistry implements DeviceRegistry {
 
     @Override
     public Mono<DeviceProductOperator> getProduct(String productId, String version) {
+        if (StringUtils.isEmpty(version)) {
+            return getProduct(productId);
+        }
         return Mono.fromSupplier(() -> productOperatorMap.get(productId + ":" + version));
     }
 
