@@ -249,7 +249,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     public Mono<DeviceProductOperator> register(ProductInfo productInfo) {
         return Mono.defer(() -> {
             DefaultDeviceProductOperator operator = createProductOperator(productInfo.getId(), productInfo.getVersion());
-            productOperatorMap.put(operator.getId(), operator);
+            String cacheId = createProductCacheKey(productInfo.getId(), productInfo.getVersion());
+            productOperatorMap.put(cacheId, operator);
+
             Map<String, Object> configs = new HashMap<>();
 
             Optional.ofNullable(productInfo.getConfiguration())
