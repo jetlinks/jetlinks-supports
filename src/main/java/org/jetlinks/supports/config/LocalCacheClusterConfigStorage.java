@@ -92,20 +92,25 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     public Mono<Values> getConfigs(Collection<String> keys) {
         Map<String, Object> caches = Maps.newHashMapWithExpectedSize(keys.size());
         int hits = 0;
+        //获取一级缓存
         for (String key : keys) {
             Cache local = getOrCreateCache(key);
             Value cached = local.getCached();
             if (cached != null) {
+                //命中一级缓存
                 hits++;
                 Object obj = cached.get();
+                //可能缓存的就是null(配置不存在的情况)
                 if (null != obj) {
                     caches.put(key, obj);
                 }
             }
         }
+        //全部来自一级缓存则直接返回
         if (hits == keys.size()) {
             return Mono.just(Values.of(caches));
         }
+        //需要从二级缓存中加载的配置
         Set<String> needLoadKeys = new HashSet<>(keys);
         needLoadKeys.removeAll(caches.keySet());
 
@@ -114,6 +119,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .reduce(caches, (map, entry) -> {
                     String key = entry.getKey();
                     Object value = entry.getValue();
+                    //加载到一级缓存中
                     getOrCreateCache(key).setValue(value);
                     if (null != value) {
                         map.put(key, value);
@@ -123,6 +129,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .defaultIfEmpty(Collections.emptyMap())
                 .doOnNext(map -> {
                     needLoadKeys.removeAll(map.keySet());
+                    //还有配置没加载出来,说明这些配置不存在，则全部设置为null
                     if (needLoadKeys.size() > 0) {
                         for (String needLoadKey : needLoadKeys) {
                             getOrCreateCache(needLoadKey).setValue(null);
