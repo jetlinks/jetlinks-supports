@@ -1,8 +1,8 @@
 package org.jetlinks.supports.cluster;
 
-import com.google.common.cache.CacheBuilder;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.core.cache.Caches;
 import org.jetlinks.core.device.DeviceOperationBroker;
 import org.jetlinks.core.device.DeviceStateInfo;
 import org.jetlinks.core.device.ReplyFailureHandler;
@@ -26,25 +26,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
-import static com.google.common.cache.RemovalCause.EXPIRED;
-
 @Slf4j
 public abstract class AbstractDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
 
-    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = CacheBuilder
-            .newBuilder()
-            .expireAfterWrite(Duration.ofMinutes(1))
-            .<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>>removalListener(notify -> {
-                if (notify.getCause() == EXPIRED) {
-                    try {
-                        AbstractDeviceOperationBroker.log.debug("discard await reply message[{}] processor", notify.getKey());
-                        notify.getValue().onComplete();
-                    } catch (Throwable ignore) {
-                    }
-                }
-            })
-            .build()
-            .asMap();
+    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor =
+            Caches.newCache();
 
     @Override
     public abstract Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId, Collection<String> deviceIdList);
@@ -60,7 +46,12 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                 .computeIfAbsent(id, ignore -> UnicastProcessor.create())
                 .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
                 .doFinally(signal -> {
-                    AbstractDeviceOperationBroker.log.trace("reply device message {} {} take {}ms", deviceId, messageId, System.currentTimeMillis() - startWith);
+                    AbstractDeviceOperationBroker.log
+                            .trace("reply device message {} {} take {}ms",
+                                   deviceId,
+                                   messageId,
+                                   System.currentTimeMillis() - startWith);
+
                     replyProcessor.remove(id);
                     fragmentCounter.remove(id);
                 });
