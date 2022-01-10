@@ -4,6 +4,7 @@ import com.alibaba.fastjson.JSONObject;
 import io.vavr.Function3;
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.collections.CollectionUtils;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.things.ThingMetadata;
 
@@ -27,6 +28,8 @@ public class DefaultThingsMetadata implements ThingMetadata {
     private volatile Map<String, EventMetadata> events;
 
     private volatile Map<String, PropertyMetadata> tags;
+
+    private volatile List<PropertyMetadata> propertyMetadataList;
 
     @Getter
     @Setter
@@ -81,8 +84,11 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     @Override
     public List<PropertyMetadata> getProperties() {
-        if (properties == null && jsonObject != null) {
-            properties = Optional
+        if (CollectionUtils.isNotEmpty(this.propertyMetadataList)) {
+            return this.propertyMetadataList;
+        }
+        if (this.properties == null && jsonObject != null) {
+            this.properties = Optional
                     .ofNullable(jsonObject.getJSONArray("properties"))
                     .map(Collection::stream)
                     .<Map<String, PropertyMetadata>>map(stream -> stream
@@ -93,10 +99,12 @@ public class DefaultThingsMetadata implements ThingMetadata {
                     )
                     .orElse(Collections.emptyMap());
         }
-        if (properties == null) {
-            this.properties = new HashMap<>();
+
+        if (this.propertyMetadataList == null && this.properties != null) {
+            this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
+            return this.propertyMetadataList;
         }
-        return new ArrayList<>(properties.values());
+        return Collections.emptyList();
     }
 
     @Override
@@ -211,6 +219,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
             this.properties = new LinkedHashMap<>();
         }
         this.properties.put(metadata.getId(), new JetLinksPropertyMetadata(metadata));
+        this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
     }
 
     public void addFunction(FunctionMetadata metadata) {

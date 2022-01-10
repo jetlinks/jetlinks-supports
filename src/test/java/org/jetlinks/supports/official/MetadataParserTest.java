@@ -11,7 +11,7 @@ import org.springframework.core.ResolvableType;
 
 import static org.junit.Assert.assertTrue;
 
-public class DeviceMetadataParserTest {
+public class MetadataParserTest {
 
 
     @Test

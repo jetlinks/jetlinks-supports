@@ -1,55 +1,33 @@
 package org.jetlinks.supports.official;
 
-import org.jetlinks.core.metadata.*;
-import org.jetlinks.core.metadata.types.IntType;
+import org.jetlinks.core.metadata.DeviceMetadata;
 import org.jetlinks.core.metadata.types.StringType;
 import org.junit.Test;
 
-import java.util.Collections;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.*;
 
 public class JetLinksDeviceMetadataTest {
 
-
     @Test
-    public void testMergeFunction() {
+    public void testProperties(){
+        JetLinksDeviceMetadata metadata = new JetLinksDeviceMetadata("test","test");
 
-        JetLinksDeviceMetadata metadata = new JetLinksDeviceMetadata("test", "test");
+        metadata.addProperty(new JetLinksPropertyMetadata("test", "test", StringType.GLOBAL));
+        metadata.addProperty(new JetLinksPropertyMetadata("test2", "test2", StringType.GLOBAL));
 
-        metadata.addFunction(SimpleFunctionMetadata.of("test-func",
-                                                       "Test",
-                                                       Collections.singletonList(SimplePropertyMetadata.of("arg0", "arg0", IntType.GLOBAL)),
-                                                       IntType.GLOBAL
-        ));
 
-        JetLinksDeviceMetadata metadata2 = new JetLinksDeviceMetadata("test", "test");
-        metadata2.addFunction(SimpleFunctionMetadata.of("test-func",
-                                                       "Test",
-                                                        Collections.singletonList(SimplePropertyMetadata.of("arg0", "arg0", StringType.GLOBAL)),
-                                                        IntType.GLOBAL
-        ));
+        assertEquals(2,metadata.getProperties().size());
+
         {
-
-            DeviceMetadata merge = metadata.merge(metadata2);
-
-            FunctionMetadata function = merge.getFunctionOrNull("test-func");
-            assertNotNull(function);
-            assertEquals(function.getInputs().size(), 1);
-            assertEquals(function.getInputs().get(0).getValueType(), StringType.GLOBAL);
-
+            JetLinksDeviceMetadata newMetadata = new JetLinksDeviceMetadata(metadata);
+            assertEquals(2,newMetadata.getProperties().size());
         }
+
         {
+            DeviceMetadata newMetadata = new JetLinksDeviceMetadata("test", "test").merge(metadata);
 
-            DeviceMetadata merge = metadata.merge(metadata2, MergeOption.ignoreExists);
-            FunctionMetadata function = merge.getFunctionOrNull("test-func");
-            assertNotNull(function);
-            assertEquals(function.getInputs().size(), 1);
-            assertEquals(function.getInputs().get(0).getValueType(), IntType.GLOBAL);
-
+            assertEquals(2,newMetadata.getProperties().size());
         }
+
     }
-
-
 }
