@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.NativePayload;
 import org.jetlinks.core.Payload;
+import org.jetlinks.core.cache.Caches;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import org.jetlinks.supports.event.EventBroker;
@@ -26,8 +27,11 @@ import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 @Slf4j
 public class ScalecubeEventBusBroker implements EventBroker {
@@ -44,6 +48,8 @@ public class ScalecubeEventBusBroker implements EventBroker {
     private final Map<String, MemberEventConnection> cachedConnections = new NonBlockingHashMap<>();
     private final Sinks.Many<EventConnection> connections = Sinks.many().multicast().directBestEffort();
 
+    private final Map<String, List<Message>> earlyMessage = Caches.newCache(Duration.ofMinutes(10));
+
     public ScalecubeEventBusBroker(ExtendedCluster cluster) {
         this.cluster = cluster;
         this.init();
@@ -53,46 +59,21 @@ public class ScalecubeEventBusBroker implements EventBroker {
         cluster.handler(extendedCluster -> new ClusterMessageHandler() {
             @Override
             public void onMessage(Message message) {
-                if (Objects.equals(message.qualifier(), PUB_QUALIFIER)) {
-                    String from = message.header(FROM_HEADER);
-                    String topic = message.header(TOPIC_HEADER);
-                    if (StringUtils.hasText(from) && StringUtils.hasText(topic)) {
-                        MemberEventConnection connection = cachedConnections.get(from);
-                        if (null != connection) {
-                            log.trace("publish from {} : {}", from, topic);
-                            Object data = message.data();
-                            TopicPayload topicPayload;
-                            if (data instanceof byte[]) {
-                                topicPayload = TopicPayload.of(topic, Payload.of((byte[]) message.data()));
-                            } else {
-                                topicPayload = TopicPayload.of(topic, NativePayload.of(data));
-                            }
-                            connection
-                                    .subscriber
-                                    .emitNext(topicPayload,
-                                              RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED
-                                    );
-                        }
-                    }
-                } else {
-                    Sinks.Many<Subscription> sink = null;
-                    String from = message.header(FROM_HEADER);
-                    if (StringUtils.hasText(from)) {
-                        MemberEventConnection connection = cachedConnections.get(from);
-                        if (null != connection) {
-                            if (Objects.equals(message.qualifier(), SUB_QUALIFIER)) {
-                                log.debug("subscribe from {} : {}", from, message.data());
-                                sink = connection.subscriptions;
-                            } else if (Objects.equals(message.qualifier(), UNSUB_QUALIFIER)) {
-                                log.debug("unsubscribe from {} : {}", from, message.data());
-                                sink = connection.unSubscriptions;
-                            }
-                        }
-                    }
-                    if (sink != null) {
-                        sink.emitNext(message.data(), RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
-                    }
+                String from = message.header(FROM_HEADER);
+                if (StringUtils.isEmpty(from)) {
+                    return;
                 }
+                MemberEventConnection connection = getOrCreateConnection(from);
+                if (null != connection) {
+                    handleMessage(connection, message);
+                } else {
+                    log.info("received early message {} {}", from, message.data());
+                    //收到了消息，但是本地还有没Member信息
+                    earlyMessage
+                            .computeIfAbsent(from, (id) -> new CopyOnWriteArrayList<>())
+                            .add(message);
+                }
+
             }
 
             @Override
@@ -103,6 +84,7 @@ public class ScalecubeEventBusBroker implements EventBroker {
             @Override
             public void onMembershipEvent(MembershipEvent event) {
                 if (event.isLeaving() || event.isRemoved()) {
+                    earlyMessage.remove(event.member().id());
                     MemberEventConnection connection = cachedConnections.remove(event.member().id());
                     if (connection != null) {
                         log.debug("remove event broker {}", event.member().address());
@@ -110,17 +92,7 @@ public class ScalecubeEventBusBroker implements EventBroker {
                     }
                 }
                 if (event.isAdded() || event.isUpdated()) {
-                    cachedConnections.compute(event.member().id(), (key, old) -> {
-                        if (old == null) {
-                            log.debug("add event broker {}", event.member().address());
-                            MemberEventConnection connection = new MemberEventConnection(event.member());
-                            connections.tryEmitNext(connection);
-                            return connection;
-                        } else {
-                            old.setMember(event.member());
-                        }
-                        return old;
-                    });
+                    getOrCreateConnection(event.member());
                 }
             }
         });
@@ -129,6 +101,59 @@ public class ScalecubeEventBusBroker implements EventBroker {
         }
     }
 
+    private MemberEventConnection getOrCreateConnection(String memberId) {
+        Member member = cluster.member(memberId).orElse(null);
+        return member == null ? null : getOrCreateConnection(member);
+    }
+
+    private void handleMessage(MemberEventConnection connection, Message message) {
+        if (Objects.equals(message.qualifier(), PUB_QUALIFIER)) {
+            String topic = message.header(TOPIC_HEADER);
+            Object data = message.data();
+            TopicPayload topicPayload;
+            if (data instanceof byte[]) {
+                topicPayload = TopicPayload.of(topic, Payload.of((byte[]) message.data()));
+            } else {
+                topicPayload = TopicPayload.of(topic, NativePayload.of(data));
+            }
+            log.trace("publish from {} : {}", connection, topic);
+            connection
+                    .subscriber
+                    .emitNext(topicPayload,
+                              RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED
+                    );
+        }
+        if (Objects.equals(message.qualifier(), SUB_QUALIFIER)) {
+            log.debug("subscribe from {} : {}", connection, message.data());
+            connection.subscriptions.tryEmitNext(message.data());
+        } else if (Objects.equals(message.qualifier(), UNSUB_QUALIFIER)) {
+            log.debug("unsubscribe from {} : {}", connection, message.data());
+            connection.unSubscriptions.tryEmitNext(message.data());
+        }
+    }
+
+    private MemberEventConnection getOrCreateConnection(Member member) {
+        return cachedConnections.compute(member.id(), (key, old) -> {
+            if (old == null) {
+                log.debug("add event broker {}", member.address());
+                MemberEventConnection connection = new MemberEventConnection(member);
+                connections.emitNext(connection, (signalType, emitResult) -> {
+                    return emitResult == Sinks.EmitResult.FAIL_NON_SERIALIZED
+                            || emitResult == Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER;
+                });
+                List<Message> early = earlyMessage.get(member.id());
+                if (null != early) {
+                    for (Message message : early) {
+                        handleMessage(connection, message);
+                    }
+                }
+                return connection;
+            } else {
+                old.setMember(member);
+            }
+            return old;
+        });
+    }
 
     @AllArgsConstructor
     public class MemberEventConnection implements EventConnection, EventProducer, EventConsumer {
@@ -250,6 +275,11 @@ public class ScalecubeEventBusBroker implements EventBroker {
         @Override
         public void dispose() {
             disposable.dispose();
+        }
+
+        @Override
+        public String toString() {
+            return member.alias()+"@"+member.address();
         }
     }
 

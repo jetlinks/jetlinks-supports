@@ -81,16 +81,16 @@ public class RedisClusterManager implements ClusterManager {
         );
 
         disposable.add(this.queueRedisTemplate
-                .<String>listenToPattern("queue:data:produced")
-                .doOnError(err -> {
-                    log.error(err.getMessage(), err);
-                })
-                .subscribe(sub -> {
-                    RedisClusterQueue queue = queues.get(sub.getMessage());
-                    if (queue != null) {
-                        queue.tryPoll();
-                    }
-                })
+                               .<String>listenToPattern("queue:data:produced")
+                               .doOnError(err -> {
+                                   log.error(err.getMessage(), err);
+                               })
+                               .subscribe(sub -> {
+                                   RedisClusterQueue queue = queues.get(sub.getMessage());
+                                   if (queue != null) {
+                                       queue.tryPoll();
+                                   }
+                               })
         );
     }
 
@@ -130,7 +130,12 @@ public class RedisClusterManager implements ClusterManager {
 
     @Override
     public <K, V> ClusterCache<K, V> getCache(String cache) {
-        return caches.computeIfAbsent(cache, id -> new RedisClusterCache<K, V>(id, this.getRedis()));
+        return caches.computeIfAbsent(cache, this::createCache);
+    }
+
+    @Override
+    public <K, V> ClusterCache<K, V> createCache(String cacheName) {
+        return new RedisClusterCache<K, V>(cacheName, this.getRedis());
     }
 
     @Override
