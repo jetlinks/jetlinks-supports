@@ -34,19 +34,25 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 @Slf4j
-public class ScalecubeEventBusBroker implements EventBroker {
+public class ScalecubeEventBusBroker implements EventBroker, Disposable {
 
     private static final String SUB_QUALIFIER = "/jeb/_sub";
     private static final String UNSUB_QUALIFIER = "/jeb/_unsub";
+    private static final String HELLO_QUALIFIER = "/jeb/_hello";
 
     private static final String PUB_QUALIFIER = "/jeb/_pub";
     private static final String FROM_HEADER = "_f";
     private static final String TOPIC_HEADER = "_t";
 
     final ExtendedCluster cluster;
+    private final Disposable.Composite disposable = Disposables.composite();
 
     private final Map<String, MemberEventConnection> cachedConnections = new NonBlockingHashMap<>();
-    private final Sinks.Many<EventConnection> connections = Sinks.many().multicast().directBestEffort();
+
+    private final Sinks.Many<EventConnection> connections = Sinks
+            .many()
+            .multicast()
+            .onBackpressureBuffer(Integer.MAX_VALUE, false);
 
     private final Map<String, List<Message>> earlyMessage = Caches.newCache(Duration.ofMinutes(10));
 
@@ -78,7 +84,7 @@ public class ScalecubeEventBusBroker implements EventBroker {
 
             @Override
             public void onGossip(Message gossip) {
-
+                onMessage(gossip);
             }
 
             @Override
@@ -97,7 +103,7 @@ public class ScalecubeEventBusBroker implements EventBroker {
             }
         });
         for (Member member : cluster.otherMembers()) {
-            cachedConnections.put(member.id(), new MemberEventConnection(member));
+            cachedConnections.putIfAbsent(member.id(), new MemberEventConnection(member));
         }
     }
 
@@ -107,6 +113,7 @@ public class ScalecubeEventBusBroker implements EventBroker {
     }
 
     private void handleMessage(MemberEventConnection connection, Message message) {
+        //推送数据
         if (Objects.equals(message.qualifier(), PUB_QUALIFIER)) {
             String topic = message.header(TOPIC_HEADER);
             Object data = message.data();
@@ -123,10 +130,13 @@ public class ScalecubeEventBusBroker implements EventBroker {
                               RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED
                     );
         }
-        if (Objects.equals(message.qualifier(), SUB_QUALIFIER)) {
+        //订阅
+        else if (Objects.equals(message.qualifier(), SUB_QUALIFIER)) {
             log.debug("subscribe from {} : {}", connection, message.data());
             connection.subscriptions.tryEmitNext(message.data());
-        } else if (Objects.equals(message.qualifier(), UNSUB_QUALIFIER)) {
+        }
+        //取消订阅
+        else if (Objects.equals(message.qualifier(), UNSUB_QUALIFIER)) {
             log.debug("unsubscribe from {} : {}", connection, message.data());
             connection.unSubscriptions.tryEmitNext(message.data());
         }
@@ -137,15 +147,15 @@ public class ScalecubeEventBusBroker implements EventBroker {
             if (old == null) {
                 log.debug("add event broker {}", member.address());
                 MemberEventConnection connection = new MemberEventConnection(member);
-                connections.emitNext(connection, (signalType, emitResult) -> {
-                    return emitResult == Sinks.EmitResult.FAIL_NON_SERIALIZED
-                            || emitResult == Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER;
-                });
-                List<Message> early = earlyMessage.get(member.id());
+                connections.emitNext(connection, (signalType, emitResult) ->
+                        emitResult == Sinks.EmitResult.FAIL_NON_SERIALIZED
+                                || emitResult == Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER);
+                List<Message> early = earlyMessage.remove(member.id());
                 if (null != early) {
                     for (Message message : early) {
                         handleMessage(connection, message);
                     }
+                    early.clear();
                 }
                 return connection;
             } else {
@@ -155,12 +165,28 @@ public class ScalecubeEventBusBroker implements EventBroker {
         });
     }
 
+    private Message createMessage(String qualifier, Object data) {
+        return Message
+                .builder()
+                .qualifier(qualifier)
+                .data(data)
+                .header(FROM_HEADER, cluster.member().id())
+                .build();
+    }
+
     @AllArgsConstructor
     public class MemberEventConnection implements EventConnection, EventProducer, EventConsumer {
         @Setter
         private Member member;
-        private final Sinks.Many<Subscription> subscriptions = Sinks.many().multicast().directBestEffort();
-        private final Sinks.Many<Subscription> unSubscriptions = Sinks.many().multicast().directBestEffort();
+        private final Sinks.Many<Subscription> subscriptions = Sinks
+                .many()
+                .multicast()
+                .onBackpressureBuffer(Integer.MAX_VALUE, false);
+
+        private final Sinks.Many<Subscription> unSubscriptions = Sinks
+                .many()
+                .multicast()
+                .onBackpressureBuffer(Integer.MAX_VALUE, false);
 
         private final Sinks.Many<TopicPayload> subscriber = Sinks
                 .many()
@@ -184,20 +210,20 @@ public class ScalecubeEventBusBroker implements EventBroker {
         private Mono<Void> doPublish(TopicPayload payload) {
             try {
                 String topic = payload.getTopic();
-                Object payloadObj;
-                if (payload.getPayload() instanceof NativePayload) {
-                    payloadObj = ((NativePayload<?>) payload.getPayload()).getNativeObject();
-                    payload.release();
-                } else {
-                    payloadObj = payload.getBytes();
-                }
+//                Object payloadObj;
+//                if (payload.getPayload() instanceof NativePayload) {
+//                    payloadObj = ((NativePayload<?>) payload.getPayload()).getNativeObject();
+//                    payload.release();
+//                } else {
+//                    payloadObj = payload.getBytes();
+//                }
                 return cluster
                         .send(member, Message
                                 .builder()
                                 .qualifier(PUB_QUALIFIER)
                                 .header(TOPIC_HEADER, topic)
                                 .header(FROM_HEADER, cluster.member().id())
-                                .data(payloadObj)
+                                .data(payload.getBytes(true))
                                 .build())
                         .onErrorResume(err -> {
                             log.error(err.getMessage(), err);
@@ -244,26 +270,18 @@ public class ScalecubeEventBusBroker implements EventBroker {
             return publisher;
         }
 
-        private Message toMessage(String qualifier, Subscription subscription) {
-            return Message
-                    .builder()
-                    .qualifier(qualifier)
-                    .data(subscription)
-                    .header(FROM_HEADER, cluster.member().id())
-                    .build();
-        }
 
         @Override
         public Mono<Void> subscribe(Subscription subscription) {
             return cluster
-                    .send(member, toMessage(SUB_QUALIFIER, subscription))
+                    .send(member, createMessage(SUB_QUALIFIER, subscription))
                     .then();
         }
 
         @Override
         public Mono<Void> unsubscribe(Subscription subscription) {
             return cluster
-                    .send(member, toMessage(UNSUB_QUALIFIER, subscription))
+                    .send(member, createMessage(UNSUB_QUALIFIER, subscription))
                     .then();
         }
 
@@ -279,7 +297,7 @@ public class ScalecubeEventBusBroker implements EventBroker {
 
         @Override
         public String toString() {
-            return member.alias()+"@"+member.address();
+            return member.alias() + "@" + member.address();
         }
     }
 
@@ -291,6 +309,16 @@ public class ScalecubeEventBusBroker implements EventBroker {
     @Override
     public Flux<EventConnection> accept() {
         return Flux.concat(Flux.fromIterable(cachedConnections.values()), connections.asFlux());
+    }
+
+    @Override
+    public void dispose() {
+        disposable.dispose();
+    }
+
+    @Override
+    public boolean isDisposed() {
+        return disposable.isDisposed();
     }
 
 }

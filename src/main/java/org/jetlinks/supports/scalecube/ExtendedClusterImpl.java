@@ -14,10 +14,8 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
 import javax.annotation.Nonnull;
-import java.util.Collection;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
+import java.time.Duration;
+import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -33,6 +31,13 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     private final List<ClusterMessageHandler> handlers = new CopyOnWriteArrayList<>();
 
+    private volatile boolean started;
+    private final List<Mono<Void>> startThen = new CopyOnWriteArrayList<>();
+    //缓存消息
+    private final List<Message> messageCache = new CopyOnWriteArrayList<>();
+    private long cacheEndWithTime;
+
+
     public ExtendedClusterImpl(ClusterConfig config) {
         this(new ClusterImpl(config));
     }
@@ -45,6 +50,9 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     class ClusterMessageHandlerDispatcher implements ClusterMessageHandler {
         @Override
         public void onMessage(Message message) {
+            if (System.currentTimeMillis() <= cacheEndWithTime && messageCache.size() < 2048) {
+                messageCache.add(message);
+            }
             messageSink.tryEmitNext(message);
             doHandler(message, ClusterMessageHandler::onMessage);
         }
@@ -69,18 +77,31 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     }
 
     public ExtendedClusterImpl handler(Function<ExtendedCluster, ClusterMessageHandler> handlerFunction) {
-        handlers.add(handlerFunction.apply(this));
+        ClusterMessageHandler handler = handlerFunction.apply(this);
+        handlers.add(handler);
+        writeCacheMessage(handler);
         return this;
     }
 
+    private void writeCacheMessage(ClusterMessageHandler handler) {
+        for (Message message : messageCache) {
+            handler.onMessage(message);
+        }
+    }
+
     public Mono<ExtendedCluster> start() {
+        started = true;
+        cacheEndWithTime = System.currentTimeMillis() + Duration.ofSeconds(30).toMillis();
         return real
                 .start()
+                .then(Flux.fromIterable(startThen)
+                          .flatMap(Function.identity())
+                          .then(Mono.fromRunnable(startThen::clear)))
                 .thenReturn(this);
     }
 
     public ExtendedCluster startAwait() {
-        real.startAwait();
+        start().block();
         return this;
     }
 
@@ -94,11 +115,12 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         return messageSink
                 .asFlux()
                 .filter(msg -> Objects.equals(qualifier, msg.qualifier()))
-                .flatMap(msg -> handler.apply(msg, this)
-                                       .onErrorResume(err -> {
-                                           log.error(err.getMessage(), err);
-                                           return Mono.empty();
-                                       }))
+                .flatMap(msg -> handler
+                        .apply(msg, this)
+                        .onErrorResume(err -> {
+                            log.error(err.getMessage(), err);
+                            return Mono.empty();
+                        }))
                 .subscribe();
     }
 
@@ -107,11 +129,12 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         return gossipSink
                 .asFlux()
                 .filter(msg -> Objects.equals(qualifier, msg.qualifier()))
-                .flatMap(msg -> handler.apply(msg, this)
-                                       .onErrorResume(err -> {
-                                           log.error(err.getMessage(), err);
-                                           return Mono.empty();
-                                       }))
+                .flatMap(msg -> handler
+                        .apply(msg, this)
+                        .onErrorResume(err -> {
+                            log.error(err.getMessage(), err);
+                            return Mono.empty();
+                        }))
                 .subscribe();
     }
 
@@ -182,6 +205,10 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     @Override
     public <T> Mono<Void> updateMetadata(T metadata) {
+        if (!started) {
+            startThen.add(real.updateMetadata(metadata));
+            return null;
+        }
         return real.updateMetadata(metadata);
     }
 

@@ -33,7 +33,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
     private final Disposable.Composite disposable = Disposables.composite();
 
-    private final Map<String,Sinks.Many<DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
+    private final Map<String,Sinks.One<DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
 
     private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
 
@@ -97,8 +97,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                                    .subscribe(response -> Optional
                                            .ofNullable(checkRequests.remove(response.getRequestId()))
                                            .ifPresent(processor -> {
-                                               processor.tryEmitNext(response);
-
+                                               processor.tryEmitValue(response);
                                            }))
             );
         }
@@ -117,7 +116,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
             String uid = UUID.randomUUID().toString();
 
             DeviceCheckRequest request = new DeviceCheckRequest(serverId, uid, new ArrayList<>(deviceIdList));
-            Sinks.Many<DeviceCheckResponse> processor = Sinks.many().multicast().onBackpressureBuffer();
+            Sinks.One<DeviceCheckResponse> processor = Sinks.one();
 
             checkRequests.put(uid, processor);
 
@@ -128,7 +127,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                             log.warn("JetLinks server [{}] not found", deviceGatewayServerId);
                             return Mono.empty();
                         }
-                        return processor.asFlux().flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList()));
+                        return processor.asMono().flatMapIterable(DeviceCheckResponse::getStateInfoList);
                     })
                     .timeout(Duration.ofSeconds(5), Flux.empty())
                     .doFinally((s) -> {

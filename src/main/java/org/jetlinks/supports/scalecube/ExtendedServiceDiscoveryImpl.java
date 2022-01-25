@@ -213,7 +213,8 @@ public final class ExtendedServiceDiscoveryImpl implements ServiceDiscovery {
             discoveryEvent = newEndpointAdded(decodeMetadata(membershipEvent.newMetadata()));
         }
         if (membershipEvent.isRemoved() && membershipEvent.oldMetadata() != null) {
-            discoveryEvent = newEndpointRemoved(decodeMetadata(membershipEvent.oldMetadata()));
+            ServiceEndpoint serviceEndpoint = decodeMetadata(membershipEvent.oldMetadata());
+            discoveryEvent = serviceEndpoint == null ? null : newEndpointLeaving(serviceEndpoint);
         }
         if (membershipEvent.isLeaving() && membershipEvent.newMetadata() != null) {
             ServiceEndpoint serviceEndpoint = decodeMetadata(membershipEvent.newMetadata());
