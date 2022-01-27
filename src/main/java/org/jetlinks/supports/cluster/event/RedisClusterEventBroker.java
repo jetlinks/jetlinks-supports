@@ -12,6 +12,9 @@ import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+/**
+ * 支持集群的事件代理
+ */
 @Slf4j
 public class RedisClusterEventBroker extends AbstractClusterEventBroker {
 
@@ -19,6 +22,13 @@ public class RedisClusterEventBroker extends AbstractClusterEventBroker {
         super(clusterManager, factory);
     }
 
+    /**
+     * 监听消息
+     *
+     * @param localId 本地节点ID
+     * @param brokerId 集群节点ID
+     * @return 监听到的消息
+     */
     @Override
     protected Flux<TopicPayload> listen(String localId, String brokerId) {
 
@@ -32,6 +42,14 @@ public class RedisClusterEventBroker extends AbstractClusterEventBroker {
                 .map(msg -> TopicPayloadCodec.doDecode(Unpooled.wrappedBuffer(msg)));
     }
 
+    /**
+     * 消息分发，用于将消息转发到集群中
+     *
+     * @param localId 本地ID
+     * @param brokerId 集群ID
+     * @param payload 消息
+     * @return void
+     */
     @Override
     protected Mono<Void> dispatch(String localId, String brokerId, TopicPayload payload) {
         try {
