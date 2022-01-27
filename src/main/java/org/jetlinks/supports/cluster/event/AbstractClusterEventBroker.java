@@ -33,6 +33,7 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
 
     protected final ReactiveRedisOperations<String, byte[]> redis;
 
+    //事件ID
     private final String id;
     private final EmitterProcessor<EventConnection> processor = EmitterProcessor.create(false);
 
@@ -216,6 +217,11 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                                    .subscribe());
         }
 
+        /**
+         * 发送订阅请求
+         *
+         * @param subscription 订阅请求
+         */
         @Override
         public Mono<Void> subscribe(Subscription subscription) {
             byte[] sub = subscriptionCodec.encode(subscription).getBytes(true);
@@ -228,6 +234,11 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                     .then();
         }
 
+        /**
+         * 发送取消订阅请求
+         *
+         * @param subscription 订阅请求
+         */
         @Override
         public Mono<Void> unsubscribe(Subscription subscription) {
             byte[] sub = subscriptionCodec.encode(subscription).getBytes(true);
@@ -239,16 +250,31 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
                     .then();
         }
 
+        /**
+         * 从生产者订阅消息
+         *
+         * @return 消息流
+         */
         @Override
         public Flux<TopicPayload> subscribe() {
             return processor;
         }
 
+        /**
+         * 使用集群ID作为集群连接ID
+         *
+         * @return brokerId
+         */
         @Override
         public String getId() {
             return brokerId;
         }
 
+        /**
+         * 判断集群连接是否存活，默认返回true
+         *
+         * @return  true
+         */
         @Override
         public boolean isAlive() {
             return true;
@@ -259,21 +285,33 @@ public abstract class AbstractClusterEventBroker implements EventBroker {
             this.disposable.add(disposable);
         }
 
+        /**
+         * @return 事件代理
+         */
         @Override
         public EventBroker getBroker() {
             return AbstractClusterEventBroker.this;
         }
 
+        /**
+         * 默认订阅其他broker的消息
+         */
         @Override
         public Feature[] features() {
             return new Feature[]{Feature.consumeAnotherBroker};
         }
 
+        /**
+         * @return 消息订阅流
+         */
         @Override
         public Flux<Subscription> handleSubscribe() {
             return subProcessor;
         }
 
+        /**
+         * @return 取消消息取消的流
+         */
         @Override
         public Flux<Subscription> handleUnSubscribe() {
             return unsubProcessor;

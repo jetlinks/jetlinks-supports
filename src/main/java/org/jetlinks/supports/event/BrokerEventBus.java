@@ -56,6 +56,14 @@ public class BrokerEventBus implements EventBus {
     public BrokerEventBus() {
     }
 
+    /**
+     * 从事件总线中订阅事件,并按照指定的解码器进行数据转换
+     *
+     * @param subscription 订阅信息
+     * @param decoder      解码器
+     * @param <T>          解码后结果类型
+     * @return 事件流
+     */
     @Override
     public <T> Flux<T> subscribe(@NotNull Subscription subscription,
                                  @NotNull Decoder<T> decoder) {
@@ -76,6 +84,21 @@ public class BrokerEventBus implements EventBus {
                 .publishOn(publishScheduler);
     }
 
+    /**
+     * 从事件总线中订阅事件
+     * <p>
+     * 特别注意!!!
+     * <p>
+     * 如果没有调用
+     * {@link TopicPayload#bodyToString()},
+     * {@link TopicPayload#bodyToJson()},
+     * {@link TopicPayload#bodyToJsonArray()},
+     * {@link TopicPayload#getBytes()}
+     * 使用TopicPayload后需要手动调用{@link TopicPayload#release()}释放.
+     *
+     * @param subscription 订阅信息
+     * @return 事件流
+     */
     @Override
     public Flux<TopicPayload> subscribe(Subscription subscription) {
         return Flux
@@ -387,6 +410,14 @@ public class BrokerEventBus implements EventBus {
         return Mono.just(total);
     }
 
+    /**
+     * 推送消息流到事件总线,并返回有多少订阅者订阅了此topic,默认自动根据元素类型进行序列化
+     *
+     * @param topic topic
+     * @param event 事件流
+     * @param <T>   事件流元素类型
+     * @return 订阅者数量
+     */
     @Override
     @SuppressWarnings("all")
     public <T> Mono<Long> publish(String topic, Publisher<T> event) {
@@ -394,16 +425,44 @@ public class BrokerEventBus implements EventBus {
     }
 
 
+    /**
+     * 推送消息流，并指定编码器用于进行事件序列化
+     *
+     * @param topic       topic
+     * @param encoder     编码器
+     * @param eventStream 事件流
+     * @param <T>         类型
+     * @return 订阅者数量
+     */
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream) {
         return publish(topic, encoder, eventStream, publishScheduler);
     }
 
+    /**
+     * 推送单个数据到事件总线中,并指定编码器用于将事件数据进行序列化
+     *
+     * @param topic   主题
+     * @param encoder 编码器
+     * @param event   事件数据
+     * @param <T>     事件类型
+     * @return 订阅者数量
+     */
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T event) {
         return this.publish(topic, encoder, event, publishScheduler);
     }
 
+    /**
+     * 推送单个数据到事件总线中,并指定编码器用于将事件数据进行序列化
+     *
+     * @param topic   主题
+     * @param encoder 编码器
+     * @param payload   推送数据
+     * @param scheduler   调度器
+     * @param <T>     事件类型
+     * @return 订阅者数量
+     */
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T payload, Scheduler scheduler) {
         TopicPayload topicPayload = TopicPayload.of(topic, Payload.of(payload, encoder));
@@ -419,6 +478,16 @@ public class BrokerEventBus implements EventBus {
         return Mono.just(subs);
     }
 
+    /**
+     * 推送消息流，并指定编码器用于进行事件序列化
+     *
+     * @param topic       topic
+     * @param encoder     编码器
+     * @param eventStream 事件流
+     * @param scheduler   调度器
+     * @param <T>         void
+     * @return 订阅者数量
+     */
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream, Scheduler publisher) {
         Flux<TopicPayload> cache = Flux
