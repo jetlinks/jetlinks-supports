@@ -210,20 +210,20 @@ public class ScalecubeEventBusBroker implements EventBroker, Disposable {
         private Mono<Void> doPublish(TopicPayload payload) {
             try {
                 String topic = payload.getTopic();
-//                Object payloadObj;
-//                if (payload.getPayload() instanceof NativePayload) {
-//                    payloadObj = ((NativePayload<?>) payload.getPayload()).getNativeObject();
-//                    payload.release();
-//                } else {
-//                    payloadObj = payload.getBytes();
-//                }
+                Object payloadObj;
+                if (payload.getPayload() instanceof NativePayload) {
+                    payloadObj = ((NativePayload<?>) payload.getPayload()).getNativeObject();
+                    payload.release();
+                } else {
+                    payloadObj = payload.getBytes();
+                }
                 return cluster
                         .send(member, Message
                                 .builder()
                                 .qualifier(PUB_QUALIFIER)
                                 .header(TOPIC_HEADER, topic)
                                 .header(FROM_HEADER, cluster.member().id())
-                                .data(payload.getBytes(true))
+                                .data(payloadObj)
                                 .build())
                         .onErrorResume(err -> {
                             log.error(err.getMessage(), err);
