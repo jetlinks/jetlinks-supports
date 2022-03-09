@@ -8,6 +8,7 @@ import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -106,7 +107,9 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 } catch (Exception e) {
                     log.error(e.getMessage(), e);
                 }
-                return supportProvider.create(serviceContext);
+                return supportProvider
+                        .create(serviceContext)
+                        .onErrorMap(Exceptions::bubble);
             } catch (Throwable e) {
                 return Mono.error(e);
             }
