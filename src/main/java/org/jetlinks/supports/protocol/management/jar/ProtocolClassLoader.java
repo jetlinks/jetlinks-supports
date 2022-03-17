@@ -1,6 +1,7 @@
 package org.jetlinks.supports.protocol.management.jar;
 
 import lombok.Getter;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.net.URL;
@@ -41,5 +42,13 @@ public class ProtocolClassLoader extends URLClassLoader {
         Class<?> clazz = super.findClass(name);
         resolveClass(clazz);
         return clazz;
+    }
+
+    @Override
+    public URL getResource(String name) {
+        if(StringUtils.isEmpty(name)){
+            return urls[0];
+        }
+        return super.findResource(name);
     }
 }

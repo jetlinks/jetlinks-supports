@@ -8,6 +8,12 @@ import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.core.type.AnnotationMetadata;
+import org.springframework.core.type.ClassMetadata;
+import org.springframework.core.type.classreading.CachingMetadataReaderFactory;
+import org.springframework.core.type.classreading.MetadataReader;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -16,7 +22,6 @@ import java.io.File;
 import java.net.URL;
 import java.util.Map;
 import java.util.Optional;
-import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -54,15 +59,13 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
     public Mono<? extends ProtocolSupport> load(ProtocolSupportDefinition definition) {
         return Mono.defer(() -> {
             try {
+                String id = definition.getId();
                 Map<String, Object> config = definition.getConfiguration();
                 String location = Optional
                         .ofNullable(config.get("location"))
                         .map(String::valueOf)
                         .orElseThrow(() -> new IllegalArgumentException("location"));
 
-                String provider = Optional.ofNullable(config.get("provider"))
-                                          .map(String::valueOf)
-                                          .map(String::trim).orElse(null);
                 URL url;
 
                 if (!location.contains("://")) {
@@ -74,12 +77,12 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 ProtocolClassLoader loader;
                 URL fLocation = url;
                 {
-                    ProtocolSupportProvider oldProvider = loaded.remove(provider);
+                    ProtocolSupportProvider oldProvider = loaded.remove(id);
                     if (null != oldProvider) {
                         oldProvider.dispose();
                     }
                 }
-                loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
+                loader = protocolLoaders.compute(id, (key, old) -> {
                     if (null != old) {
                         try {
                             closeLoader(old);
@@ -91,20 +94,28 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
 
                 ProtocolSupportProvider supportProvider;
                 log.debug("load protocol support from : {}", location);
+                String provider = Optional
+                        .ofNullable(config.get("provider"))
+                        .map(String::valueOf)
+                        .map(String::trim)
+                        .orElse(null);
                 if (provider != null) {
                     //直接从classLoad获取,防止冲突
                     @SuppressWarnings("all")
                     Class<ProtocolSupportProvider> providerType = (Class) loader.loadSelfClass(provider);
                     supportProvider = providerType.getDeclaredConstructor().newInstance();
                 } else {
-                    supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
+                    supportProvider = lookupProvider(loader);
+                    if (null == supportProvider) {
+                        return Mono.error(new IllegalArgumentException("error.protocol_provider_not_found"));
+                    }
                 }
-                ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
+                ProtocolSupportProvider oldProvider = loaded.put(id, supportProvider);
                 try {
                     if (null != oldProvider) {
                         oldProvider.dispose();
                     }
-                } catch (Exception e) {
+                } catch (Throwable e) {
                     log.error(e.getMessage(), e);
                 }
                 return supportProvider
@@ -114,5 +125,39 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                 return Mono.error(e);
             }
         }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    protected ProtocolSupportProvider lookupProvider(ProtocolClassLoader classLoader) {
+
+        try {
+            CachingMetadataReaderFactory metadataReaderFactory = new CachingMetadataReaderFactory();
+            PathMatchingResourcePatternResolver resourcePatternResolver = new PathMatchingResourcePatternResolver(classLoader) {
+                @Override
+                protected boolean isJarResource(Resource resource) {
+                    return true;
+                }
+            };
+            Resource[] classes = resourcePatternResolver.getResources("classpath:**/*.class");
+            for (Resource aClass : classes) {
+                MetadataReader reader = metadataReaderFactory.getMetadataReader(aClass);
+                AnnotationMetadata annotationMetadata = reader.getAnnotationMetadata();
+                if (annotationMetadata.hasAnnotation("java.lang.Deprecated")) {
+                    continue;
+                }
+                ClassMetadata classMetadata = reader.getClassMetadata();
+                try {
+                    Class<?> clazz = classLoader.loadSelfClass(classMetadata.getClassName());
+                    if (ProtocolSupportProvider.class.isAssignableFrom(clazz)) {
+                        return (ProtocolSupportProvider) clazz.getDeclaredConstructor().newInstance();
+                    }
+                } catch (Throwable ignore) {
+
+                }
+            }
+            metadataReaderFactory.clearCache();
+        } catch (Throwable e) {
+            log.error(e.getMessage(), e);
+        }
+        return null;
     }
 }
