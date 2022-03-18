@@ -12,6 +12,7 @@ import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
+import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.utils.DeviceMessageTracer;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
@@ -106,6 +107,8 @@ public class DefaultSendToDeviceMessageHandler {
                         log.warn("device[{}] not connected,send message fail", message.getDeviceId());
                         return doReply(createReply(deviceId, message).error(ErrorCode.CLIENT_OFFLINE));
                     }))
+                    //注入跟踪信息
+                    .as(MonoTracer.createWith(message.getHeaders()))
                     .subscribe();
 
         }
@@ -241,7 +244,9 @@ public class DefaultSendToDeviceMessageHandler {
                     .flatMap(Function.identity());
         }
 
-        handler.subscribe();
+        handler
+                .as(MonoTracer.createWith(message.getHeaders()))
+                .subscribe();
     }
 
 
