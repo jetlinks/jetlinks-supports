@@ -24,6 +24,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
+import static org.jetlinks.core.trace.DeviceTracer.*;
+import static org.jetlinks.core.trace.FluxTracer.create;
+
 @Slf4j
 @AllArgsConstructor
 public class DefaultSendToDeviceMessageHandler {
@@ -127,16 +130,16 @@ public class DefaultSendToDeviceMessageHandler {
 
     protected void doSend(DeviceMessage message, DeviceSession session) {
         DeviceMessageTracer.trace(message, "send.do.before");
+
+        DeviceSession fSession =DeviceSession.trace(session.unwrap(DeviceSession.class)) ;
+        if (fSession.getOperator() == null) {
+            log.warn("unsupported send message to {}", fSession);
+            return;
+        }
         String deviceId = message.getDeviceId();
         DeviceMessageReply reply = this.createReply(deviceId, message);
         AtomicBoolean alreadyReply = new AtomicBoolean(false);
-        if (session.getOperator() == null) {
-            log.warn("unsupported send message to {}", session);
-            return;
-        }
-        DeviceSession fSession = session.unwrap(DeviceSession.class);
         boolean forget = message.getHeader(Headers.sendAndForget).orElse(false);
-
         Mono<Boolean> handler = fSession
                 .getOperator()
                 .getProtocol()
@@ -163,7 +166,8 @@ public class DefaultSendToDeviceMessageHandler {
 
                     @Override
                     public Mono<DeviceSession> getSession(String deviceId) {
-                        return Mono.justOrEmpty(sessionManager.getSession(deviceId));
+                        return Mono.justOrEmpty(sessionManager.getSession(deviceId))
+                                   .map(DeviceSession::trace);
                     }
 
                     @Nonnull
@@ -191,7 +195,10 @@ public class DefaultSendToDeviceMessageHandler {
                                    .then();
                     }
                 }))
-                .flatMap(session::send)
+                //跟踪encode
+                .as(create(SpanName.encode(deviceId),
+                           (span, msg) -> span.setAttribute(SpanKey.message, msg.toString())))
+                .flatMap(fSession::send)
                 .reduce((r1, r2) -> r1 && r2)
                 .flatMap(success -> {
                     if (alreadyReply.get() || forget) {
@@ -258,8 +265,8 @@ public class DefaultSendToDeviceMessageHandler {
                 then = doReply(((DeviceMessageReply) message));
             }
         }
-        return handler
-                .reply(reply)
+        return writeToMessage(reply)
+                .flatMap(handler::reply)
                 .as(mo -> {
                     if (log.isDebugEnabled()) {
                         return mo.doFinally(s -> log.debug("reply message {} ,[{}]", s, reply));
