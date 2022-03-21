@@ -14,6 +14,7 @@ import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import org.jetlinks.core.topic.Topic;
+import org.jetlinks.core.trace.TraceHolder;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -406,24 +407,30 @@ public class BrokerEventBus implements EventBus {
 
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T payload, Scheduler scheduler) {
-        TopicPayload topicPayload = TopicPayload.of(topic, Payload.of(payload, encoder));
-        long subs = this
-                .doPublish(topic,
-                           sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
-                           sub -> doPublish(topic, sub, topicPayload)
-                );
-        ReferenceCountUtil.safeRelease(topicPayload);
-        if (log.isTraceEnabled()) {
-            log.trace("topic [{}] has {} subscriber", topic, subs);
-        }
-        return Mono.just(subs);
+        return TraceHolder
+                //写入跟踪信息到header中
+                .writeContextTo(TopicPayload.of(topic, Payload.of(payload, encoder)), TopicPayload::addHeader)
+                .map(pld -> {
+                    long subs = this
+                            .doPublish(pld.getTopic(),
+                                       sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
+                                       sub -> doPublish(pld.getTopic(), sub, pld)
+                            );
+                    if (log.isTraceEnabled()) {
+                        log.trace("topic [{}] has {} subscriber", pld.getTopic(), subs);
+                    }
+                    ReferenceCountUtil.safeRelease(pld);
+                    return subs;
+                });
     }
 
     @Override
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream, Scheduler publisher) {
         Flux<TopicPayload> cache = Flux
                 .from(eventStream)
-                .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
+                .flatMap(payload -> TraceHolder
+                        //写入跟踪信息到header中
+                        .writeContextTo(TopicPayload.of(topic, Payload.of(payload, encoder)), TopicPayload::addHeader))
                 .cache();
         return Flux
                 .<SubscriptionInfo>create(sink -> {

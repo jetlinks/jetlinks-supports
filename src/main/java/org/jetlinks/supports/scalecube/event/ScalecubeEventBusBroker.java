@@ -1,5 +1,6 @@
 package org.jetlinks.supports.scalecube.event;
 
+import com.alibaba.fastjson.JSON;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
@@ -43,6 +44,7 @@ public class ScalecubeEventBusBroker implements EventBroker, Disposable {
     private static final String PUB_QUALIFIER = "/jeb/_pub";
     private static final String FROM_HEADER = "_f";
     private static final String TOPIC_HEADER = "_t";
+    private static final String TOPIC_HEADER_HEADER = "_th";
 
     final ExtendedCluster cluster;
     private final Disposable.Composite disposable = Disposables.composite();
@@ -116,12 +118,16 @@ public class ScalecubeEventBusBroker implements EventBroker, Disposable {
         //推送数据
         if (Objects.equals(message.qualifier(), PUB_QUALIFIER)) {
             String topic = message.header(TOPIC_HEADER);
+            String headers = message.header(TOPIC_HEADER_HEADER);
             Object data = message.data();
             TopicPayload topicPayload;
             if (data instanceof byte[]) {
                 topicPayload = TopicPayload.of(topic, Payload.of((byte[]) message.data()));
             } else {
                 topicPayload = TopicPayload.of(topic, NativePayload.of(data));
+            }
+            if (StringUtils.hasText(headers)) {
+                topicPayload.addHeader(JSON.parseObject(headers));
             }
             log.trace("publish from {} : {}", connection, topic);
             connection
@@ -217,11 +223,16 @@ public class ScalecubeEventBusBroker implements EventBroker, Disposable {
                 } else {
                     payloadObj = payload.getBytes();
                 }
+                String headers = null;
+                if (payload.getHeaders() != null) {
+                    headers = JSON.toJSONString(payload.getHeaders());
+                }
                 return cluster
                         .send(member, Message
                                 .builder()
                                 .qualifier(PUB_QUALIFIER)
                                 .header(TOPIC_HEADER, topic)
+                                .header(TOPIC_HEADER_HEADER, headers)
                                 .header(FROM_HEADER, cluster.member().id())
                                 .data(payloadObj)
                                 .build())

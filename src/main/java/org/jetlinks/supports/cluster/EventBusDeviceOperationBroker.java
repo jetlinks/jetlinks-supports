@@ -1,6 +1,7 @@
 package org.jetlinks.supports.cluster;
 
 import com.google.common.cache.CacheBuilder;
+import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.codec.Codecs;
@@ -8,12 +9,15 @@ import org.jetlinks.core.device.DeviceStateInfo;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.message.*;
+import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.supports.cluster.redis.DeviceCheckRequest;
 import org.jetlinks.supports.cluster.redis.DeviceCheckResponse;
 import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
-import reactor.core.publisher.*;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.*;
@@ -33,7 +37,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
     private final Disposable.Composite disposable = Disposables.composite();
 
-    private final Map<String,Sinks.One<DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
+    private final Map<String, Sinks.One<DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
 
     private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
 
@@ -197,7 +201,16 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                     Subscription.Feature.broker);
 
         return eventBus
-                .subscribe(subscription, messageCodec)
+                .subscribe(subscription)
+                .map(payload -> {
+                    try {
+                        //copy trace上下文
+                        Message message = payload.decode(messageCodec, false);
+                        return TraceHolder.copyContext(payload.getHeaders(), message, Message::addHeader);
+                    } finally {
+                        ReferenceCountUtil.safeRelease(payload);
+                    }
+                })
                 .doOnNext(message -> {
                     if (message instanceof RepayableDeviceMessage && !message
                             .getHeader(Headers.sendAndForget)
