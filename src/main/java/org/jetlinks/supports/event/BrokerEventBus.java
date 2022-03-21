@@ -5,6 +5,7 @@ import io.netty.util.internal.ThreadLocalRandom;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.SneakyThrows;
 import org.hswebframework.web.dict.EnumDict;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codecs;
@@ -396,6 +397,7 @@ public class BrokerEventBus implements EventBus {
 
 
     @Override
+    @SneakyThrows
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream) {
         return publish(topic, encoder, eventStream, publishScheduler);
     }
