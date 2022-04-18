@@ -8,10 +8,12 @@ import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import io.scalecube.net.Address;
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.core.trace.TraceHolder;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.util.context.Context;
 
 import javax.annotation.Nonnull;
 import java.time.Duration;
@@ -112,25 +114,21 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     @Override
     public Disposable listenMessage(@Nonnull String qualifier, BiFunction<Message, ExtendedCluster, Mono<Void>> handler) {
-        return messageSink
-                .asFlux()
-                .filter(msg -> Objects.equals(qualifier, msg.qualifier()))
-                .flatMap(msg -> handler
-                        .apply(msg, this)
-                        .onErrorResume(err -> {
-                            log.error(err.getMessage(), err);
-                            return Mono.empty();
-                        }))
-                .subscribe();
+        return listen(messageSink, qualifier, handler);
     }
 
     @Override
     public Disposable listenGossip(@Nonnull String qualifier, BiFunction<Message, ExtendedCluster, Mono<Void>> handler) {
-        return gossipSink
+        return listen(gossipSink, qualifier, handler);
+    }
+
+    private Disposable listen(Sinks.Many<Message> sink, @Nonnull String qualifier, BiFunction<Message, ExtendedCluster, Mono<Void>> handler) {
+        return sink
                 .asFlux()
                 .filter(msg -> Objects.equals(qualifier, msg.qualifier()))
                 .flatMap(msg -> handler
                         .apply(msg, this)
+                        .contextWrite(TraceHolder.readToContext(Context.empty(), msg.headers()))
                         .onErrorResume(err -> {
                             log.error(err.getMessage(), err);
                             return Mono.empty();
@@ -145,26 +143,51 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     @Override
     public Mono<Void> send(Member member, Message message) {
+        if (TraceHolder.isEnabled()) {
+            return TraceHolder
+                    .writeContextTo(Message.with(message), Message.Builder::header)
+                    .flatMap(msg -> real.send(member, msg.build()));
+        }
         return real.send(member, message);
     }
 
     @Override
     public Mono<Void> send(Address address, Message message) {
+        if (TraceHolder.isEnabled()) {
+            return TraceHolder
+                    .writeContextTo(Message.with(message), Message.Builder::header)
+                    .flatMap(msg -> real.send(address, msg.build()));
+        }
         return real.send(address, message);
     }
 
     @Override
     public Mono<Message> requestResponse(Address address, Message request) {
+        if (TraceHolder.isEnabled()) {
+            return TraceHolder
+                    .writeContextTo(Message.with(request), Message.Builder::header)
+                    .flatMap(msg -> real.requestResponse(address, request));
+        }
         return real.requestResponse(address, request);
     }
 
     @Override
     public Mono<Message> requestResponse(Member member, Message request) {
+        if (TraceHolder.isEnabled()) {
+            return TraceHolder
+                    .writeContextTo(Message.with(request), Message.Builder::header)
+                    .flatMap(msg -> real.requestResponse(member, request));
+        }
         return real.requestResponse(member, request);
     }
 
     @Override
     public Mono<String> spreadGossip(Message message) {
+        if (TraceHolder.isEnabled()) {
+            return TraceHolder
+                    .writeContextTo(Message.with(message), Message.Builder::header)
+                    .flatMap(msg -> real.spreadGossip(message));
+        }
         return real.spreadGossip(message);
     }
 

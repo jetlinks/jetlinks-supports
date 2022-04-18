@@ -11,6 +11,7 @@ import org.jetlinks.core.exception.DeviceOperationException;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.utils.DeviceMessageTracer;
+import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
@@ -77,13 +78,12 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
-        DeviceMessageTracer.trace(message, "reply.before");
         if (StringUtils.isEmpty(message.getMessageId())) {
             log.warn("reply message messageId is empty: {}", message);
-            return Mono.just(false);
+            return Reactors.ALWAYS_FALSE;
         }
 
-        Mono<Boolean> then = Mono.empty();
+        Mono<Boolean> then = Reactors.ALWAYS_TRUE;
         if (message instanceof ChildDeviceMessageReply) {
             Message childDeviceMessage = ((ChildDeviceMessageReply) message).getChildDeviceMessage();
             if (childDeviceMessage instanceof DeviceMessageReply) {
@@ -96,7 +96,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                     if (message.getHeader(Headers.async).orElse(false)
                             || replyProcessor.containsKey(getAwaitReplyKey(message.getDeviceId(), msgId))) {
                         handleReply(message);
-                        return Mono.just(true);
+                        return Reactors.ALWAYS_TRUE;
                     }
                     return this
                             .doReply(message)
@@ -107,7 +107,6 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     protected void handleReply(DeviceMessageReply message) {
         try {
-            DeviceMessageTracer.trace(message, "reply.after");
             String messageId = getAwaitReplyKey(message);
             String partMsgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(null);
             if (partMsgId != null) {
