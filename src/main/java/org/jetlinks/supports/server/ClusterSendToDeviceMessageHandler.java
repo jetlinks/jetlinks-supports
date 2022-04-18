@@ -271,8 +271,7 @@ public class ClusterSendToDeviceMessageHandler {
             alreadyReply = true;
             return Flux
                     .from(replyMessage)
-                    .flatMap(msg -> decodedClientMessageHandler
-                            .handleMessage(device, message))
+                    .flatMap(msg -> decodedClientMessageHandler.handleMessage(device, msg))
                     .then();
         }
 

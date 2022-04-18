@@ -151,6 +151,10 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
     }
 
     private Mono<Void> handleSendToDevice(Message message) {
+        if(message instanceof RepayableDeviceMessage){
+            RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
+            awaits.put(getAwaitReplyKey(msg),msg);
+        }
         if (sendToDevice.currentSubscriberCount() == 0
                 || sendToDevice.tryEmitNext(message).isFailure()) {
             log.warn("no handler for message {}", message);
