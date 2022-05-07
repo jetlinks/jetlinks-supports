@@ -101,19 +101,19 @@
         <dependency>
             <groupId>io.scalecube</groupId>
             <artifactId>scalecube-services</artifactId>
-            <version>2.10.23</version>
+            <version>${scalecube.version}</version>
         </dependency>
 
         <dependency>
             <groupId>io.scalecube</groupId>
             <artifactId>scalecube-services-discovery</artifactId>
-            <version>2.10.23</version>
+            <version>${scalecube.version}</version>
         </dependency>
 
         <dependency>
             <groupId>io.scalecube</groupId>
             <artifactId>scalecube-services-transport-rsocket</artifactId>
-            <version>2.10.23</version>
+            <version>${scalecube.version}</version>
         </dependency>
 
         <dependency>
@@ -129,13 +129,13 @@
         <dependency>
             <groupId>io.scalecube</groupId>
             <artifactId>scalecube-services-transport-jackson</artifactId>
-            <version>2.10.23</version>
+            <version>${scalecube.version}</version>
         </dependency>
 
         <dependency>
             <groupId>io.scalecube</groupId>
             <artifactId>scalecube-services-transport-protostuff</artifactId>
-            <version>2.10.23</version>
+            <version>${scalecube.version}</version>
         </dependency>
 
     </dependencies>
