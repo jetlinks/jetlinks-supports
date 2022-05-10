@@ -26,6 +26,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
+/**
+ * 微服务设备会话管理器
+ *
+ * @author zhouhao
+ */
 @Slf4j
 public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManager {
 
@@ -47,25 +52,79 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
         sayHello();
     }
 
+    /**
+     * 设备管理服务
+     *
+     * <P>代理模式的使用</P>
+     *
+     * <li>{@link Service} 接口定义</li>
+     * <li>{@link ServiceImpl} 真实实现类</li>
+     * <li>{@link Service} 代理实现类</li>
+     *
+     */
     @io.scalecube.services.annotations.Service
     public interface Service {
+
+        /**
+         * 设备会话是否存活
+         *
+         * @param deviceId 设备ID
+         * @return 设备会话是否存活
+         */
         @ServiceMethod
         Mono<Boolean> isAlive(String deviceId);
 
+        /**
+         * 会话总数
+         *
+         * @return 会话总数
+         */
         @ServiceMethod
         Mono<Long> total();
 
+        /**
+         * 初始化设备
+         *
+         * @param deviceId 设备ID
+         * @return 初始化是否成功
+         */
         @ServiceMethod
         Mono<Boolean> init(String deviceId);
 
+        /**
+         * 删除设备会话
+         *
+         * @param deviceId 设备ID
+         * @return 被删除的会话数量
+         */
         @ServiceMethod
         Mono<Long> remove(String deviceId);
     }
 
+    /**
+     * <P>代理模式的使用</P>
+     * <li>{@link Service} 接口定义</li>
+     * <li>{@link ServiceImpl} 真实实现类</li>
+     * <li>{@link Service} 代理实现类</li>
+     */
     @AllArgsConstructor
     public static class ServiceImpl implements Service {
+
+        /**
+         * 设备会话管理器提供商
+         */
         private final Supplier<AbstractDeviceSessionManager> managerSupplier;
 
+        /**
+         * 统一处理方法
+         *
+         * @param arg0         参数0
+         * @param arg          二元处理函数
+         * @param defaultValue 默认返回值
+         * @return             处理结果
+         * @param <T>          返回值类型
+         * @param <Arg0>       参数0类型
+         */
         private <T, Arg0> T doWith(Arg0 arg0,
                                    BiFunction<AbstractDeviceSessionManager, Arg0, T> arg,
                                    T defaultValue) {
@@ -76,6 +135,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
             return arg.apply(manager, arg0);
         }
 
+        /**
+         * 设备会话是否存活
+         *
+         * @param deviceId 设备ID
+         * @return 设备会话是否存活
+         */
         @Override
         public Mono<Boolean> isAlive(String deviceId) {
             return doWith(deviceId,
@@ -83,6 +148,11 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                           Reactors.ALWAYS_FALSE);
         }
 
+        /**
+         * 会话总数
+         *
+         * @return 会话总数
+         */
         @Override
         public Mono<Long> total() {
             return doWith(null,
@@ -90,6 +160,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                           Reactors.ALWAYS_ZERO_LONG);
         }
 
+        /**
+         * 初始化设备
+         *
+         * @param deviceId 设备ID
+         * @return 初始化是否成功
+         */
         @Override
         public Mono<Boolean> init(String deviceId) {
             return doWith(deviceId,
@@ -97,6 +173,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                           Reactors.ALWAYS_FALSE);
         }
 
+        /**
+         * 删除设备会话
+         *
+         * @param deviceId 设备ID
+         * @return 被删除的会话数量
+         */
         @Override
         public Mono<Long> remove(String deviceId) {
             return doWith(deviceId,
@@ -105,6 +187,10 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
         }
     }
 
+    /**
+     * 初始化会话管理器任务（定时检查设备状态）
+     * <p>定时集群间传播消息</p>
+     */
     @Override
     public void init() {
         super.init();
@@ -116,6 +202,9 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
         );
     }
 
+    /**
+     * 集群之间传播消息
+     */
     private void sayHello() {
         cluster.spreadGossip(Message
                                      .builder()
@@ -125,6 +214,9 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                .subscribe();
     }
 
+    /**
+     * 集群服务处理程序
+     */
     class ServiceHandler implements ClusterMessageHandler {
         @Override
         public void onGossip(Message gossip) {
@@ -151,15 +243,33 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
         }
     }
 
+    /**
+     * 代理模式的使用
+     *
+     * <li>{@link Service} 接口定义</li>
+     * <li>{@link ServiceImpl} 真实实现类</li>
+     * <li>{@link Service} 代理实现类</li>
+     */
     @AllArgsConstructor
     static class ErrorHandleService implements Service {
         private final String id;
         private final Service service;
 
+        /**
+         * 异常处理
+         *
+         * @param error
+         */
         private void handleError(Throwable error) {
             log.warn("cluster[{}] session manager is failed", id, error);
         }
 
+        /**
+         * 设备会话是否存活
+         *
+         * @param deviceId 设备ID
+         * @return 设备会话是否存活
+         */
         @Override
         public Mono<Boolean> isAlive(String deviceId) {
             return service
@@ -170,6 +280,11 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                     });
         }
 
+        /**
+         * 会话总数
+         *
+         * @return 会话总数
+         */
         @Override
         public Mono<Long> total() {
             return service
@@ -180,6 +295,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                     });
         }
 
+        /**
+         * 初始化设备
+         *
+         * @param deviceId 设备ID
+         * @return 初始化是否成功
+         */
         @Override
         public Mono<Boolean> init(String deviceId) {
             return service
@@ -190,6 +311,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                     });
         }
 
+        /**
+         * 删除设备会话
+         *
+         * @param deviceId 设备ID
+         * @return 被删除的会话数量
+         */
         @Override
         public Mono<Long> remove(String deviceId) {
             return service
@@ -201,12 +328,20 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
         }
     }
 
+    /**
+     * 创建服务并注册
+     *
+     * @param id 服务ID
+     * @return 服务
+     */
     private Service createService(String id) {
         Service remote = serviceCall
+                // 设置路由
                 .router((serviceRegistry, request) -> {
                     if (serviceRegistry == null) {
                         return Optional.empty();
                     }
+                    // 根据服务ID查找服务引用
                     for (ServiceReference serviceReference : serviceRegistry.lookupService(request)) {
                         if (Objects.equals(id, serviceReference.tags().get(SERVER_ID_TAG))) {
                             return Optional.of(serviceReference);
@@ -214,12 +349,20 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                     }
                     return Optional.empty();
                 })
+                // 服务方法注册
                 .methodRegistry(EmptyServiceMethodRegistry.INSTANCE)
                 .api(Service.class);
+        // 猜测这个地方的remote的类型 应该是ServiceImpl 然后用 ErrorHandleService 包装一下 使得Service 具备异常处理能力
         return new ErrorHandleService(id, remote);
     }
 
-
+    /**
+     * 创建服务节点
+     *
+     * @param serverId        服务节点ID
+     * @param managerSupplier 管理器供应商
+     * @return 服务节点信息
+     */
     public static ServiceInfo createService(String serverId,
                                             Supplier<AbstractDeviceSessionManager> managerSupplier) {
         return ServiceInfo
@@ -228,6 +371,11 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                 .build();
     }
 
+    /**
+     * 当前集群节点ID
+     *
+     * @return 集群节点ID
+     */
     @Override
     public final String getCurrentServerId() {
         String id = cluster.member().alias();
@@ -235,6 +383,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
         return id == null ? cluster.member().id() : id;
     }
 
+    /**
+     * 初始化设备会话连接
+     *
+     * @param session 设备会话
+     * @return
+     */
     @Override
     protected final Mono<Boolean> initSessionConnection(DeviceSession session) {
         if (services.size() == 0) {
@@ -246,6 +400,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                 .any(Boolean::booleanValue);
     }
 
+    /**
+     * 移除远程会话
+     *
+     * @param deviceId 设备ID
+     * @return
+     */
     @Override
     protected final Mono<Long> removeRemoteSession(String deviceId) {
         if (services.size() == 0) {
@@ -256,6 +416,11 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                 .reduce(Math::addExact);
     }
 
+    /**
+     * 获取远程会话总数
+     *
+     * @return 远程会话总数
+     */
     @Override
     protected final Mono<Long> getRemoteTotalSessions() {
         if (services.size() == 0) {
@@ -267,6 +432,12 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                 .reduce(Math::addExact);
     }
 
+    /**
+     * 监测远程会话是否存活
+     *
+     * @param deviceId 设备ID
+     * @return 是否存活
+     */
     @Override
     protected final Mono<Boolean> remoteSessionIsAlive(String deviceId) {
         if (services.size() == 0) {
@@ -278,6 +449,11 @@ public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManag
                 .defaultIfEmpty(false);
     }
 
+    /**
+     * 获取所有节点
+     *
+     * @return 所有节点
+     */
     private Flux<Service> getServices() {
         return Flux.fromIterable(services.values());
     }
