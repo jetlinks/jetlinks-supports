@@ -48,18 +48,18 @@ public class DynamicServiceRegistry implements ServiceRegistry {
 
     @Override
     public boolean registerService(ServiceEndpoint serviceEndpoint) {
-        boolean success = serviceEndpoints.putIfAbsent(serviceEndpoint.id(), serviceEndpoint) == null;
-      //  if (success) {
-            LOGGER.debug("ServiceEndpoint registered: {}", serviceEndpoint);
-            serviceEndpoint
-                    .serviceReferences()
-                    .forEach(
-                            sr -> {
-                                populateServiceReferences(sr.qualifier(), sr);
-                                populateServiceReferences(sr.oldQualifier(), sr);
-                            });
-      //  }
-        return success;
+        serviceEndpoints.put(serviceEndpoint.id(), serviceEndpoint);
+        //  if (success) {
+        LOGGER.debug("ServiceEndpoint registered: {}", serviceEndpoint);
+        serviceEndpoint
+                .serviceReferences()
+                .forEach(
+                        sr -> {
+                            populateServiceReferences(sr.qualifier(), sr);
+                            populateServiceReferences(sr.oldQualifier(), sr);
+                        });
+        //  }
+        return true;
     }
 
     @Override

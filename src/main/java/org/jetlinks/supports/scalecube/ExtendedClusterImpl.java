@@ -8,8 +8,11 @@ import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import io.scalecube.net.Address;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections.CollectionUtils;
 import org.jetlinks.core.trace.TraceHolder;
+import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -18,6 +21,7 @@ import reactor.util.context.Context;
 import javax.annotation.Nonnull;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -25,6 +29,9 @@ import java.util.function.Function;
 
 @Slf4j
 public class ExtendedClusterImpl implements ExtendedCluster {
+
+    private final static String FEATURE_QUALIFIER = "_c_fts_q";
+    private final static String FEATURE_FROM = "_c_fts_f";
 
     private final ClusterImpl real;
     private final Sinks.Many<Message> messageSink = Sinks.many().multicast().directBestEffort();
@@ -38,6 +45,12 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     //缓存消息
     private final List<Message> messageCache = new CopyOnWriteArrayList<>();
     private long cacheEndWithTime;
+
+    private final List<String> localFeatures = new CopyOnWriteArrayList<>();
+
+    private final Map<String, Set<String>> featureMembers = new ConcurrentHashMap<>();
+
+    private final Disposable.Composite disposable = Disposables.composite();
 
 
     public ExtendedClusterImpl(ClusterConfig config) {
@@ -61,6 +74,11 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
         @Override
         public void onGossip(Message gossip) {
+            if (FEATURE_QUALIFIER.equals(gossip.qualifier())) {
+                String from = gossip.header(FEATURE_FROM);
+                member(from).ifPresent(mem -> addFeature(mem, gossip.data()));
+                return;
+            }
             messageSink.tryEmitNext(gossip);
             doHandler(gossip, ClusterMessageHandler::onGossip);
         }
@@ -69,6 +87,38 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         public void onMembershipEvent(MembershipEvent event) {
             membershipEvents.tryEmitNext(event);
             doHandler(event, ClusterMessageHandler::onMembershipEvent);
+            if (event.isRemoved()||event.isLeaving()) {
+                removeFeature(event.member());
+            }
+            //新节点上线,广播自己的feature
+            if (event.isAdded()) {
+                broadcastFeature().subscribe();
+            }
+        }
+    }
+
+    private void addFeature(Member member, Collection<String> features) {
+        if(CollectionUtils.isEmpty(features)){
+            return;
+        }
+        log.debug("register cluster [{}] feature:{}", member.alias() == null ? member.id() : member.alias(), features);
+        for (String feature : features) {
+            Set<String> members = featureMembers.computeIfAbsent(feature, (k) -> new ConcurrentHashMap<String,String>().keySet(k));
+            members.add(member.id());
+            if (StringUtils.hasText(member.alias())) {
+                members.add(member.alias());
+            }
+        }
+    }
+
+    private void removeFeature(Member member) {
+        for (Set<String> value : featureMembers.values()) {
+            if(value.remove(member.id())){
+                log.debug("remove cluster [{}] features", member.alias() == null ? member.id() : member.alias());
+            }
+            if (StringUtils.hasText(member.alias())) {
+                value.remove(member.alias());
+            }
         }
     }
 
@@ -96,15 +146,40 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         cacheEndWithTime = System.currentTimeMillis() + Duration.ofSeconds(30).toMillis();
         return real
                 .start()
+                //广播特性
+                .then(Mono.defer(this::broadcastFeature))
                 .then(Flux.fromIterable(startThen)
                           .flatMap(Function.identity())
                           .then(Mono.fromRunnable(startThen::clear)))
+                .then(Mono.fromRunnable(this::startBroadcastFeature))
                 .thenReturn(this);
     }
 
     public ExtendedCluster startAwait() {
         start().block();
         return this;
+    }
+
+    private Mono<Void> broadcastFeature() {
+        return this
+                .spreadGossip(Message
+                                      .builder()
+                                      .qualifier(FEATURE_QUALIFIER)
+                                      .header(FEATURE_FROM, member().id())
+                                      .data(localFeatures)
+                                      .build())
+                .then();
+    }
+
+    private void startBroadcastFeature() {
+        addFeature(member(),localFeatures);
+        disposable.add(
+                Flux.interval(Duration.ofSeconds(10), Duration.ofSeconds(30))
+                    .flatMap(l -> this
+                            .broadcastFeature()
+                            .onErrorResume(err -> Mono.empty()))
+                    .subscribe()
+        );
     }
 
     @Override
@@ -248,5 +323,40 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     @Override
     public boolean isShutdown() {
         return real.isShutdown();
+    }
+
+    @Override
+    public void registerFeatures(Collection<String> feature) {
+        localFeatures.addAll(feature);
+    }
+
+    @Override
+    public List<Member> featureMembers(String feature) {
+        Set<String> members = featureMembers.get(feature);
+        if (CollectionUtils.isEmpty(members)) {
+            return Collections.emptyList();
+        }
+        Collection<Member> other = otherMembers();
+
+        List<Member> supports = new ArrayList<>(other.size() + 1);
+
+        for (Member member : other) {
+            if (members.contains(member.id())) {
+                supports.add(member);
+            }
+        }
+        if (members.contains(member().id())) {
+            supports.add(member());
+        }
+        return supports;
+    }
+
+    @Override
+    public boolean supportFeature(String member, String featureId) {
+        Set<String> members = featureMembers.get(featureId);
+        if (CollectionUtils.isEmpty(members)) {
+            return false;
+        }
+        return members.contains(member);
     }
 }

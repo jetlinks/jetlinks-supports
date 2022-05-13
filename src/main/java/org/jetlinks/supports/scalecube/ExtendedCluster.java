@@ -1,6 +1,7 @@
 package org.jetlinks.supports.scalecube;
 
 import io.scalecube.cluster.ClusterMessageHandler;
+import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import reactor.core.Disposable;
@@ -8,6 +9,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import javax.annotation.Nonnull;
+import java.util.Collection;
+import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -23,4 +26,9 @@ public interface ExtendedCluster extends io.scalecube.cluster.Cluster {
 
     ExtendedCluster handler(Function<ExtendedCluster, ClusterMessageHandler> handlerFunction);
 
+    void registerFeatures(Collection<String> features);
+
+    List<Member> featureMembers(String featureId);
+
+   boolean supportFeature(String member,String featureId);
 }

@@ -44,11 +44,15 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         disposable.add(scheduler);
         disposable.add(
                 Flux.interval(Duration.ofSeconds(30), scheduler)
-                    .concatMap(time -> this
-                            .checkSession()
-                            .onErrorResume(err -> Mono.empty()))
+                    .concatMap(time -> executeInterval())
                     .subscribe()
         );
+    }
+
+    protected Mono<Void> executeInterval() {
+        return this
+                .checkSession()
+                .onErrorResume(err -> Mono.empty());
     }
 
     public void shutdown() {

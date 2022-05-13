@@ -5,13 +5,11 @@ import org.jetlinks.core.cache.FileQueue;
 import org.jetlinks.core.codec.defaults.StringCodec;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -33,10 +31,13 @@ public class MVStoreQueueBuilderFactoryTest {
         long time = System.currentTimeMillis();
         Duration writeTime = Flux
                 .range(0, numberOf)
-//                .doOnNext(i -> strings.add("data:" + i))
-                .flatMap(i -> Mono
-                        .fromCompletionStage(CompletableFuture.runAsync(() -> strings.add("data:" + i)))
-                )
+                .doOnNext(i ->{
+                    strings.add("data:" + i);
+                })
+                .buffer(10000)
+//                .flatMap(i -> Mono
+//                        .fromCompletionStage(CompletableFuture.runAsync(() -> strings.add("data:" + i)))
+//                )
                 .then()
                 .as(StepVerifier::create)
                 .verifyComplete();
@@ -46,10 +47,10 @@ public class MVStoreQueueBuilderFactoryTest {
 
         Duration pollTime = Flux
                 .range(0, numberOf)
-//                .map(i -> strings.poll())
-                .flatMap(i -> {
-                    return Mono.fromCompletionStage(CompletableFuture.supplyAsync(strings::poll));
-                })
+                .map(i -> strings.poll())
+//                .flatMap(i -> {
+//                    return Mono.fromCompletionStage(CompletableFuture.supplyAsync(strings::poll));
+//                })
                 .as(StepVerifier::create)
                 .expectNextCount(numberOf)
                 .verifyComplete();
