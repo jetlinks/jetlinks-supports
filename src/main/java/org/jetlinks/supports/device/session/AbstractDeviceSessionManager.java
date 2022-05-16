@@ -70,16 +70,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         if (!session.isAlive()) {
             //尝试重新初始化设备会话连接信息
             return this
-                    .initSessionConnection(session)
-                    .flatMap(success -> {
-                        //会话在其他节点依旧存活
-                        if (success) {
-                            return Reactors.ALWAYS_FALSE;
-                        }
-                        return this
-                                .removeLocalSession(session.getDeviceId())
-                                .thenReturn(false);
-                    });
+                    .removeLocalSession(session.getDeviceId())
+                    .thenReturn(false);
         }
         return Reactors.ALWAYS_TRUE;
     }

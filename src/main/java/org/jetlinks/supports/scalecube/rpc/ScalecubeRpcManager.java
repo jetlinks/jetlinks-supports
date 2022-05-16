@@ -6,18 +6,25 @@ import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import io.scalecube.net.Address;
 import io.scalecube.services.*;
+import io.scalecube.services.api.Qualifier;
+import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.exceptions.DefaultErrorMapper;
+import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodRegistry;
-import io.scalecube.services.methods.ServiceMethodRegistryImpl;
 import io.scalecube.services.transport.api.DataCodec;
 import io.scalecube.services.transport.api.ServerTransport;
 import io.scalecube.services.transport.api.ServiceMessageDataDecoder;
 import io.scalecube.services.transport.api.ServiceTransport;
+import lombok.AllArgsConstructor;
+import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
+import org.jctools.maps.NonBlockingHashSet;
 import org.jetlinks.core.rpc.RpcManager;
+import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
+import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -26,11 +33,16 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.lang.reflect.Type;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -42,22 +54,23 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private static final String SPREAD_FROM_HEADER = "rpc_edp_f";
 
-    private final ExtendedCluster cluster;
+    static final String DEFAULT_SERVICE_ID = "_default";
+
+    static final String SERVICE_ID_TAG = "_sid";
+    static final String SERVICE_NAME_TAG = "_sname";
+
+    private ExtendedCluster cluster;
 
     private ServiceCall serviceCall;
 
-    private final Supplier<ServiceTransport> transportSupplier;
+    private Supplier<ServiceTransport> transportSupplier;
 
-    // <serverNodeId,<qualifier,ServiceReference>>
-    private final Map<String, Map<String, ServiceReference>> serverServiceRef = new NonBlockingHashMap<>();
-
-    // <serverNodeId,<Type,Service>>
-    private final Map<String, Map<Class<?>, Object>> serverServices = new NonBlockingHashMap<>();
+    private final Map<String, ClusterNode> serverServiceRef = new NonBlockingHashMap<>();
 
     private final Map<String, Sinks.Many<ServiceEvent>> listener = new NonBlockingHashMap<>();
     private final List<ServiceRegistration> localRegistrations = new CopyOnWriteArrayList<>();
 
-    private final ServiceMethodRegistry methodRegistry = new ServiceMethodRegistryImpl();
+    private final ServiceMethodRegistry methodRegistry = new RpcServiceMethodRegistry();
 
     private ServiceTransport transport;
 
@@ -70,6 +83,8 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private Disposable syncJob = Disposables.disposed();
 
+    private final Disposable.Composite disposable = Disposables.composite();
+
     public ScalecubeRpcManager() {
         this(null, null);
     }
@@ -80,26 +95,43 @@ public class ScalecubeRpcManager implements RpcManager {
         this.transportSupplier = transport;
     }
 
+    public ScalecubeRpcManager(ScalecubeRpcManager another) {
+        this.cluster = another.cluster;
+        this.transportSupplier = another.transportSupplier;
+        this.externalHost = another.externalHost;
+        this.externalPort = another.externalPort;
+    }
+
+    @Override
+    public String currentServerId() {
+        String id = cluster.member().alias();
+
+        return id == null ? cluster.member().id() : id;
+    }
+
     public ScalecubeRpcManager externalHost(String host) {
-        ScalecubeRpcManager m = new ScalecubeRpcManager(cluster, transportSupplier);
+        ScalecubeRpcManager m = new ScalecubeRpcManager(this);
         m.externalHost = host;
         return m;
     }
 
-    public ScalecubeRpcManager externalPort(int port) {
-        ScalecubeRpcManager m = new ScalecubeRpcManager(cluster, transportSupplier);
+    public ScalecubeRpcManager externalPort(Integer port) {
+        ScalecubeRpcManager m = new ScalecubeRpcManager(this);
         m.externalPort = port;
         return m;
     }
 
     public ScalecubeRpcManager transport(Supplier<ServiceTransport> transportSupplier) {
-        return new ScalecubeRpcManager(cluster, transportSupplier);
+        ScalecubeRpcManager m = new ScalecubeRpcManager(this);
+        m.transportSupplier = transportSupplier;
+        return m;
     }
 
     public ScalecubeRpcManager cluster(ExtendedCluster cluster) {
-        return new ScalecubeRpcManager(cluster, transportSupplier);
+        ScalecubeRpcManager m = new ScalecubeRpcManager(this);
+        m.cluster = cluster;
+        return m;
     }
-
 
     public void startAwait() {
 
@@ -148,6 +180,9 @@ public class ScalecubeRpcManager implements RpcManager {
     private void start0() {
         this.serviceCall = new ServiceCall().transport(this.transport.clientTransport());
         syncRegistration();
+        disposable.add(Flux.interval(Duration.ofSeconds(60))
+                           .concatMap(ignore -> doSyncRegistration().onErrorResume(err -> Mono.empty()))
+                           .subscribe());
     }
 
     public void stopAwait() {
@@ -159,13 +194,18 @@ public class ScalecubeRpcManager implements RpcManager {
             return Mono.empty();
         }
         localRegistrations.clear();
-        syncRegistration();
+        disposable.dispose();
         return Flux
                 .concatDelayError(
                         doSyncRegistration().onErrorResume(err -> Mono.empty()),
                         serverTransport.stop(),
                         transport.stop()
-                ).then();
+                )
+                .doOnComplete(() -> {
+                    serverTransport = null;
+                    transport = null;
+                })
+                .then();
     }
 
 
@@ -237,11 +277,12 @@ public class ScalecubeRpcManager implements RpcManager {
     }
 
     @Override
-    public <T> Disposable registerService(String service, T api) {
+    public <T> Disposable registerService(String service, T rpcService) {
         ServiceInfo serviceInfo = ServiceInfo
-                .fromServiceInstance(api)
+                .fromServiceInstance(rpcService)
                 .errorMapper(DefaultErrorMapper.INSTANCE)
                 .dataDecoder(ServiceMessageDataDecoder.INSTANCE)
+                .tag(SERVICE_ID_TAG, service)
                 .build();
 
         methodRegistry.registerService(serviceInfo);
@@ -251,8 +292,9 @@ public class ScalecubeRpcManager implements RpcManager {
                 .stream()
                 .map(ref -> {
                     Map<String, String> tags = new HashMap<>(ref.tags());
-                    tags.put("s", service);
-                    return new ServiceRegistration(service, tags, ref.methods());
+                    tags.put(SERVICE_ID_TAG, service);
+                    tags.put(SERVICE_NAME_TAG, ref.namespace());
+                    return new ServiceRegistration(createMethodQualifier(service, ref.namespace()), tags, ref.methods());
                 })
                 .collect(Collectors.toList());
 
@@ -266,54 +308,49 @@ public class ScalecubeRpcManager implements RpcManager {
     }
 
     @Override
-    public <T> Disposable registerService(T api) {
-        return registerService(Reflect.serviceName(api.getClass()), api);
-    }
-
-    private <API> API createApiCall(String serverId, Class<API> clazz) {
-        return serviceCall
-                .router((serviceRegistry, request) -> {
-                    String qualifier = request.qualifier();
-                    Map<String, ServiceReference> refs = serverServiceRef.get(serverId);
-                    if (refs == null) {
-                        return Optional.empty();
-                    }
-                    return Optional.ofNullable(refs.get(qualifier));
-                })
-                .serviceRegistry(NoneServiceRegistry.INSTANCE)
-                .api(clazz);
+    public <T> Disposable registerService(T rpcService) {
+        return registerService(DEFAULT_SERVICE_ID, rpcService);
     }
 
     @Override
-    public <API> Flux<API> getServices(Class<API> service) {
-        String name = Reflect.serviceName(service);
-
+    public <I> Flux<RpcService<I>> getServices(Class<I> service) {
         return Flux
                 .fromIterable(serverServiceRef.entrySet())
-                .flatMap(e -> {
-                    String serviceNode = e.getKey();
-                    return Flux
-                            .fromIterable(e.getValue().entrySet())
-                            .any(ref -> ref.getKey().startsWith(name + "/"))
-                            .filter(Boolean::booleanValue)
-                            .flatMap(ignore -> getService(serviceNode, service));
-                });
+                .flatMapIterable(e -> e.getValue().getApiCalls(service));
+    }
+
+    @Override
+    public <I> Flux<RpcService<I>> getServices(String id, Class<I> service) {
+        return Flux
+                .fromIterable(serverServiceRef.entrySet())
+                .flatMapIterable(e -> e.getValue().getApiCalls(id, service));
+    }
+
+    @Override
+    public <I> Mono<I> getService(String serverNodeId,
+                                  Class<I> service) {
+        return getService(serverNodeId, DEFAULT_SERVICE_ID, service);
     }
 
     @Override
     @SuppressWarnings("all")
-    public <API> Mono<API> getService(String serverNodeId,
-                                      Class<API> service) {
+    public <I> Mono<I> getService(String serverNodeId,
+                                  String serviceId,
+                                  Class<I> service) {
 
-        return Mono.just(
-                (API) serverServices
-                        .computeIfAbsent(serverNodeId, id -> new NonBlockingHashMap<>())
-                        .computeIfAbsent(service, type -> createApiCall(serverNodeId, type))
-        );
+        return Mono.fromSupplier(() -> {
+            ClusterNode node = serverServiceRef.get(serverNodeId);
+            if (node == null) {
+                return null;
+            }
+            return node
+                    .getApiCall(serviceId, service)
+                    .service();
+        });
     }
 
     @Override
-    public <API> Flux<ServiceEvent> listen(Class<API> service) {
+    public <I> Flux<ServiceEvent> listen(Class<I> service) {
         String name = Reflect.serviceName(service);
         return listener
                 .computeIfAbsent(name, ignore -> Sinks.many().multicast().onBackpressureBuffer())
@@ -323,22 +360,21 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private void memberLeave(Member member) {
         String id = member.alias() == null ? member.id() : member.alias();
-        Map<String, ServiceReference> ref = serverServiceRef.remove(id);
+        ClusterNode ref = serverServiceRef.remove(id);
         if (null != ref) {
-            fireEvent(ref.values()
-                         .stream()
-                         .map(ServiceReference::namespace)
-                         .collect(Collectors.toSet()),
+            fireEvent(ref.services,
                       member.id(), ServiceEvent.Type.removed);
         }
         log.debug("remove service endpoint [{}] ", member);
     }
 
-    private void fireEvent(Set<String> services, String memberId, ServiceEvent.Type type) {
-        for (String service : services) {
-            Sinks.Many<ServiceEvent> sink = listener.get(service);
-            if (sink.currentSubscriberCount() > 0) {
-                sink.tryEmitNext(new ServiceEvent(service, memberId, type));
+    private void fireEvent(Collection<ServiceRegistration> services, String memberId, ServiceEvent.Type type) {
+        for (ServiceRegistration service : services) {
+            String serviceName = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
+            Sinks.Many<ServiceEvent> sink = listener.get(serviceName);
+            if (sink != null && sink.currentSubscriberCount() > 0) {
+                String id = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
+                sink.tryEmitNext(new ServiceEvent(id, serviceName, memberId, type));
             }
         }
     }
@@ -349,36 +385,307 @@ public class ScalecubeRpcManager implements RpcManager {
         }
         String id = member.alias() == null ? member.id() : member.alias();
 
-        Map<String, ServiceReference> references = serverServiceRef.computeIfAbsent(id, ignore -> new NonBlockingHashMap<>());
-        List<String> readyToRemove = new ArrayList<>(references.keySet());
-        Set<String> added = new HashSet<>();
-        Set<String> removed = references
-                .values()
-                .stream()
-                .map(ServiceReference::namespace)
-                .collect(Collectors.toSet());
+        ClusterNode references = serverServiceRef.computeIfAbsent(id, ignore -> new ClusterNode());
+        references.id = id;
+        references.member = member;
+        references.rpcAddress = endpoint.address();
+        references.register(endpoint);
+    }
 
-        log.debug("update service endpoint from [{}] : {} ", member, endpoint);
-        endpoint
-                .serviceReferences()
-                .forEach(ref -> {
+
+    static String createMethodQualifier(String serviceId, String qualifier) {
+        return Qualifier.asString(serviceId, qualifier);
+    }
+
+    class ClusterNode {
+        private String id;
+
+        private Member member;
+
+        private Address rpcAddress;
+
+        private final Map<String, Set<ServiceReferenceInfo>> serviceReferencesByQualifier = new NonBlockingHashMap<>();
+
+        private final List<ServiceRegistration> services = new CopyOnWriteArrayList<>();
+        private final Map<Class<?>, Map<String, RpcServiceCall<?>>> serviceInstances = new NonBlockingHashMap<>();
+
+
+        public void register(ServiceEndpoint endpoint) {
+            List<String> readyToRemove = new ArrayList<>(serviceReferencesByQualifier.keySet());
+
+            Set<ServiceRegistration> added = new TreeSet<>(Comparator.comparing(ServiceRegistration::namespace));
+            Set<ServiceRegistration> removed = new TreeSet<>(Comparator.comparing(ServiceRegistration::namespace));
+            removed.addAll(services);
+
+            log.debug("update service endpoint from [{}] : {} ", member, endpoint);
+
+            for (ServiceRegistration registration : endpoint.serviceRegistrations()) {
+                if (!removed.remove(registration)) {
+                    added.add(registration);
+                }
+
+                for (ServiceMethodDefinition method : registration.methods()) {
+                    ServiceReference ref = new ServiceReference(method, registration, endpoint);
+
                     readyToRemove.remove(ref.qualifier());
                     readyToRemove.remove(ref.oldQualifier());
-                    if (references.put(ref.qualifier(), ref) == null) {
-                        added.add(ref.namespace());
-                    }
-                    references.put(ref.oldQualifier(), ref);
+                    populateServiceReferences(ref.qualifier(), ref);
+                    populateServiceReferences(ref.oldQualifier(), ref);
 
-                    removed.remove(ref.namespace());
-                });
+                }
+            }
 
-        for (String qualifier : readyToRemove) {
-            references.remove(qualifier);
+            for (String qualifier : readyToRemove) {
+                serviceReferencesByQualifier.remove(qualifier);
+            }
+
+            removed.forEach(services::remove);
+            services.addAll(added);
+
+            fireEvent(added, id, ServiceEvent.Type.added);
+            fireEvent(removed, id, ServiceEvent.Type.removed);
+
         }
 
-        fireEvent(added, id, ServiceEvent.Type.added);
-        fireEvent(removed, id, ServiceEvent.Type.removed);
+
+        private boolean populateServiceReferences(String qualifier, ServiceReference serviceReference) {
+            String id = serviceReference
+                    .tags()
+                    .getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
+
+            return serviceReferencesByQualifier
+                    .computeIfAbsent(qualifier, key -> new NonBlockingHashSet<>())
+                    .add(new ServiceReferenceInfo(id, serviceReference));
+        }
+
+        private <I> RpcServiceCall<I> createApiCall(String serviceId, Class<I> clazz) {
+            String name = Reflect.serviceName(clazz);
+            ServiceCall call = serviceCall
+                    .router((serviceRegistry, request) -> {
+                        Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
+                        if (refs == null) {
+                            return Optional.empty();
+                        }
+                        for (ServiceReferenceInfo ref : refs) {
+                            return Optional.of(ref.reference);
+                        }
+                        return Optional.empty();
+                    })
+                    .serviceRegistry(NoneServiceRegistry.INSTANCE);
+
+            return new RpcServiceCall<>(this.id, serviceId, name, api(call, serviceId, clazz));
+        }
+
+        private boolean supportApiCall(Class<?> clazz) {
+            return supportApiCall(null, clazz);
+        }
+
+        private boolean supportApiCall(String id, Class<?> clazz) {
+            String serviceName = Reflect.serviceName(clazz);
+            for (ServiceRegistration service : services) {
+                String sname = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
+                String serviceId = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
+
+                if (null == id) {
+                    if (Objects.equals(serviceName, sname)) {
+                        return true;
+                    }
+                }
+
+                if (null != id) {
+                    if (Objects.equals(serviceId, id) && Objects.equals(serviceName, sname)) {
+                        return true;
+                    }
+                }
+
+            }
+
+            return false;
+        }
+
+        private <I> List<RpcServiceCall<I>> getApiCalls(Class<I> clazz) {
+            return getApiCalls(null, clazz);
+        }
+
+        private <I> List<RpcServiceCall<I>> getApiCalls(String id, Class<I> clazz) {
+            String sName = Reflect.serviceName(clazz);
+            List<RpcServiceCall<I>> apis = new ArrayList<>();
+            for (ServiceRegistration service : services) {
+                String name = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
+                String sid = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
+                if (!Objects.equals(name, sName)) {
+                    continue;
+                }
+                if (id != null && !Objects.equals(sid, id)) {
+                    continue;
+                }
+                apis.add(getApiCall(sid, clazz));
+            }
+            return apis;
+        }
+
+        @SuppressWarnings("all")
+        private <I> RpcServiceCall<I> getApiCall(String id, Class<I> clazz) {
+            return (RpcServiceCall<I>) serviceInstances
+                    .computeIfAbsent(clazz, type -> new NonBlockingHashMap<>())
+                    .computeIfAbsent(id, ignore -> createApiCall(ignore, clazz));
+        }
+
+        private ServiceMessage toServiceMessage(MethodInfo methodInfo, Object request) {
+            if (request instanceof ServiceMessage) {
+                return ServiceMessage
+                        .from((ServiceMessage) request)
+                        .qualifier(methodInfo.qualifier())
+                        .dataFormatIfAbsent(ServiceMessage.DEFAULT_DATA_FORMAT)
+                        .build();
+            }
+
+            return ServiceMessage
+                    .builder()
+                    .qualifier(methodInfo.qualifier())
+                    .data(request)
+                    .dataFormatIfAbsent(ServiceMessage.DEFAULT_DATA_FORMAT)
+                    .build();
+        }
+
+        @SuppressWarnings("all")
+        private <T> T api(ServiceCall serviceCall, String id, Class<T> serviceInterface) {
+
+            final Map<Method, MethodInfo> genericReturnTypes = new HashMap<>(Reflect.methodsInfo(serviceInterface));
+            for (Map.Entry<Method, MethodInfo> entry : genericReturnTypes.entrySet()) {
+                MethodInfo old = entry.getValue();
+                entry.setValue(
+                        new MethodInfo(
+                                Qualifier.asString(id, old.serviceName()),
+                                old.methodName(),
+                                old.parameterizedReturnType(),
+                                old.isReturnTypeServiceMessage(),
+                                old.communicationMode(),
+                                old.parameterCount(),
+                                old.requestType(),
+                                old.isRequestTypeServiceMessage(),
+                                old.isSecured()
+                        )
+                );
+            }
+
+            // noinspection unchecked,Convert2Lambda
+            return (T)
+                    Proxy.newProxyInstance(
+                            getClass().getClassLoader(),
+                            new Class[]{serviceInterface},
+                            new InvocationHandler() {
+                                @Override
+                                public Object invoke(Object proxy, Method method, Object[] params) {
+                                    Optional<Object> check =
+                                            toStringOrEqualsOrHashCode(method.getName(), serviceInterface, params);
+                                    if (check.isPresent()) {
+                                        return check.get(); // toString, hashCode was invoked.
+                                    }
+                                    final MethodInfo methodInfo = genericReturnTypes.get(method);
+                                    final Type returnType = methodInfo.parameterizedReturnType();
+                                    final boolean isServiceMessage = methodInfo.isReturnTypeServiceMessage();
+
+                                    Object request = methodInfo.requestType() == Void.TYPE ? null : params[0];
+
+                                    switch (methodInfo.communicationMode()) {
+                                        case FIRE_AND_FORGET:
+                                            return serviceCall
+                                                    .oneWay(toServiceMessage(methodInfo, request));
+
+                                        case REQUEST_RESPONSE:
+                                            return serviceCall
+                                                    .requestOne(toServiceMessage(methodInfo, request), returnType)
+                                                    .transform(asMono(isServiceMessage));
+
+                                        case REQUEST_STREAM:
+                                            return serviceCall
+                                                    .requestMany(toServiceMessage(methodInfo, request), returnType)
+                                                    .transform(asFlux(isServiceMessage));
+
+                                        case REQUEST_CHANNEL:
+                                            // this is REQUEST_CHANNEL so it means params[0] must
+                                            // be a publisher - its safe to cast.
+                                            //noinspection rawtypes
+                                            return serviceCall
+                                                    .requestBidirectional(
+                                                            Flux.from((Publisher) request)
+                                                                .map(data -> toServiceMessage(methodInfo, data)),
+                                                            returnType)
+                                                    .transform(asFlux(isServiceMessage));
+
+                                        default:
+                                            throw new IllegalArgumentException(
+                                                    "Communication mode is not supported: " + method);
+                                    }
+                                }
+                            });
+        }
 
 
+        private Function<Flux<ServiceMessage>, Flux<Object>> asFlux(boolean isReturnTypeServiceMessage) {
+            return flux ->
+                    isReturnTypeServiceMessage ? flux.cast(Object.class) : flux.map(ServiceMessage::data);
+        }
+
+        private Function<Mono<ServiceMessage>, Mono<Object>> asMono(boolean isReturnTypeServiceMessage) {
+            return mono ->
+                    isReturnTypeServiceMessage ? mono.cast(Object.class) : mono.map(ServiceMessage::data);
+        }
+
+        private Optional<Object> toStringOrEqualsOrHashCode(
+                String method, Class<?> serviceInterface, Object... args) {
+
+            switch (method) {
+                case "toString":
+                    return Optional.of(serviceInterface.toString());
+                case "equals":
+                    return Optional.of(serviceInterface.equals(args[0]));
+                case "hashCode":
+                    return Optional.of(serviceInterface.hashCode());
+
+                default:
+                    return Optional.empty();
+            }
+        }
+    }
+
+    @AllArgsConstructor
+    static class RpcServiceCall<T> implements RpcService<T> {
+        private final String serverNodeId;
+        private final String id;
+        private final String name;
+        private final T service;
+
+        @Override
+        public String serverNodeId() {
+            return serverNodeId;
+        }
+
+        @Override
+        public String id() {
+            return id;
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public T service() {
+            return service;
+        }
+
+        public <R> R cast(Class<R> type) {
+            return type.cast(service);
+        }
+    }
+
+    @EqualsAndHashCode(of = "id")
+    @AllArgsConstructor
+    static class ServiceReferenceInfo {
+        private String id;
+        private ServiceReference reference;
     }
 }
