@@ -104,17 +104,29 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @Override
     public String currentServerId() {
-        String id = cluster.member().alias();
-
-        return id == null ? cluster.member().id() : id;
+        String alias = cluster.member().alias();
+        String id = cluster.member().id();
+        return alias == null ? id : alias;
     }
 
+    /**
+     * 设置对外访问的Host,通常是内网ip地址,并返回新的manager
+     *
+     * @param host Host
+     * @return 新的manager
+     */
     public ScalecubeRpcManager externalHost(String host) {
         ScalecubeRpcManager m = new ScalecubeRpcManager(this);
         m.externalHost = host;
         return m;
     }
 
+    /**
+     * 设置对外访问的port,与{@link ServiceTransport#serverTransport(ServiceMethodRegistry)}对应绑定的端口
+     *
+     * @param port 端口号
+     * @return 新的manager
+     */
     public ScalecubeRpcManager externalPort(Integer port) {
         ScalecubeRpcManager m = new ScalecubeRpcManager(this);
         m.externalPort = port;
@@ -208,10 +220,12 @@ public class ScalecubeRpcManager implements RpcManager {
                 .then();
     }
 
-
     private Address resolveAddress() {
         if (StringUtils.hasText(externalHost)) {
-            return Address.create(externalHost, externalPort);
+            if (externalPort != null) {
+                return Address.create(externalHost, externalPort);
+            }
+            return Address.create(externalHost, serverTransport.address().port());
         }
 
         return prepareAddress(serverTransport.address());

@@ -1,12 +1,12 @@
 package org.jetlinks.supports.official;
 
 import com.alibaba.fastjson.JSONObject;
-import io.vavr.Function3;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.collections.CollectionUtils;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.things.ThingMetadata;
+import reactor.function.Function3;
 
 import java.util.*;
 import java.util.function.Function;
