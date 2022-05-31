@@ -315,6 +315,7 @@ public class ScalecubeRpcManager implements RpcManager {
         localRegistrations.addAll(registrations);
         syncRegistration();
         log.debug("register rpc service {}", serviceInfo);
+
         return () -> {
             localRegistrations.removeAll(registrations);
             syncRegistration();
