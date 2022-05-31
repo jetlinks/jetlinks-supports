@@ -66,6 +66,13 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 .filterWhen(this::checkSessionAlive);
     }
 
+    @Override
+    public Flux<DeviceSession> getSessions() {
+        return Flux
+                .fromIterable(localSessions.values())
+                .flatMap(Function.identity());
+    }
+
     private Mono<Boolean> checkSessionAlive(DeviceSession session) {
         if (!session.isAlive()) {
             //尝试重新初始化设备会话连接信息
