@@ -1,6 +1,8 @@
 package org.jetlinks.supports.scalecube.rpc;
 
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.scalecube.cluster.ClusterConfig;
 import io.scalecube.cluster.Member;
 import io.scalecube.services.annotations.ServiceMethod;
@@ -14,9 +16,11 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
 
@@ -111,7 +115,7 @@ public class ScalecubeRpcManagerTest {
 
         Thread.sleep(2000);
 
-        manager3.getServices("s1",Service.class)
+        manager3.getServices("s1", Service.class)
                 .as(StepVerifier::create)
                 .expectNextCount(2)
                 .verifyComplete();
@@ -144,7 +148,7 @@ public class ScalecubeRpcManagerTest {
                 .doOnSubscribe(s -> {
                     Mono.delay(Duration.ofSeconds(1))
                         .subscribe(ignore -> {
-                           Disposable disposable = manager1
+                            Disposable disposable = manager1
                                     .registerService("t1", new ServiceImpl("t1"));
                             Mono.delay(Duration.ofSeconds(1))
                                 .subscribe(i -> {
@@ -161,12 +165,29 @@ public class ScalecubeRpcManagerTest {
 
     }
 
+    @Test
+    @SneakyThrows
+    public void testNative() {
+        manager1.registerService("n1", new ServiceImpl("1"));
+
+        Thread.sleep(2000);
+
+        manager3.getService(node1.id(), "n1", Service.class)
+                .flatMapMany(service -> service.read("test"))
+                .map(buf -> buf.toString(StandardCharsets.UTF_8))
+                .as(StepVerifier::create)
+                .expectNext("hel", "lo")
+                .verifyComplete();
+    }
+
     @io.scalecube.services.annotations.Service
     public interface Service {
 
         @ServiceMethod
         Mono<String> upper(String value);
 
+        @ServiceMethod
+        Flux<ByteBuf> read(String id);
 
     }
 
@@ -180,5 +201,11 @@ public class ScalecubeRpcManagerTest {
             return Mono.just(prefix + (value.toUpperCase(Locale.ROOT)));
         }
 
+        @Override
+        public Flux<ByteBuf> read(String id) {
+//            return Flux.just("1","2");
+            return Flux.just(Unpooled.wrappedBuffer("hel".getBytes()),
+                             Unpooled.wrappedBuffer("lo".getBytes()));
+        }
     }
 }

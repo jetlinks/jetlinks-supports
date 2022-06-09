@@ -1,5 +1,6 @@
 package org.jetlinks.supports.scalecube.rpc;
 
+import io.netty.buffer.ByteBuf;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
@@ -179,9 +180,7 @@ public class ScalecubeRpcManager implements RpcManager {
                 }
             }
         });
-        return this
-                .transportSupplier
-                .get()
+        return initTransport(this.transportSupplier.get())
                 .start()
                 .doOnNext(trans -> this.transport = trans)
                 .flatMap(trans -> trans.serverTransport(methodRegistry).bind())
@@ -189,8 +188,13 @@ public class ScalecubeRpcManager implements RpcManager {
                 .then(Mono.fromRunnable(this::start0));
     }
 
+    private ServiceTransport initTransport(ServiceTransport transport) {
+        return transport;
+    }
+
     private void start0() {
-        this.serviceCall = new ServiceCall().transport(this.transport.clientTransport());
+        this.serviceCall = new ServiceCall()
+                .transport(this.transport.clientTransport());
         syncRegistration();
         disposable.add(Flux.interval(Duration.ofSeconds(60))
                            .concatMap(ignore -> doSyncRegistration().onErrorResume(err -> Mono.empty()))
@@ -295,7 +299,15 @@ public class ScalecubeRpcManager implements RpcManager {
         ServiceInfo serviceInfo = ServiceInfo
                 .fromServiceInstance(rpcService)
                 .errorMapper(DefaultErrorMapper.INSTANCE)
-                .dataDecoder(ServiceMessageDataDecoder.INSTANCE)
+                .dataDecoder((msg, type) -> {
+                    if (type.isAssignableFrom(ByteBuf.class) && msg.hasData(ByteBuf.class)) {
+                        return ServiceMessage
+                                .from(msg)
+                                .data(msg.data())
+                                .build();
+                    }
+                    return ServiceMessageDataDecoder.INSTANCE.apply(msg, type);
+                })
                 .tag(SERVICE_ID_TAG, service)
                 .build();
 
