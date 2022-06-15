@@ -1,6 +1,7 @@
 package org.jetlinks.supports.protocol.management.jar;
 
 import lombok.Getter;
+import lombok.SneakyThrows;
 import org.springframework.util.StringUtils;
 
 import java.io.IOException;
@@ -38,7 +39,8 @@ public class ProtocolClassLoader extends URLClassLoader {
         return super.loadClass(name, resolve);
     }
 
-    public Class<?> loadSelfClass(String name) throws ClassNotFoundException {
+    @SneakyThrows
+    public Class<?> loadSelfClass(String name){
         Class<?> clazz = super.findClass(name);
         resolveClass(clazz);
         return clazz;

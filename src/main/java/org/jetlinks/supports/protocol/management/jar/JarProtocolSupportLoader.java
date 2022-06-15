@@ -8,14 +8,9 @@ import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.trace.ProtocolTracer;
+import org.jetlinks.core.utils.ClassUtils;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
-import org.springframework.core.type.AnnotationMetadata;
-import org.springframework.core.type.ClassMetadata;
-import org.springframework.core.type.classreading.CachingMetadataReaderFactory;
-import org.springframework.core.type.classreading.MetadataReader;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -135,35 +130,12 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
 
     protected ProtocolSupportProvider lookupProvider(ProtocolClassLoader classLoader) {
 
-        try {
-            CachingMetadataReaderFactory metadataReaderFactory = new CachingMetadataReaderFactory();
-            PathMatchingResourcePatternResolver resourcePatternResolver = new PathMatchingResourcePatternResolver(classLoader) {
-                @Override
-                protected boolean isJarResource(Resource resource) {
-                    return true;
-                }
-            };
-            Resource[] classes = resourcePatternResolver.getResources("classpath:**/*.class");
-            for (Resource aClass : classes) {
-                MetadataReader reader = metadataReaderFactory.getMetadataReader(aClass);
-                AnnotationMetadata annotationMetadata = reader.getAnnotationMetadata();
-                if (annotationMetadata.hasAnnotation("java.lang.Deprecated")) {
-                    continue;
-                }
-                ClassMetadata classMetadata = reader.getClassMetadata();
-                try {
-                    Class<?> clazz = classLoader.loadSelfClass(classMetadata.getClassName());
-                    if (ProtocolSupportProvider.class.isAssignableFrom(clazz)) {
-                        return (ProtocolSupportProvider) clazz.getDeclaredConstructor().newInstance();
-                    }
-                } catch (Throwable ignore) {
-
-                }
-            }
-            metadataReaderFactory.clearCache();
-        } catch (Throwable e) {
-            log.error(e.getMessage(), e);
-        }
-        return null;
+        return ClassUtils
+                .findImplClass(ProtocolSupportProvider.class,
+                               "classpath:**/*.class",
+                               true,
+                               classLoader,
+                               ProtocolClassLoader::loadSelfClass)
+                .orElse(null);
     }
 }
