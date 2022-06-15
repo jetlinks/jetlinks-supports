@@ -68,6 +68,7 @@ public class ClusterSendToDeviceMessageHandler {
             return ((RepayableDeviceMessage<?>) message).newReply();
         }
         return new CommonDeviceMessageReply<>()
+                .deviceId(((DeviceMessage) message).getDeviceId())
                 .messageId(message.getMessageId());
     }
 
