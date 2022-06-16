@@ -42,7 +42,6 @@ public class ClusterDeviceSessionManagerTest {
         cluster1.startAwait();
 
 
-
         ExtendedClusterImpl cluster2 = new ExtendedClusterImpl(
                 ClusterConfig.defaultConfig()
                              .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
@@ -50,8 +49,8 @@ public class ClusterDeviceSessionManagerTest {
         );
         cluster2.startAwait();
 
-        ScalecubeRpcManager rpcManager=  new ScalecubeRpcManager(cluster1,RSocketServiceTransport::new);
-        ScalecubeRpcManager rpcManager2=  new ScalecubeRpcManager(cluster2,RSocketServiceTransport::new);
+        ScalecubeRpcManager rpcManager = new ScalecubeRpcManager(cluster1, RSocketServiceTransport::new);
+        ScalecubeRpcManager rpcManager2 = new ScalecubeRpcManager(cluster2, RSocketServiceTransport::new);
         rpcManager.startAwait();
         rpcManager2.startAwait();
 
@@ -89,14 +88,14 @@ public class ClusterDeviceSessionManagerTest {
         AtomicInteger eventCount = new AtomicInteger();
         Disposables.composite(
                 manager1.listenEvent(event -> {
-                    if(event.isClusterExists()){
+                    if (event.isClusterExists()) {
                         return Mono.empty();
                     }
                     eventCount.incrementAndGet();
                     return Mono.empty();
                 }),
                 manager2.listenEvent(event -> {
-                    if(event.isClusterExists()){
+                    if (event.isClusterExists()) {
                         return Mono.empty();
                     }
                     eventCount.incrementAndGet();
@@ -106,12 +105,12 @@ public class ClusterDeviceSessionManagerTest {
 
         manager1.compute(session.getDeviceId(), mono -> Mono.just(session))
                 .block();
-        manager2.compute(session.getDeviceId(), mono -> Mono.just(session))
+        manager2.compute(session.getDeviceId(), Mono.just(session), null)
                 .block();
 
         Assert.assertEquals(1, eventCount.get());
         eventCount.set(0);
-        manager1.remove(device.getDeviceId(),false)
+        manager1.remove(device.getDeviceId(), false)
                 .as(StepVerifier::create)
                 .expectNext(2L)
                 .verifyComplete();
@@ -143,7 +142,7 @@ public class ClusterDeviceSessionManagerTest {
                 .verifyComplete();
 
         Duration time = Flux.range(0, 20000)
-                            .flatMap(i->manager2
+                            .flatMap(i -> manager2
                                     .isAlive(session.getDeviceId()))
                             .as(StepVerifier::create)
                             .expectNextCount(20000)
