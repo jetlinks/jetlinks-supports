@@ -245,25 +245,30 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     @Override
+    public Mono<Boolean> add(T data) {
+        hasLocalProducer = true;
+        if (isLocalConsumer() && push(data)) {
+            return Reactors.ALWAYS_TRUE;
+        } else {
+            if (!useScript) {
+                return this
+                        .operations
+                        .opsForList()
+                        .leftPush(id, data)
+                        .then(getOperations().convertAndSend("queue:data:produced", id));
+            }
+            return getOperations()
+                    .execute(pushAndPublish, Arrays.asList(id), Arrays.asList(data, id))
+                    .then(Reactors.ALWAYS_TRUE);
+        }
+    }
+
+    @Override
     public Mono<Boolean> add(Publisher<T> publisher) {
         hasLocalProducer = true;
         return Flux
                 .from(publisher)
-                .flatMap(v -> {
-                    if (isLocalConsumer() && push(v)) {
-                        return Reactors.ALWAYS_ONE;
-                    } else {
-                        if (!useScript) {
-                            return this
-                                    .operations
-                                    .opsForList()
-                                    .leftPush(id, v)
-                                    .then(getOperations().convertAndSend("queue:data:produced", id));
-                        }
-                        return getOperations()
-                                .execute(pushAndPublish, Arrays.asList(id), Arrays.asList(v, id));
-                    }
-                })
+                .flatMap(this::add)
                 .then(Reactors.ALWAYS_TRUE);
     }
 
