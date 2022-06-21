@@ -75,13 +75,18 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     private Mono<Boolean> checkSessionAlive(DeviceSession session) {
-        if (!session.isAlive()) {
-            //尝试重新初始化设备会话连接信息
-            return this
-                    .removeLocalSession(session.getDeviceId())
-                    .thenReturn(false);
-        }
-        return Reactors.ALWAYS_TRUE;
+        return session
+                .isAliveAsync()
+                .defaultIfEmpty(true)
+                .flatMap(alive -> {
+                    if (!alive) {
+                        //移除本地会话
+                        return this
+                                .removeLocalSession(session.getDeviceId())
+                                .thenReturn(false);
+                    }
+                    return Reactors.ALWAYS_TRUE;
+                });
     }
 
     @Override
@@ -214,6 +219,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             return Mono.empty();
         }
         return this
+                //初始化会话连接信息,判断设备是否在其他服务节点还存在连接
                 .initSessionConnection(session)
                 .flatMap(alive -> {
                     if (!alive) {
