@@ -6,6 +6,7 @@ import org.jetlinks.core.device.session.DeviceSessionEvent;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
+import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
@@ -62,6 +63,9 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     @Override
     public Mono<DeviceSession> getSession(String deviceId) {
+        if (StringUtils.isEmpty(deviceId)) {
+            return Mono.empty();
+        }
         return localSessions
                 .getOrDefault(deviceId, Mono.empty())
                 .filterWhen(this::checkSessionAlive);

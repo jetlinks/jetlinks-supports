@@ -78,7 +78,10 @@ public class ClusterSendToDeviceMessageHandler {
         }
 
         DeviceMessage message = ((DeviceMessage) msg);
-
+        if (message.getDeviceId() == null) {
+            log.warn("deviceId is null :{}", message);
+            return Mono.empty();
+        }
         return sessionManager
                 .getSession(message.getDeviceId())
                 //会话存在则直接发送给会话
