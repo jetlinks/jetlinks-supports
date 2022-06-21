@@ -147,7 +147,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                                 .doOnNext(session -> localSessions.put(deviceId, Mono.just(session)));
                     } else {
                         if (updater == null) {
-                            return null;
+                            return old;
                         }
                         //替换会话
                         operator = old
