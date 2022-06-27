@@ -4,7 +4,6 @@ import lombok.SneakyThrows;
 import org.h2.mvstore.Cursor;
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
-import org.jetlinks.core.Payload;
 import org.jetlinks.core.cache.FileQueue;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.config.ConfigKey;
@@ -27,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
 class MVStoreQueue<T> implements FileQueue<T> {
 
     private MVStore store;
-    private MVMap<Long, byte[]> mvMap;
+    private MVMap<Long,T> mvMap;
 
     private final AtomicLong index = new AtomicLong();
 
@@ -97,27 +96,6 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
     }
 
-    private byte[] encode(T data) {
-        return codec.encode(data)
-                    .getBytes(true);
-    }
-
-    private T decode(byte[] data) {
-        if (data == null) {
-            return null;
-        }
-        Payload payload = Payload.of(data);
-        T val = null;
-        try {
-            val = codec.decode(payload);
-        } finally {
-            if (!(val instanceof Payload)) {
-                payload.release();
-            }
-        }
-        return val;
-    }
-
     @Override
     public int size() {
         checkClose();
@@ -140,7 +118,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
     @Nonnull
     public Iterator<T> iterator() {
         checkClose();
-        Cursor<Long, byte[]> cursor = mvMap.cursor(mvMap.firstKey());
+        Cursor<Long, T> cursor = mvMap.cursor(mvMap.firstKey());
 
         return new Iterator<T>() {
             @Override
@@ -150,7 +128,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
             @Override
             public T next() {
-                return decode(cursor.getValue());
+                return cursor.getValue();
             }
         };
     }
@@ -174,7 +152,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (null == t) {
             return false;
         }
-        byte[] val = encode(t);
+       T val = t;
         do {
             val = mvMap.put(index.incrementAndGet(), val);
         } while (val != null);
@@ -241,7 +219,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if(mvMap.isClosed()){
             return null;
         }
-        byte[] removed;
+        T removed;
         synchronized (this) {
             Long key = mvMap.firstKey();
             removed = key == null ? null : mvMap.remove(key);
@@ -250,7 +228,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
                 return null;
             }
         }
-        return decode(removed);
+        return removed;
 
     }
 
@@ -269,8 +247,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
     @Override
     public T peek() {
         checkClose();
-        byte[] value = mvMap.get(mvMap.firstKey());
-        return decode(value);
+        return mvMap.get(mvMap.firstKey());
     }
 
 

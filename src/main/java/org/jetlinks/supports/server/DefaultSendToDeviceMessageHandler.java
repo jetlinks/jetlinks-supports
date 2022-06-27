@@ -29,6 +29,7 @@ import static org.jetlinks.core.trace.FluxTracer.create;
 
 @Slf4j
 @AllArgsConstructor
+@Deprecated
 public class DefaultSendToDeviceMessageHandler {
 
     private final String serverId;
