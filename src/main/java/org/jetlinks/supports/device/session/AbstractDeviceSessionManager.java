@@ -63,12 +63,21 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     @Override
     public Mono<DeviceSession> getSession(String deviceId) {
+        return getSession(deviceId, true);
+    }
+
+    @Override
+    public Mono<DeviceSession> getSession(String deviceId,
+                                          boolean unregisterWhenNotAlive) {
         if (StringUtils.isEmpty(deviceId)) {
             return Mono.empty();
         }
-        return localSessions
-                .getOrDefault(deviceId, Mono.empty())
-                .filterWhen(this::checkSessionAlive);
+        if (unregisterWhenNotAlive) {
+            return localSessions
+                    .getOrDefault(deviceId, Mono.empty())
+                    .filterWhen(this::checkSessionAlive);
+        }
+        return localSessions.getOrDefault(deviceId, Mono.empty());
     }
 
     @Override
@@ -161,7 +170,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
                                             localSessions.put(deviceId, Mono.just(newSession));
 
-                                            return handleSessionCompute(session, newSession);
+                                            return handleSessionCompute0(session, newSession);
                                         })
                                         .switchIfEmpty(Mono.defer(() -> removeLocalSession(deviceId).then(Mono.empty()))));
                     }
@@ -205,8 +214,29 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     if (null == oldSession) {
                         return this.doRegister(newSession);
                     }
-                    return handleSessionCompute(oldSession, newSession);
+                    return handleSessionCompute0(oldSession, newSession);
                 });
+    }
+
+    private Mono<DeviceSession> handleSessionCompute0(DeviceSession old,
+                                                      DeviceSession newSession) {
+        //会话发生了变化,更新一下设备缓存的连接信息
+        if (old != null
+                && old.isChanged(newSession)
+                && newSession.getOperator() != null) {
+            //关闭旧会话
+            old.close();
+            return newSession
+                    .getOperator()
+                    .online(getCurrentServerId(), newSession.getId(), newSession
+                            .getClientAddress()
+                            .map(InetSocketAddress::toString)
+                            .orElse(null))
+                    .then(
+                            handleSessionCompute(old, newSession)
+                    );
+        }
+        return handleSessionCompute(old, newSession);
     }
 
     protected Mono<DeviceSession> handleSessionCompute(DeviceSession old,

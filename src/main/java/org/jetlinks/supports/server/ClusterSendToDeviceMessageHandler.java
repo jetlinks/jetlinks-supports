@@ -6,6 +6,7 @@ import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceRegistry;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.enums.ErrorCode;
+import org.jetlinks.core.exception.DeviceOperationException;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.ToDeviceMessageContext;
@@ -127,7 +128,9 @@ public class ClusterSendToDeviceMessageHandler {
                 .defaultIfEmpty(Mono.defer(() -> handleUnsupportedMessage(context)))
                 .flatMap(Function.identity())
                 .onErrorResume(err -> {
-                    log.error("handle send to device message error {}", context.message, err);
+                    if (!(err instanceof DeviceOperationException)) {
+                        log.error("handle send to device message error {}", context.message, err);
+                    }
                     if (!context.alreadyReply) {
                         return doReply(context, createReply(context.message).error(err));
                     }
@@ -286,8 +289,6 @@ public class ClusterSendToDeviceMessageHandler {
 
         @Override
         public Mono<Void> disconnect() {
-            session.close();
-
             return sessionManager
                     .remove(device.getDeviceId(), true)
                     .then();
