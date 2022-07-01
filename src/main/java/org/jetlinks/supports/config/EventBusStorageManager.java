@@ -4,6 +4,7 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.config.ConfigStorageManager;
@@ -12,7 +13,6 @@ import org.jetlinks.core.event.Subscription;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -20,7 +20,7 @@ import java.util.function.Supplier;
 @Slf4j
 public class EventBusStorageManager implements ConfigStorageManager {
 
-    private final ConcurrentMap<String, LocalCacheClusterConfigStorage> cache;
+    final ConcurrentMap<String, LocalCacheClusterConfigStorage> cache;
 
     private final Function<String, LocalCacheClusterConfigStorage> storageBuilder;
 
@@ -50,9 +50,16 @@ public class EventBusStorageManager implements ConfigStorageManager {
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus,
                                   long ttl) {
-        this.cache = new ConcurrentHashMap<>();
+        this.cache = new NonBlockingHashMap<>();
         storageBuilder = id -> {
-            return new LocalCacheClusterConfigStorage(id, eventBus, clusterManager.getCache(id), ttl);
+            return new LocalCacheClusterConfigStorage(
+                    id,
+                    eventBus,
+                    clusterManager.createCache(id),
+                    ttl,
+                    () -> {
+                        this.cache.remove(id);
+                    });
         };
         eventBus
                 .subscribe(Subscription

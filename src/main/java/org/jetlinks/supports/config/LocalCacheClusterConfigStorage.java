@@ -2,6 +2,7 @@ package org.jetlinks.supports.config;
 
 import com.google.common.collect.Maps;
 import lombok.AllArgsConstructor;
+import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
@@ -11,17 +12,17 @@ import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Mono;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 @AllArgsConstructor
 public class LocalCacheClusterConfigStorage implements ConfigStorage {
-    private final Map<String, Cache> caches = new ConcurrentHashMap<>();
+    private final Map<String, Cache> caches = new NonBlockingHashMap<>();
     private final String id;
     private final EventBus eventBus;
 
     private final ClusterCache<String, Object> clusterCache;
 
     private long expires;
+    private final Runnable doOnClear;
 
     public static final Value NULL = Value.simple(null);
 
@@ -203,15 +204,23 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     @Override
     public Mono<Boolean> clear() {
         caches.clear();
+        if (doOnClear != null) {
+            doOnClear.run();
+        }
         return clusterCache
                 .clear()
-                .then(notifyRemoveKey("__all"))
+                .then(notifyRemoveKey("__clear"))
                 .thenReturn(true);
     }
 
     void clearLocalCache(String key) {
         if ("__all".equals(key)) {
             caches.clear();
+        } else if ("__clear".equals(key)) {
+            caches.clear();
+            if (doOnClear != null) {
+                doOnClear.run();
+            }
         } else if (key != null) {
             caches.remove(key);
         }

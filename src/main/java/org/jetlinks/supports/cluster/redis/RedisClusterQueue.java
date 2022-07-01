@@ -2,6 +2,7 @@ package org.jetlinks.supports.cluster.redis;
 
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.core.VisitCount;
 import org.jetlinks.core.cluster.ClusterQueue;
 import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Publisher;
@@ -26,7 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 @SuppressWarnings("all")
 @Slf4j
-public class RedisClusterQueue<T> implements ClusterQueue<T> {
+public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> {
 
     private final String id;
 
@@ -127,9 +128,10 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     private void doPoll(long size) {
-        if (subscribers.size() <= 0) {
+        if (!hasLocalConsumer()) {
             return;
         }
+        visit();
         if (polling.compareAndSet(false, true)) {
 
             AtomicLong total = new AtomicLong(size);
@@ -187,7 +189,13 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     }
 
     @Override
+    public boolean hasLocalConsumer() {
+        return subscribers.size() > 0;
+    }
+
+    @Override
     public Mono<Integer> size() {
+        visit();
         return operations.opsForList()
                          .size(id)
                          .map(Number::intValue);
@@ -201,6 +209,7 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     @Nonnull
     @Override
     public Mono<T> poll() {
+        visit();
         return mod == Mod.LIFO
                 ? operations.opsForList().leftPop(id)
                 : operations.opsForList().rightPop(id);
@@ -246,6 +255,11 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
 
     @Override
     public Mono<Boolean> add(T data) {
+        visit();
+        return doAdd(data);
+    }
+
+    private Mono<Boolean> doAdd(T data) {
         hasLocalProducer = true;
         if (isLocalConsumer() && push(data)) {
             return Reactors.ALWAYS_TRUE;
@@ -266,26 +280,28 @@ public class RedisClusterQueue<T> implements ClusterQueue<T> {
     @Override
     public Mono<Boolean> add(Publisher<T> publisher) {
         hasLocalProducer = true;
+        visit();
         return Flux
                 .from(publisher)
-                .flatMap(this::add)
+                .flatMap(this::doAdd)
                 .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
     public Mono<Boolean> addBatch(Publisher<? extends Collection<T>> publisher) {
         hasLocalProducer = true;
-        return Flux.from(publisher)
-                   .flatMap(v -> {
-                                if (isLocalConsumer() && push(v)) {
-                                    return Reactors.ALWAYS_ONE;
-                                }
-                                return this.operations
-                                        .opsForList()
-                                        .leftPushAll(id, v)
-                                        .then(getOperations().convertAndSend("queue:data:produced", id));
-                            }
-                   )
-                   .then(Reactors.ALWAYS_TRUE);
+        visit();
+        return Flux
+                .from(publisher)
+                .flatMap(v -> {
+                    if (isLocalConsumer() && push(v)) {
+                        return Reactors.ALWAYS_ONE;
+                    }
+                    return this.operations
+                            .opsForList()
+                            .leftPushAll(id, v)
+                            .then(getOperations().convertAndSend("queue:data:produced", id));
+                })
+                .then(Reactors.ALWAYS_TRUE);
     }
 }

@@ -27,6 +27,7 @@ import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 @Slf4j
+@Deprecated
 public class MicroserviceDeviceSessionManager extends AbstractDeviceSessionManager {
 
     private final Map<String, Service> services = new ConcurrentHashMap<>();

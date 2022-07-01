@@ -10,9 +10,12 @@ import org.springframework.data.redis.serializer.RedisSerializer;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 @SuppressWarnings("all")
 @Slf4j
@@ -75,9 +78,26 @@ public class RedisClusterManager implements ClusterManager {
         this.haManager.startup();
 
         //定时尝试拉取队列数据
-        disposable.add(Flux.interval(Duration.ofSeconds(5))
-                           .flatMap(i -> Flux.fromIterable(queues.values()))
-                           .subscribe(RedisClusterQueue::tryPoll)
+        disposable.add(
+                Flux.interval(Duration.ofSeconds(5))
+                    .flatMap(i -> Mono
+                            .defer(() -> {
+                                Set<String> readyToRemove = new HashSet<>();
+                                return Flux
+                                        .fromIterable(queues.entrySet())
+                                        .doOnNext(queue -> {
+                                            queue.getValue().tryPoll();
+                                            //移除太久未使用的队列,释放内存
+                                            if (!queue.getValue().hasLocalConsumer()
+                                                    && queue.getValue().tooLongNoVisit(7200_000)) {
+                                                readyToRemove.add(queue.getKey());
+                                            }
+                                        })
+                                        .then(Mono.fromRunnable(() -> {
+                                            readyToRemove.forEach(queues::remove);
+                                        }));
+                            }))
+                    .subscribe()
         );
 
         disposable.add(this.queueRedisTemplate

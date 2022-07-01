@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Deprecated
 public class ClusterConfigStorageManager implements ConfigStorageManager {
 
     private final ClusterManager clusterManager;

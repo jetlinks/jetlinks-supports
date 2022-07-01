@@ -87,7 +87,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         public void onMembershipEvent(MembershipEvent event) {
             membershipEvents.tryEmitNext(event);
             doHandler(event, ClusterMessageHandler::onMembershipEvent);
-            if (event.isRemoved()||event.isLeaving()) {
+            if (event.isRemoved() || event.isLeaving()) {
                 removeFeature(event.member());
             }
             //新节点上线,广播自己的feature
@@ -98,12 +98,12 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     }
 
     private void addFeature(Member member, Collection<String> features) {
-        if(CollectionUtils.isEmpty(features)){
+        if (CollectionUtils.isEmpty(features)) {
             return;
         }
         log.debug("register cluster [{}] feature:{}", member.alias() == null ? member.id() : member.alias(), features);
         for (String feature : features) {
-            Set<String> members = featureMembers.computeIfAbsent(feature, (k) -> new ConcurrentHashMap<String,String>().keySet(k));
+            Set<String> members = featureMembers.computeIfAbsent(feature, (k) -> new ConcurrentHashMap<String, String>().keySet(k));
             members.add(member.id());
             if (StringUtils.hasText(member.alias())) {
                 members.add(member.alias());
@@ -113,7 +113,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     private void removeFeature(Member member) {
         for (Set<String> value : featureMembers.values()) {
-            if(value.remove(member.id())){
+            if (value.remove(member.id())) {
                 log.debug("remove cluster [{}] features", member.alias() == null ? member.id() : member.alias());
             }
             if (StringUtils.hasText(member.alias())) {
@@ -130,6 +130,13 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     public ExtendedClusterImpl handler(Function<ExtendedCluster, ClusterMessageHandler> handlerFunction) {
         ClusterMessageHandler handler = handlerFunction.apply(this);
+        handlers.add(handler);
+        writeCacheMessage(handler);
+        return this;
+    }
+
+    @Override
+    public ExtendedClusterImpl handler(ClusterMessageHandler handler) {
         handlers.add(handler);
         writeCacheMessage(handler);
         return this;
@@ -172,7 +179,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     }
 
     private void startBroadcastFeature() {
-        addFeature(member(),localFeatures);
+        addFeature(member(), localFeatures);
         disposable.add(
                 Flux.interval(Duration.ofSeconds(10), Duration.ofSeconds(30))
                     .flatMap(l -> this
