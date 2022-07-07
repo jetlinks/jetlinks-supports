@@ -227,9 +227,11 @@ public class ClusterSendToDeviceMessageHandler {
                 return Mono.empty();
             }
             context.alreadyReply = true;
+            return doReply(context.device, message)
+                    .contextWrite(TraceHolder.readToContext(Context.empty(), context.message.getHeaders()));
         }
-        return doReply(context == null ? null : context.device, message)
-                .then();
+        return doReply((DeviceOperator) null, message);
+
     }
 
     class CodecContext implements ToDeviceMessageContext {
