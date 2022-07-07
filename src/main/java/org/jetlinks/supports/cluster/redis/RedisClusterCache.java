@@ -1,6 +1,7 @@
 package org.jetlinks.supports.cluster.redis;
 
 import org.jetlinks.core.cluster.ClusterCache;
+import org.jetlinks.core.utils.Reactors;
 import org.springframework.data.redis.core.ReactiveHashOperations;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
 import org.springframework.util.CollectionUtils;
@@ -96,7 +97,7 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
     @Override
     public Mono<Boolean> putAll(Map<? extends K, ? extends V> multi) {
         if (CollectionUtils.isEmpty(multi)) {
-            return Mono.just(true);
+            return Reactors.ALWAYS_TRUE;
         }
         List<K> remove = multi.entrySet()
                               .stream()
@@ -108,7 +109,9 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
             remove.forEach(newTarget::remove);
             return hash
                     .remove(redisKey, remove.toArray())
-                    .then(hash.putAll(redisKey, newTarget));
+                    .then(newTarget.isEmpty()?
+                                  Reactors.ALWAYS_TRUE :
+                                  hash.putAll(redisKey, newTarget));
         }
         return hash.putAll(redisKey, multi);
     }
