@@ -11,6 +11,7 @@ import org.jetlinks.core.device.DeviceRegistry;
 import org.jetlinks.core.device.ProductInfo;
 import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.server.session.LostDeviceSession;
+import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.scalecube.ExtendedClusterImpl;
 import org.jetlinks.supports.scalecube.rpc.ScalecubeRpcManager;
 import org.jetlinks.supports.test.InMemoryDeviceRegistry;
@@ -84,6 +85,10 @@ public class ClusterDeviceSessionManagerTest {
             public boolean isAlive() {
                 return true;
             }
+            @Override
+            public Mono<Boolean> isAliveAsync() {
+                return Reactors.ALWAYS_TRUE;
+            }
         };
         AtomicInteger eventCount = new AtomicInteger();
         Disposables.composite(
@@ -131,6 +136,11 @@ public class ClusterDeviceSessionManagerTest {
             @Override
             public boolean isAlive() {
                 return true;
+            }
+
+            @Override
+            public Mono<Boolean> isAliveAsync() {
+                return Reactors.ALWAYS_TRUE;
             }
         };
         manager1.compute(session.getDeviceId(), mono -> Mono.just(session))

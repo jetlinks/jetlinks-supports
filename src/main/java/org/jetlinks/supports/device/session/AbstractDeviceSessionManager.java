@@ -1,5 +1,6 @@
 package org.jetlinks.supports.device.session;
 
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
@@ -19,6 +20,7 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
@@ -95,7 +97,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     if (!alive) {
                         //移除本地会话
                         return this
-                                .removeLocalSession(session.getDeviceId())
+                                .removeLocalSession(session)
                                 .thenReturn(false);
                     }
                     return Reactors.ALWAYS_TRUE;
@@ -157,7 +159,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         //创建新会话
                         operator = creator
                                 .flatMap(this::doRegister)
-                                .doOnNext(session -> localSessions.put(deviceId, Mono.just(session)));
+                                .doOnNext(this::replaceSession);
                     } else {
                         if (updater == null) {
                             return old;
@@ -168,7 +170,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                                         .apply(session)
                                         .flatMap(newSession -> {
 
-                                            localSessions.put(deviceId, Mono.just(newSession));
+                                            replaceSession(newSession);
 
                                             return handleSessionCompute0(session, newSession);
                                         })
@@ -182,6 +184,19 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return ref == null ? Mono.empty() : ref;
     }
 
+    @SneakyThrows
+    @SuppressWarnings("unchecked")
+    private void replaceSession(DeviceSession newSession) {
+        Mono<DeviceSession> old = localSessions.put(newSession.getDeviceId(), Mono.just(newSession));
+        if (old instanceof Callable) {
+            DeviceSession oldSession = ((Callable<DeviceSession>) old).call();
+            if (null != oldSession && oldSession != newSession && oldSession.isChanged(newSession)) {
+                log.info("close changed device [{}] session {} ,new session: {}", newSession.getDeviceId(), oldSession, newSession);
+                oldSession.close();
+            }
+        }
+    }
+
     @Override
     public final Mono<DeviceSession> compute(@Nonnull String deviceId,
                                              @Nonnull Function<Mono<DeviceSession>, Mono<DeviceSession>> computer) {
@@ -189,20 +204,30 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return localSessions
                 .compute(deviceId,
                          (_id, old) -> {
-                             if (old == null) {
-                                 old = Mono.empty();
-                             }
-                             return old
+                             Mono<DeviceSession> oldMono = old == null ? Mono.empty() : old;
+                             return oldMono
                                      .map(oldSession -> doCompute(oldSession, computer))
                                      .defaultIfEmpty(Mono.defer(() -> doCompute(null, computer)))
                                      .flatMap(Function.identity())
-                                     //有会话产生
-                                     .doOnNext(session -> localSessions.put(deviceId, Mono.just(session)))
-                                     .doOnError(err -> localSessions.remove(deviceId))
+                                     //替换会话
+                                     .doOnNext(this::replaceSession)
+                                     //发生错误时关闭连接
+                                     .onErrorResume(err -> {
+                                         log.warn("compute device[{}] session error", deviceId, err);
+                                         return removeAndClose(deviceId, oldMono).then(Mono.error(err));
+                                     })
                                      //计算后返回空,移除本地会话
-                                     .switchIfEmpty(Mono.defer(() -> localSessions.remove(deviceId)))
+                                     .switchIfEmpty(Mono.defer(() -> removeAndClose(deviceId, oldMono).then(Mono.empty())))
                                      .cache();
                          });
+    }
+
+    private Mono<DeviceSession> removeAndClose(String deviceId, Mono<DeviceSession> mono) {
+        localSessions.remove(deviceId);
+
+        return mono
+                .doOnNext(DeviceSession::close);
+
     }
 
     private Mono<DeviceSession> doCompute(DeviceSession oldSession, Function<Mono<DeviceSession>, Mono<DeviceSession>> computer) {
@@ -256,7 +281,15 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 //初始化会话连接信息,判断设备是否在其他服务节点还存在连接
                 .initSessionConnection(session)
                 .flatMap(alive -> {
-                    if (!alive) {
+                    //其他节点存活
+                    //或者本地会话存在,可能在离线的同时又上线了?
+                    //都认为设备会话依然存活
+                    boolean sessionExists = alive || localSessions.containsKey(session.getDeviceId());
+                    if (sessionExists) {
+                        log.info("device [{}] session [{}] closed,but session still exists!", session.getDeviceId(), session);
+                        return fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.unregister, session, true));
+                    } else {
+                        log.info("device [{}] session [{}] closed", session.getDeviceId(), session);
                         return session
                                 .getOperator()
                                 .offline()
@@ -264,8 +297,30 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                                         fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.unregister, session, false))
                                 );
                     }
-                    return fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.unregister, session, true));
+
                 });
+    }
+
+    @SneakyThrows
+    @SuppressWarnings("unchecked")
+    private Mono<Long> removeLocalSession(DeviceSession session) {
+        Mono<DeviceSession> oldSessionMono = localSessions.get(session.getDeviceId());
+        if (null == oldSessionMono) {
+            return Reactors.ALWAYS_ZERO_LONG;
+        }
+        if (oldSessionMono instanceof Callable) {
+            DeviceSession oldSession = ((Callable<DeviceSession>) oldSessionMono).call();
+            //旧的会话与新的会话不同,则移除
+            if (oldSession != null && oldSession == session) {
+                if (localSessions.remove(session.getDeviceId(), oldSessionMono)) {
+                    return closeSession(session)
+                            .then(Reactors.ALWAYS_ONE_LONG);
+                }
+            }
+
+        }
+        return Reactors.ALWAYS_ZERO_LONG;
+
     }
 
     protected final Mono<Long> removeLocalSession(String deviceId) {
