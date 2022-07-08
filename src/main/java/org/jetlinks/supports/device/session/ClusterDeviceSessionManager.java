@@ -4,10 +4,12 @@ import io.scalecube.services.annotations.ServiceMethod;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
+import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.ServiceEvent;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -39,6 +41,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
         @ServiceMethod
         Mono<Long> remove(String deviceId);
+
+        @ServiceMethod
+        Flux<DeviceSessionInfo> sessions();
     }
 
     @AllArgsConstructor
@@ -81,6 +86,13 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return doWith(deviceId,
                           AbstractDeviceSessionManager::removeFromCluster,
                           Reactors.ALWAYS_ZERO_LONG);
+        }
+
+        @Override
+        public Flux<DeviceSessionInfo> sessions() {
+            return doWith(null,
+                          (manager, ignore) -> manager.localSessionInfo(),
+                          Flux.empty());
         }
     }
 
@@ -161,6 +173,16 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                         return Reactors.ALWAYS_ZERO_LONG;
                     });
         }
+
+        @Override
+        public Flux<DeviceSessionInfo> sessions() {
+            return service
+                    .sessions()
+                    .onErrorResume(err -> {
+                        handleError(err);
+                        return Mono.empty();
+                    });
+        }
     }
 
 
@@ -210,6 +232,16 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                 .flatMap(service -> service.isAlive(deviceId))
                 .any(Boolean::booleanValue)
                 .defaultIfEmpty(false);
+    }
+
+    @Override
+    protected Flux<DeviceSessionInfo> remoteSessions(String serverId) {
+        if (StringUtils.isEmpty(serverId)) {
+            return getServices()
+                    .flatMap(Service::sessions);
+        }
+        Service service = services.get(serverId);
+        return service == null ? Flux.empty() : service.sessions();
     }
 
     private Flux<Service> getServices() {

@@ -4,6 +4,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
+import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
@@ -42,6 +43,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     protected abstract Mono<Long> getRemoteTotalSessions();
 
     protected abstract Mono<Boolean> remoteSessionIsAlive(String deviceId);
+
+    protected abstract Flux<DeviceSessionInfo> remoteSessions(String serverId);
 
     public void init() {
         Scheduler scheduler = Schedulers.newSingle("device-session-checker");
@@ -143,6 +146,23 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 .zip(total,
                      getRemoteTotalSessions(),
                      Math::addExact);
+    }
+
+    @Override
+    public final Flux<DeviceSessionInfo> getSessionInfo() {
+        return getSessionInfo(null);
+    }
+
+    @Override
+    public Flux<DeviceSessionInfo> getSessionInfo(String serverId) {
+        return Flux.concat(localSessionInfo(),
+                           remoteSessions(serverId));
+    }
+
+    protected final Flux<DeviceSessionInfo> localSessionInfo() {
+        return Flux.fromIterable(localSessions.values())
+                   .flatMap(Function.identity())
+                   .map(session -> DeviceSessionInfo.of(getCurrentServerId(), session));
     }
 
     @Override

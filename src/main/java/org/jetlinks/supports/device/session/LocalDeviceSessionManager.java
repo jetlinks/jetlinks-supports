@@ -1,7 +1,9 @@
 package org.jetlinks.supports.device.session;
 
+import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 public class LocalDeviceSessionManager extends AbstractDeviceSessionManager{
@@ -33,5 +35,10 @@ public class LocalDeviceSessionManager extends AbstractDeviceSessionManager{
     @Override
     protected Mono<Boolean> remoteSessionIsAlive(String deviceId) {
         return Reactors.ALWAYS_FALSE;
+    }
+
+    @Override
+    protected Flux<DeviceSessionInfo> remoteSessions(String serverId) {
+        return Flux.empty();
     }
 }

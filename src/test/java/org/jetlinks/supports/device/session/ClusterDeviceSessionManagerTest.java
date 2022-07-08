@@ -158,5 +158,10 @@ public class ClusterDeviceSessionManagerTest {
                             .expectNextCount(20000)
                             .verifyComplete();
         System.out.println(time);
+
+        manager2.getSessionInfo()
+                .as(StepVerifier::create)
+                .expectNextCount(1)
+                .verifyComplete();
     }
 }
