@@ -193,12 +193,12 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                                             replaceSession(newSession);
 
                                             return handleSessionCompute0(session, newSession);
-                                        })
-                                        .switchIfEmpty(Mono.defer(() -> removeLocalSession(deviceId).then(Mono.empty()))));
+                                        }));
                     }
                     //cache
                     return operator
                             .doOnError(err -> localSessions.remove(deviceId))
+                            .switchIfEmpty(Mono.defer(() -> removeLocalSession(deviceId).then(Mono.empty())))
                             .cache();
                 });
         return ref == null ? Mono.empty() : ref;
