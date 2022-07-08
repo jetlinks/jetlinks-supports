@@ -34,6 +34,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         Mono<Boolean> isAlive(String deviceId);
 
         @ServiceMethod
+        Mono<Boolean> checkAlive(String deviceId);
+
+        @ServiceMethod
         Mono<Long> total();
 
         @ServiceMethod
@@ -58,6 +61,13 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                 return defaultValue;
             }
             return arg.apply(manager, arg0);
+        }
+
+        @Override
+        public Mono<Boolean> checkAlive(String deviceId) {
+            return doWith(deviceId,
+                          (manager, id) -> manager.checkLocalAlive(deviceId),
+                          Reactors.ALWAYS_FALSE);
         }
 
         @Override
@@ -138,6 +148,16 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         public Mono<Boolean> isAlive(String deviceId) {
             return service
                     .isAlive(deviceId)
+                    .onErrorResume(err -> {
+                        handleError(err);
+                        return Reactors.ALWAYS_FALSE;
+                    });
+        }
+
+        @Override
+        public Mono<Boolean> checkAlive(String deviceId) {
+            return service
+                    .checkAlive(deviceId)
                     .onErrorResume(err -> {
                         handleError(err);
                         return Reactors.ALWAYS_FALSE;
@@ -230,6 +250,17 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         }
         return getServices()
                 .flatMap(service -> service.isAlive(deviceId))
+                .any(Boolean::booleanValue)
+                .defaultIfEmpty(false);
+    }
+
+    @Override
+    protected Mono<Boolean> checkRemoteSessionIsAlive(String deviceId) {
+        if (services.size() == 0) {
+            return Reactors.ALWAYS_FALSE;
+        }
+        return getServices()
+                .flatMap(service -> service.checkAlive(deviceId))
                 .any(Boolean::booleanValue)
                 .defaultIfEmpty(false);
     }

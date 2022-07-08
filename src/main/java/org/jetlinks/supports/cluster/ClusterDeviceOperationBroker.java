@@ -92,7 +92,7 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
         return Flux
                 .fromIterable(deviceIdList)
                 .flatMap(id -> sessionManager
-                        .isAlive(id)
+                        .isAlive(id, false)
                         .map(alive -> new DeviceStateInfo(id, alive ? DeviceState.online : DeviceState.offline))
                 );
     }
@@ -151,9 +151,9 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
     }
 
     private Mono<Void> handleSendToDevice(Message message) {
-        if(message instanceof RepayableDeviceMessage){
+        if (message instanceof RepayableDeviceMessage) {
             RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
-            awaits.put(getAwaitReplyKey(msg),msg);
+            awaits.put(getAwaitReplyKey(msg), msg);
         }
         if (sendToDevice.currentSubscriberCount() == 0
                 || sendToDevice.tryEmitNext(message).isFailure()) {

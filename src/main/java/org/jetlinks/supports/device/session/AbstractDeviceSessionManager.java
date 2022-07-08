@@ -44,6 +44,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     protected abstract Mono<Boolean> remoteSessionIsAlive(String deviceId);
 
+    protected abstract Mono<Boolean> checkRemoteSessionIsAlive(String deviceId);
+
     protected abstract Flux<DeviceSessionInfo> remoteSessions(String serverId);
 
     public void init() {
@@ -134,6 +136,37 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     }
                     return remoteSessionIsAlive(deviceId);
                 });
+    }
+
+    @Override
+    public Mono<Boolean> checkAlive(String deviceId,
+                                    boolean onlyLocal) {
+        Mono<Boolean> localAlive = this.checkLocalAlive(deviceId);
+        if (onlyLocal) {
+            return localAlive;
+        }
+        return localAlive
+                .flatMap(alive -> {
+                    if (alive) {
+                        return Reactors.ALWAYS_TRUE;
+                    }
+                    return checkRemoteSessionIsAlive(deviceId);
+                });
+    }
+
+    protected final Mono<Boolean> checkLocalAlive(String deviceId) {
+        return this
+                .getSession(deviceId)
+                .flatMap(session -> session
+                        .getOperator() == null
+                        ? Reactors.ALWAYS_FALSE
+                        : session
+                        .getOperator()
+                        .online(getCurrentServerId(),
+                                deviceId,
+                                session.getClientAddress().map(String::valueOf).orElse(""))
+                        .thenReturn(true))
+                .defaultIfEmpty(false);
     }
 
     @Override

@@ -38,6 +38,11 @@ public class LocalDeviceSessionManager extends AbstractDeviceSessionManager{
     }
 
     @Override
+    protected Mono<Boolean> checkRemoteSessionIsAlive(String deviceId) {
+        return Reactors.ALWAYS_FALSE;
+    }
+
+    @Override
     protected Flux<DeviceSessionInfo> remoteSessions(String serverId) {
         return Flux.empty();
     }
