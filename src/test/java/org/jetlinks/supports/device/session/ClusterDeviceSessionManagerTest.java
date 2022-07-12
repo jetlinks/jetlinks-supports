@@ -110,6 +110,8 @@ public class ClusterDeviceSessionManagerTest {
 
         manager1.compute(session.getDeviceId(), mono -> Mono.just(session))
                 .block();
+        manager1.compute(session.getDeviceId(), mono -> Mono.just(session))
+                .block();
         manager2.compute(session.getDeviceId(), Mono.just(session), null)
                 .block();
 

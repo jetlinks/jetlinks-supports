@@ -1,7 +1,5 @@
 package org.jetlinks.supports.device.session;
 
-import lombok.Getter;
-import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
@@ -14,34 +12,28 @@ import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
-import reactor.util.context.ContextView;
 
 import javax.annotation.Nonnull;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
 
 @Slf4j
-public abstract class AbstractDeviceSessionManager implements DeviceSessionManager {
+public abstract class AbstractDeviceSessionManagerOld implements DeviceSessionManager {
 
-    protected final Map<String, DeviceSessionRef> localSessions = new ConcurrentHashMap<>(2048);
+    protected final Map<String, Mono<DeviceSession>> localSessions = new ConcurrentHashMap<>(2058);
 
     private final List<Function<DeviceSessionEvent, Mono<Void>>> sessionEventHandlers = new CopyOnWriteArrayList<>();
 
     protected final Disposable.Composite disposable = Disposables.composite();
-
-    @Setter
-    @Getter
-    private Duration sessionLoadTimeout = Duration.ofSeconds(5);
 
     public abstract String getCurrentServerId();
 
@@ -88,21 +80,19 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         if (StringUtils.isEmpty(deviceId)) {
             return Mono.empty();
         }
-        DeviceSessionRef ref = localSessions.get(deviceId);
-        if (ref == null) {
-            return Mono.empty();
-        }
         if (unregisterWhenNotAlive) {
-            return ref.ref().filterWhen(this::checkSessionAlive);
+            return localSessions
+                    .getOrDefault(deviceId, Mono.empty())
+                    .filterWhen(this::checkSessionAlive);
         }
-        return ref.ref();
+        return localSessions.getOrDefault(deviceId, Mono.empty());
     }
 
     @Override
     public Flux<DeviceSession> getSessions() {
         return Flux
                 .fromIterable(localSessions.values())
-                .flatMap(DeviceSessionRef::ref);
+                .flatMap(Function.identity());
     }
 
     private Mono<Boolean> checkSessionAlive(DeviceSession session) {
@@ -205,7 +195,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     protected final Flux<DeviceSessionInfo> localSessionInfo() {
         return Flux.fromIterable(localSessions.values())
-                   .flatMap(DeviceSessionRef::ref)
+                   .flatMap(Function.identity())
                    .map(session -> DeviceSessionInfo.of(getCurrentServerId(), session));
     }
 
@@ -213,24 +203,52 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     public Mono<DeviceSession> compute(@Nonnull String deviceId,
                                        Mono<DeviceSession> creator,
                                        Function<DeviceSession, Mono<DeviceSession>> updater) {
-        DeviceSessionRef ref = localSessions
+        Mono<DeviceSession> ref = localSessions
                 .compute(deviceId, (_id, old) -> {
+                    Mono<DeviceSession> operator;
                     if (old == null) {
                         if (creator == null) {
                             return null;
                         }
                         //创建新会话
-                        return new DeviceSessionRef(_id, this, creator);
+                        operator = creator
+                                .flatMap(this::doRegister)
+                                .doOnNext(this::replaceSession);
                     } else {
                         if (updater == null) {
                             return old;
                         }
                         //替换会话
-                        old.update(s -> s.flatMap(updater));
-                        return old;
+                        operator = old
+                                .flatMap(session -> updater
+                                        .apply(session)
+                                        .flatMap(newSession -> {
+
+                                            replaceSession(newSession);
+
+                                            return handleSessionCompute0(session, newSession);
+                                        }));
                     }
+                    //cache
+                    return operator
+                            .doOnError(err -> localSessions.remove(deviceId))
+                            .switchIfEmpty(Mono.defer(() -> removeLocalSession(deviceId).then(Mono.empty())))
+                            .cache();
                 });
-        return ref == null ? Mono.empty() : ref.ref();
+        return ref == null ? Mono.empty() : ref;
+    }
+
+    @SneakyThrows
+    @SuppressWarnings("unchecked")
+    private void replaceSession(DeviceSession newSession) {
+        Mono<DeviceSession> old = localSessions.put(newSession.getDeviceId(), Mono.just(newSession));
+        if (old instanceof Callable) {
+            DeviceSession oldSession = ((Callable<DeviceSession>) old).call();
+            if (null != oldSession && oldSession != newSession && oldSession.isChanged(newSession)) {
+                log.info("close changed device [{}] session {} ,new session: {}", newSession.getDeviceId(), oldSession, newSession);
+                oldSession.close();
+            }
+        }
     }
 
     @Override
@@ -240,14 +258,44 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return localSessions
                 .compute(deviceId,
                          (_id, old) -> {
-                             if (old != null) {
-                                 old.update(computer);
-                                 return old;
-                             } else {
-                                 return new DeviceSessionRef(_id, this, computer.apply(Mono.empty()));
-                             }
-                         })
-                .ref();
+                             Mono<DeviceSession> oldMono = old == null ? Mono.empty() : old;
+                             return oldMono
+                                     .map(oldSession -> doCompute(oldSession, computer))
+                                     .defaultIfEmpty(Mono.defer(() -> doCompute(null, computer)))
+                                     .flatMap(Function.identity())
+                                     //替换会话
+                                     .doOnNext(this::replaceSession)
+                                     .timeout(Duration.ofSeconds(1), Mono.error(() -> new TimeoutException("handle device [" + _id + "] session timeout")))
+                                     //发生错误时关闭连接
+                                     .onErrorResume(err -> {
+                                         log.warn("compute device[{}] session error", deviceId, err);
+                                         return removeAndClose(deviceId, oldMono).then(Mono.error(err));
+                                     })
+                                     //计算后返回空,移除本地会话
+                                     .switchIfEmpty(Mono.defer(() -> removeAndClose(deviceId, oldMono).then(Mono.empty())))
+                                     .cache();
+                         });
+    }
+
+    private Mono<DeviceSession> removeAndClose(String deviceId, Mono<DeviceSession> mono) {
+        localSessions.remove(deviceId);
+
+        return mono
+                .doOnNext(DeviceSession::close);
+
+    }
+
+    private Mono<DeviceSession> doCompute(DeviceSession oldSession, Function<Mono<DeviceSession>, Mono<DeviceSession>> computer) {
+        return computer
+                .apply(oldSession == null ? Mono.empty() : Mono.just(oldSession))
+                //计算返回空，则认为会话注销
+                .switchIfEmpty(oldSession == null ? Mono.empty() : closeSession(oldSession).then(Mono.empty()))
+                .flatMap(newSession -> {
+                    if (null == oldSession) {
+                        return this.doRegister(newSession);
+                    }
+                    return handleSessionCompute0(oldSession, newSession);
+                });
     }
 
     private Mono<DeviceSession> handleSessionCompute0(DeviceSession old,
@@ -309,20 +357,31 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     @SneakyThrows
+    @SuppressWarnings("unchecked")
     private Mono<Long> removeLocalSession(DeviceSession session) {
-        DeviceSessionRef ref = localSessions.get(session.getDeviceId());
-        if (null == ref) {
+        Mono<DeviceSession> oldSessionMono = localSessions.get(session.getDeviceId());
+        if (null == oldSessionMono) {
             return Reactors.ALWAYS_ZERO_LONG;
         }
-        return ref.close(session);
+        if (oldSessionMono instanceof Callable) {
+            DeviceSession oldSession = ((Callable<DeviceSession>) oldSessionMono).call();
+            //旧的会话与新的会话不同,则移除
+            if (oldSession != null && oldSession == session) {
+                if (localSessions.remove(session.getDeviceId(), oldSessionMono)) {
+                    return closeSession(session)
+                            .then(Reactors.ALWAYS_ONE_LONG);
+                }
+            }
+
+        }
+        return Reactors.ALWAYS_ZERO_LONG;
 
     }
 
     protected final Mono<Long> removeLocalSession(String deviceId) {
-        DeviceSessionRef ref = localSessions.remove(deviceId);
-        if (ref != null) {
-            return ref
-                    .ref()
+        Mono<DeviceSession> sessionMono = localSessions.remove(deviceId);
+        if (sessionMono != null) {
+            return sessionMono
                     .flatMap(session -> this
                             .closeSession(session)
                             .thenReturn(1L));
@@ -362,48 +421,46 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     protected Mono<Boolean> doInit(String deviceId) {
-        DeviceSessionRef ref = localSessions.get(deviceId);
-
-        if (ref != null && ref.loaded != null && ref.loaded.getOperator() != null) {
-            return ref
-                    .loaded
-                    .getOperator()
-                    .online(getCurrentServerId(), null)
-                    .thenReturn(true);
-        }
-        return Mono.empty();
+        return localSessions
+                .getOrDefault(deviceId, Mono.empty())
+                .flatMap(session -> session.getOperator() == null
+                        ? Reactors.ALWAYS_FALSE
+                        : session
+                        .getOperator()
+                        .online(getCurrentServerId(), null)
+                        .thenReturn(true))
+                .defaultIfEmpty(false);
     }
 
     protected Mono<Long> removeFromCluster(String deviceId) {
-        DeviceSessionRef ref = localSessions.remove(deviceId);
-        if (ref != null) {
-            ref.disposable.dispose();
-            DeviceSession session = ref.loaded;
-            if (ref.loaded != null) {
-                session.close();
-                if (session.getOperator() == null) {
-                    return Reactors.ALWAYS_ONE_LONG;
-                }
-                return session
-                        .getOperator()
-                        .getConnectionServerId()
-                        .map(getCurrentServerId()::equals)
-                        .defaultIfEmpty(false)
-                        .flatMap(sameServer -> {
-                            Mono<Void> before = Mono.empty();
-                            if (sameServer) {
-                                //同一个服务
-                                before = session.getOperator().offline().then();
-                            }
-                            return before
-                                    .then(this.fireEvent(DeviceSessionEvent.of(
-                                            DeviceSessionEvent.Type.unregister,
-                                            session,
-                                            !sameServer
-                                    )));
-                        })
-                        .thenReturn(1L);
-            }
+        Mono<DeviceSession> sessionMono = localSessions.remove(deviceId);
+        if (sessionMono != null) {
+            return sessionMono
+                    .flatMap(session -> {
+                        session.close();
+                        if (session.getOperator() == null) {
+                            return Reactors.ALWAYS_ONE_LONG;
+                        }
+                        return session
+                                .getOperator()
+                                .getConnectionServerId()
+                                .map(getCurrentServerId()::equals)
+                                .defaultIfEmpty(false)
+                                .flatMap(sameServer -> {
+                                    Mono<Void> before = Mono.empty();
+                                    if (sameServer) {
+                                        //同一个服务
+                                        before = session.getOperator().offline().then();
+                                    }
+                                    return before
+                                            .then(this.fireEvent(DeviceSessionEvent.of(
+                                                    DeviceSessionEvent.Type.unregister,
+                                                    session,
+                                                    !sameServer
+                                            )));
+                                })
+                                .thenReturn(1L);
+                    });
         }
         return Reactors.ALWAYS_ZERO_LONG;
     }
@@ -417,123 +474,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     protected Mono<Void> checkSession() {
         return Flux
                 .fromIterable(localSessions.values())
-                .filter(ref -> ref.loaded != null)
-                .flatMap(ref -> this.checkSessionAlive(ref.loaded))
+                .flatMap(Function.identity())
+                .concatMap(this::checkSessionAlive)
                 .then();
-    }
-
-    @SuppressWarnings("rawtypes")
-    private final static AtomicReferenceFieldUpdater<DeviceSessionRef, Mono> LOADER
-            = AtomicReferenceFieldUpdater.newUpdater(DeviceSessionRef.class, Mono.class, "loader");
-
-    protected static class DeviceSessionRef {
-        private final AbstractDeviceSessionManager manager;
-        private Sinks.One<DeviceSession> await;
-        public final String deviceId;
-        public volatile DeviceSession loaded;
-        protected volatile Mono<DeviceSession> loader;
-
-        private volatile Disposable disposable;
-
-        public DeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref) {
-            this.deviceId = deviceId;
-            this.manager = manager;
-            update(ref);
-        }
-
-        public DeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, DeviceSession ref) {
-            this.deviceId = deviceId;
-            this.manager = manager;
-            this.loaded = ref;
-            this.await = Sinks.one();
-            this.await.tryEmitValue(ref);
-        }
-
-        public void update(Function<Mono<DeviceSession>, Mono<DeviceSession>> updater) {
-            update(updater.apply(Mono.fromSupplier(() -> this.loaded)));
-        }
-
-        public void update(Mono<DeviceSession> ref) {
-            if (disposable != null && !disposable.isDisposed()) {
-                disposable.dispose();
-            }
-            Sinks.One<DeviceSession> old = this.await;
-            this.await = Sinks.one();
-            if (old != null && old.currentSubscriberCount() > 0) {
-                old.tryEmitEmpty();
-            }
-            loader = ref
-                    .flatMap(this::handleLoaded)
-                    .timeout(manager.sessionLoadTimeout, Mono.error(() -> new TimeoutException("device [" + deviceId + "] session load timeout")))
-                    .switchIfEmpty(Mono.fromRunnable(this::loadEmpty))
-                    .doOnError(this::loadError)
-                    .doOnNext(this::afterLoaded);
-        }
-
-        private Mono<DeviceSession> handleLoaded(DeviceSession session) {
-            DeviceSession old = this.loaded;
-
-            if (old != null && old.isChanged(session)) {
-                log.info("device [{}] session [{}] changed to [{}]", deviceId, old, session);
-                old.close();
-            }
-            this.loaded = session;
-            if (old == null) {
-                return manager.doRegister(session)
-                              .then(manager.handleSessionCompute0(null, session));
-            }
-            return manager.handleSessionCompute0(old, session);
-        }
-
-        private void afterLoaded(DeviceSession session) {
-            if (session != loaded) {
-                loaded.close();
-            }
-            loaded = session;
-            this.await.tryEmitValue(session);
-        }
-
-        private Mono<Long> close(DeviceSession session) {
-            if (this.loaded == session && manager.localSessions.remove(deviceId, this)) {
-                return manager
-                        .closeSession(session)
-                        .then(Reactors.ALWAYS_ONE_LONG);
-            }
-            return Reactors.ALWAYS_ZERO_LONG;
-        }
-
-        private void loadError(Throwable err) {
-            if (this.loaded != null) {
-                this.loaded.close();
-            }
-            await.tryEmitError(err);
-            manager.localSessions.remove(deviceId, this);
-        }
-
-        private void loadEmpty() {
-            if (this.loaded != null) {
-                this.loaded.close();
-            }
-            await.tryEmitEmpty();
-            manager.localSessions.remove(deviceId, this);
-        }
-
-        private void tryLoad(ContextView contextView) {
-            @SuppressWarnings("all")
-            Mono<DeviceSession> loader = LOADER.getAndSet(this, null);
-
-            if (loader != null) {
-                disposable = loader
-                        .contextWrite(contextView)
-                        .subscribe();
-            }
-        }
-
-        public Mono<DeviceSession> ref() {
-            return Mono.deferContextual(ctx -> {
-                tryLoad(ctx);
-                return await.asMono();
-            });
-        }
     }
 }
