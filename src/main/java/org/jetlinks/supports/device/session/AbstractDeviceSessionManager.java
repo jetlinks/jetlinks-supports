@@ -204,9 +204,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     protected final Flux<DeviceSessionInfo> localSessionInfo() {
-        return Flux.fromIterable(localSessions.values())
-                   .flatMap(DeviceSessionRef::ref)
-                   .map(session -> DeviceSessionInfo.of(getCurrentServerId(), session));
+        return Flux
+                .fromIterable(localSessions.values())
+                .mapNotNull(ref -> ref.loaded)
+                .map(session -> DeviceSessionInfo.of(getCurrentServerId(), session));
     }
 
     @Override
@@ -321,11 +322,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     protected final Mono<Long> removeLocalSession(String deviceId) {
         DeviceSessionRef ref = localSessions.remove(deviceId);
         if (ref != null) {
-            return ref
-                    .ref()
-                    .flatMap(session -> this
-                            .closeSession(session)
-                            .thenReturn(1L));
+            return ref.close();
         }
         return Reactors.ALWAYS_ZERO_LONG;
     }
@@ -495,8 +492,24 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
         private Mono<Long> close(DeviceSession session) {
             if (this.loaded == session && manager.localSessions.remove(deviceId, this)) {
+                if (disposable != null && !disposable.isDisposed()) {
+                    disposable.dispose();
+                }
                 return manager
                         .closeSession(session)
+                        .then(Reactors.ALWAYS_ONE_LONG);
+            }
+            return Reactors.ALWAYS_ZERO_LONG;
+        }
+
+        private Mono<Long> close() {
+            if (disposable != null && !disposable.isDisposed()) {
+                disposable.dispose();
+            }
+            DeviceSession loaded = this.loaded;
+            if (loaded != null) {
+                return manager
+                        .closeSession(loaded)
                         .then(Reactors.ALWAYS_ONE_LONG);
             }
             return Reactors.ALWAYS_ZERO_LONG;
