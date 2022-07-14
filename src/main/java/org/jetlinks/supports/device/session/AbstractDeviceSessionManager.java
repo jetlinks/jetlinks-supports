@@ -257,6 +257,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         if (old != null
                 && old.isChanged(newSession)
                 && newSession.getOperator() != null) {
+            log.info("device [{}] session [{}] changed to [{}]", old.getDeviceId(), old, newSession);
             //关闭旧会话
             old.close();
             return newSession
@@ -469,15 +470,11 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
         private Mono<DeviceSession> handleLoaded(DeviceSession session) {
             DeviceSession old = this.loaded;
-
-            if (old != null && old.isChanged(session)) {
-                log.info("device [{}] session [{}] changed to [{}]", deviceId, old, session);
-                old.close();
-            }
             this.loaded = session;
             if (old == null) {
-                return manager.doRegister(session)
-                              .then(manager.handleSessionCompute0(null, session));
+                return manager
+                        .doRegister(session)
+                        .then(manager.handleSessionCompute0(null, session));
             }
             return manager.handleSessionCompute0(old, session);
         }
