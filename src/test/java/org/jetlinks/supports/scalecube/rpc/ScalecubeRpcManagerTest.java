@@ -178,6 +178,13 @@ public class ScalecubeRpcManagerTest {
                 .as(StepVerifier::create)
                 .expectNext("hel", "lo")
                 .verifyComplete();
+
+        manager3.getService(node1.id(), "n1", Service.class)
+                .flatMapMany(service -> service.read0(Unpooled.wrappedBuffer("test".getBytes())))
+                .map(buf -> buf.toString(StandardCharsets.UTF_8))
+                .as(StepVerifier::create)
+                .expectNext("test","hel", "lo")
+                .verifyComplete();
     }
 
     @io.scalecube.services.annotations.Service
@@ -189,6 +196,9 @@ public class ScalecubeRpcManagerTest {
         @ServiceMethod
         Flux<ByteBuf> read(String id);
 
+        @ServiceMethod
+        Flux<ByteBuf> read0(ByteBuf buf);
+
     }
 
     @AllArgsConstructor
@@ -199,6 +209,13 @@ public class ScalecubeRpcManagerTest {
         @Override
         public Mono<String> upper(String value) {
             return Mono.just(prefix + (value.toUpperCase(Locale.ROOT)));
+        }
+
+        @Override
+        public Flux<ByteBuf> read0(ByteBuf buf) {
+            return Flux.just(buf,
+                             Unpooled.wrappedBuffer("hel".getBytes()),
+                             Unpooled.wrappedBuffer("lo".getBytes()));
         }
 
         @Override

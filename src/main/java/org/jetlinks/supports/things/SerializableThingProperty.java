@@ -1,4 +1,4 @@
-package things;
+package org.jetlinks.supports.things;
 
 import lombok.Getter;
 import lombok.Setter;

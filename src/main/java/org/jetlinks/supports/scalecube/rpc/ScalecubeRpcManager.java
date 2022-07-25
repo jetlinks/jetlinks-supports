@@ -180,6 +180,7 @@ public class ScalecubeRpcManager implements RpcManager {
                 }
             }
         });
+
         return initTransport(this.transportSupplier.get())
                 .start()
                 .doOnNext(trans -> this.transport = trans)
@@ -389,8 +390,7 @@ public class ScalecubeRpcManager implements RpcManager {
         String id = member.alias() == null ? member.id() : member.alias();
         ClusterNode ref = serverServiceRef.remove(id);
         if (null != ref) {
-            fireEvent(ref.services,
-                      member.id(), ServiceEvent.Type.removed);
+            fireEvent(ref.services, id, ServiceEvent.Type.removed);
         }
         log.debug("remove service endpoint [{}] ", member);
     }
@@ -487,6 +487,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
         private <I> RpcServiceCall<I> createApiCall(String serviceId, Class<I> clazz) {
             String name = Reflect.serviceName(clazz);
+
             ServiceCall call = serviceCall
                     .router((serviceRegistry, request) -> {
                         Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
