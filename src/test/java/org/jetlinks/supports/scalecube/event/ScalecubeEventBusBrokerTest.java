@@ -5,7 +5,6 @@ import io.scalecube.net.Address;
 import io.scalecube.transport.netty.tcp.TcpTransportFactory;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
-import org.jetlinks.core.message.property.ReportPropertyMessage;
 import org.jetlinks.supports.event.BrokerEventBus;
 import org.jetlinks.supports.scalecube.ExtendedClusterImpl;
 import org.junit.Test;
@@ -65,25 +64,6 @@ public class ScalecubeEventBusBrokerTest {
             .as(StepVerifier::create)
             .expectNextCount(1)
             .verifyComplete();
-
-        {
-            Flux.range(0, 101_00000)
-                .flatMap(i -> eventBus1.publish("/test", new ReportPropertyMessage()))
-                .subscribe();
-
-            Duration time = eventBus2
-                    .subscribe(Subscription
-                                       .builder()
-                                       .topics("/test")
-                                       .justBroker()
-                                       .subscriberId("test")
-                                       .build())
-                    .take(100_0000)
-                    .as(StepVerifier::create)
-                    .expectNextCount(100_0000)
-                    .verifyComplete();
-            System.out.println(time);
-        }
 
     }
 }
