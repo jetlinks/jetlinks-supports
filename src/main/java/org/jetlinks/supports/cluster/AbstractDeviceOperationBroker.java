@@ -1,5 +1,6 @@
 package org.jetlinks.supports.cluster;
 
+import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cache.Caches;
@@ -10,12 +11,13 @@ import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.exception.DeviceOperationException;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.server.MessageHandler;
-import org.jetlinks.core.utils.DeviceMessageTracer;
 import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
-import reactor.core.publisher.*;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.Collection;
@@ -123,7 +125,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                 AtomicInteger counter = fragmentCounter.computeIfAbsent(partMsgId, r -> new AtomicInteger(partTotal));
 
                 try {
-                    processor.emitNext(message, Sinks.EmitFailureHandler.FAIL_FAST);
+                    processor.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
                 } finally {
                     if (counter.decrementAndGet() <= 0 || message.getHeader(Headers.fragmentLast).orElse(false)) {
                         try {
@@ -139,8 +141,8 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
             Sinks.Many<DeviceMessageReply> processor = replyProcessor.get(messageId);
 
             if (processor != null) {
-                processor.tryEmitNext(message);
-                processor.tryEmitComplete();
+                processor.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                processor.emitComplete(RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
             } else {
                 replyProcessor.remove(messageId);
             }

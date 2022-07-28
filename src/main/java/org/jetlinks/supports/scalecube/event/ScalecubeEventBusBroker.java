@@ -139,12 +139,12 @@ public class ScalecubeEventBusBroker implements EventBroker, Disposable {
         //订阅
         else if (Objects.equals(message.qualifier(), SUB_QUALIFIER)) {
             log.debug("subscribe from {} : {}", connection, message.data());
-            connection.subscriptions.tryEmitNext(message.data());
+            connection.subscriptions.emitNext(message.data(),RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
         }
         //取消订阅
         else if (Objects.equals(message.qualifier(), UNSUB_QUALIFIER)) {
             log.debug("unsubscribe from {} : {}", connection, message.data());
-            connection.unSubscriptions.tryEmitNext(message.data());
+            connection.unSubscriptions.emitNext(message.data(),RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
         }
     }
 

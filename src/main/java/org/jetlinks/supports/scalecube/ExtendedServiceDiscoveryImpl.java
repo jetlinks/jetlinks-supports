@@ -163,7 +163,7 @@ public final class ExtendedServiceDiscoveryImpl implements ServiceDiscovery {
                    .flatMap(member -> Mono.justOrEmpty(cluster.metadata(member)))
                    .doOnNext(metadata -> {
                        if (metadata instanceof ServiceEndpoint) {
-                           sink.tryEmitNext(newEndpointAdded(((ServiceEndpoint) metadata)));
+                           sink.emitNext(newEndpointAdded(((ServiceEndpoint) metadata)),RETRY_NON_SERIALIZED);
                        }
                    })
                    .then();

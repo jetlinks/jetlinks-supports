@@ -6,6 +6,7 @@ import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import io.scalecube.net.Address;
+import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import io.scalecube.services.*;
 import io.scalecube.services.api.Qualifier;
 import io.scalecube.services.api.ServiceMessage;
@@ -401,7 +402,7 @@ public class ScalecubeRpcManager implements RpcManager {
             Sinks.Many<ServiceEvent> sink = listener.get(serviceName);
             if (sink != null && sink.currentSubscriberCount() > 0) {
                 String id = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
-                sink.tryEmitNext(new ServiceEvent(id, serviceName, memberId, type));
+                sink.emitNext(new ServiceEvent(id, serviceName, memberId, type), RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
             }
         }
     }

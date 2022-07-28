@@ -5,6 +5,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
+import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import io.scalecube.services.annotations.Service;
 import io.scalecube.services.annotations.ServiceMethod;
 import lombok.AllArgsConstructor;
@@ -65,25 +66,35 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
         } else {
             rpcManager
                     .getService(event.getServerNodeId(), Api.class)
-                    .subscribe(api -> {
-                        RpcEventConnection conn = new RpcEventConnection(event.getServerNodeId(), api);
-                        RpcEventConnection old = connections.put(event.getServerNodeId(), conn);
-                        if (old != null) {
-                            disposeConnection(old);
-                        } else {
-                            acceptSink.tryEmitNext(conn);
-                        }
-                    });
+                    .subscribe(api -> handleService(event, api));
+        }
+    }
+
+    protected void handleService(ServiceEvent event, Api api) {
+        try {
+            RpcEventConnection conn = new RpcEventConnection(event.getServerNodeId(), api);
+            RpcEventConnection old = connections.put(event.getServerNodeId(), conn);
+            if (old != null) {
+                disposeConnection(old);
+            } else {
+                acceptSink.emitNext(conn, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+            }
+        } catch (Throwable err) {
+            log.warn("register service error {}", event.getServiceId(), err);
         }
     }
 
     protected void handleService(RpcService<Api> service) {
-        RpcEventConnection conn = new RpcEventConnection(service.serverNodeId(), service.service());
-        RpcEventConnection old = connections.put(service.serverNodeId(), conn);
-        if (old != null) {
-            disposeConnection(old);
-        } else {
-            acceptSink.tryEmitNext(conn);
+        try {
+            RpcEventConnection conn = new RpcEventConnection(service.serverNodeId(), service.service());
+            RpcEventConnection old = connections.put(service.serverNodeId(), conn);
+            if (old != null) {
+                disposeConnection(old);
+            } else {
+                acceptSink.emitNext(conn, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+            }
+        } catch (Throwable err) {
+            log.warn("register service error {}", service.serverNodeId(), err);
         }
     }
 
@@ -289,7 +300,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
         @Override
         public Mono<Void> sub(ByteBuf sub) {
             handleSubs(sub, (connection, subscription) -> {
-                connection.subscriptions.tryEmitNext(subscription);
+                connection.subscriptions.emitNext(subscription, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
             });
             return Mono.empty();
         }
@@ -297,7 +308,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
         @Override
         public Mono<Void> unsub(ByteBuf sub) {
             handleSubs(sub, (connection, subscription) -> {
-                connection.unSubscriptions.tryEmitNext(subscription);
+                connection.subscriptions.emitNext(subscription, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
             });
             return Mono.empty();
         }
@@ -319,9 +330,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
                     } else {
                         topicPayload = TopicPayload.of(topic, NativePayload.of(payload));
                     }
-
-                    connection.producer.tryEmitNext(topicPayload);
-
+                    connection.producer.emitNext(topicPayload, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
                 }
             } catch (Throwable error) {
                 log.error("Error handling subscription", error);

@@ -7,6 +7,7 @@ import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import io.scalecube.net.Address;
+import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections.CollectionUtils;
 import org.jetlinks.core.trace.TraceHolder;
@@ -68,7 +69,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
             if (System.currentTimeMillis() <= cacheEndWithTime && messageCache.size() < 2048) {
                 messageCache.add(message);
             }
-            messageSink.tryEmitNext(message);
+            messageSink.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
             doHandler(message, ClusterMessageHandler::onMessage);
         }
 
@@ -79,13 +80,13 @@ public class ExtendedClusterImpl implements ExtendedCluster {
                 member(from).ifPresent(mem -> addFeature(mem, gossip.data()));
                 return;
             }
-            messageSink.tryEmitNext(gossip);
+            messageSink.emitNext(gossip, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
             doHandler(gossip, ClusterMessageHandler::onGossip);
         }
 
         @Override
         public void onMembershipEvent(MembershipEvent event) {
-            membershipEvents.tryEmitNext(event);
+            membershipEvents.emitNext(event, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
             doHandler(event, ClusterMessageHandler::onMembershipEvent);
             if (event.isRemoved() || event.isLeaving()) {
                 removeFeature(event.member());

@@ -3,6 +3,7 @@ package org.jetlinks.supports.cluster;
 import com.google.common.cache.CacheBuilder;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
+import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.DeviceState;
 import org.jetlinks.core.device.DeviceStateInfo;
@@ -52,7 +53,7 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
             .build()
             .asMap();
 
-    private final Sinks.Many<Message> sendToDevice = Sinks.many().multicast().onBackpressureBuffer();
+    private final Sinks.Many<Message> sendToDevice = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE,false);
 
     public ClusterDeviceOperationBroker(ExtendedCluster cluster,
                                         DeviceSessionManager sessionManager) {
@@ -155,10 +156,14 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
             RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
             awaits.put(getAwaitReplyKey(msg), msg);
         }
-        if (sendToDevice.currentSubscriberCount() == 0
-                || sendToDevice.tryEmitNext(message).isFailure()) {
+        if (sendToDevice.currentSubscriberCount() == 0) {
             log.warn("no handler for message {}", message);
             return doReply(createReply(message).error(ErrorCode.SYSTEM_ERROR));
+        }
+        try {
+            sendToDevice.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+        }catch (Throwable err){
+            return doReply(createReply(message).error(err));
         }
         return Mono.empty();
     }
