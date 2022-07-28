@@ -11,6 +11,7 @@ import io.scalecube.services.ServiceEndpoint;
 import io.scalecube.services.discovery.api.ServiceDiscovery;
 import io.scalecube.services.discovery.api.ServiceDiscoveryContext;
 import io.scalecube.services.discovery.api.ServiceDiscoveryEvent;
+import org.jetlinks.core.utils.Reactors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Exceptions;
@@ -29,8 +30,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
-import static io.scalecube.reactor.RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED;
-import static io.scalecube.services.discovery.api.ServiceDiscoveryEvent.*;
+import static io.scalecube.services.discovery.api.ServiceDiscoveryEvent.newEndpointAdded;
+import static io.scalecube.services.discovery.api.ServiceDiscoveryEvent.newEndpointLeaving;
 
 public final class ExtendedServiceDiscoveryImpl implements ServiceDiscovery {
 
@@ -163,7 +164,7 @@ public final class ExtendedServiceDiscoveryImpl implements ServiceDiscovery {
                    .flatMap(member -> Mono.justOrEmpty(cluster.metadata(member)))
                    .doOnNext(metadata -> {
                        if (metadata instanceof ServiceEndpoint) {
-                           sink.emitNext(newEndpointAdded(((ServiceEndpoint) metadata)),RETRY_NON_SERIALIZED);
+                           sink.emitNext(newEndpointAdded(((ServiceEndpoint) metadata)), Reactors.emitFailureHandler());
                        }
                    })
                    .then();
@@ -179,11 +180,11 @@ public final class ExtendedServiceDiscoveryImpl implements ServiceDiscovery {
         return Mono.defer(
                 () -> {
                     if (cluster == null) {
-                        sink.emitComplete(RETRY_NON_SERIALIZED);
+                        sink.emitComplete(Reactors.emitFailureHandler());
                         return Mono.empty();
                     }
                     cluster.shutdown();
-                    return cluster.onShutdown().doFinally(s -> sink.emitComplete(RETRY_NON_SERIALIZED));
+                    return cluster.onShutdown().doFinally(s -> sink.emitComplete(Reactors.emitFailureHandler()));
                 });
     }
 
@@ -199,7 +200,7 @@ public final class ExtendedServiceDiscoveryImpl implements ServiceDiscovery {
         }
 
         LOGGER.debug("Publish discoveryEvent: {}", discoveryEvent);
-        sink.emitNext(discoveryEvent, RETRY_NON_SERIALIZED);
+        sink.emitNext(discoveryEvent, Reactors.emitFailureHandler());
     }
 
     private ServiceDiscoveryEvent toServiceDiscoveryEvent(MembershipEvent membershipEvent) {

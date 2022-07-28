@@ -5,7 +5,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
-import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import io.scalecube.services.annotations.Service;
 import io.scalecube.services.annotations.ServiceMethod;
 import lombok.AllArgsConstructor;
@@ -18,6 +17,7 @@ import org.jetlinks.core.event.TopicPayload;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
+import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.core.utils.SerializeUtils;
 import org.jetlinks.supports.event.EventBroker;
 import org.jetlinks.supports.event.EventConnection;
@@ -45,7 +45,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
 
     private final Map<String, RpcEventConnection> connections = new ConcurrentHashMap<>();
 
-    private final Sinks.Many<EventConnection> acceptSink = Sinks.many().multicast().onBackpressureBuffer();
+    private final Sinks.Many<EventConnection> acceptSink = Reactors.createMany();
 
     public ClusterEventBusBroker(RpcManager rpcManager) {
         this.rpcManager = rpcManager;
@@ -77,7 +77,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
             if (old != null) {
                 disposeConnection(old);
             } else {
-                acceptSink.emitNext(conn, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                acceptSink.emitNext(conn, Reactors.emitFailureHandler());
             }
         } catch (Throwable err) {
             log.warn("register service error {}", event.getServiceId(), err);
@@ -91,7 +91,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
             if (old != null) {
                 disposeConnection(old);
             } else {
-                acceptSink.emitNext(conn, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                acceptSink.emitNext(conn, Reactors.emitFailureHandler());
             }
         } catch (Throwable err) {
             log.warn("register service error {}", service.serverNodeId(), err);
@@ -141,25 +141,13 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
 
         private final Disposable.Composite disposable = Disposables.composite();
 
-        private final Sinks.Many<TopicPayload> consumer = Sinks
-                .many()
-                .multicast()
-                .onBackpressureBuffer(Integer.MAX_VALUE, false);
+        private final Sinks.Many<TopicPayload> consumer =Reactors.createMany(Integer.MAX_VALUE, false);
 
-        private final Sinks.Many<TopicPayload> producer = Sinks
-                .many()
-                .multicast()
-                .onBackpressureBuffer(Integer.MAX_VALUE, false);
+        private final Sinks.Many<TopicPayload> producer = Reactors.createMany(Integer.MAX_VALUE, false);
 
-        private final Sinks.Many<Subscription> subscriptions = Sinks
-                .many()
-                .multicast()
-                .onBackpressureBuffer(Integer.MAX_VALUE, false);
+        private final Sinks.Many<Subscription> subscriptions = Reactors.createMany(Integer.MAX_VALUE, false);
 
-        private final Sinks.Many<Subscription> unSubscriptions = Sinks
-                .many()
-                .multicast()
-                .onBackpressureBuffer(Integer.MAX_VALUE, false);
+        private final Sinks.Many<Subscription> unSubscriptions = Reactors.createMany(Integer.MAX_VALUE, false);
 
         private FluxSink<TopicPayload> sink;
 
@@ -300,7 +288,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
         @Override
         public Mono<Void> sub(ByteBuf sub) {
             handleSubs(sub, (connection, subscription) -> {
-                connection.subscriptions.emitNext(subscription, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                connection.subscriptions.emitNext(subscription, Reactors.emitFailureHandler());
             });
             return Mono.empty();
         }
@@ -308,7 +296,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
         @Override
         public Mono<Void> unsub(ByteBuf sub) {
             handleSubs(sub, (connection, subscription) -> {
-                connection.subscriptions.emitNext(subscription, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                connection.subscriptions.emitNext(subscription, Reactors.emitFailureHandler());
             });
             return Mono.empty();
         }
@@ -330,7 +318,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
                     } else {
                         topicPayload = TopicPayload.of(topic, NativePayload.of(payload));
                     }
-                    connection.producer.emitNext(topicPayload, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                    connection.producer.emitNext(topicPayload, Reactors.emitFailureHandler());
                 }
             } catch (Throwable error) {
                 log.error("Error handling subscription", error);

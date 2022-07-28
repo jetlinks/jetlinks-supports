@@ -3,7 +3,6 @@ package org.jetlinks.supports.cluster;
 import com.google.common.cache.CacheBuilder;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
-import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.DeviceState;
 import org.jetlinks.core.device.DeviceStateInfo;
@@ -161,7 +160,7 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
             return doReply(createReply(message).error(ErrorCode.SYSTEM_ERROR));
         }
         try {
-            sendToDevice.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+            sendToDevice.emitNext(message, Reactors.emitFailureHandler());
         }catch (Throwable err){
             return doReply(createReply(message).error(err));
         }

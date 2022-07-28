@@ -5,7 +5,6 @@ import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
-import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import lombok.AllArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +14,7 @@ import org.jetlinks.core.Payload;
 import org.jetlinks.core.cache.Caches;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
+import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.event.EventBroker;
 import org.jetlinks.supports.event.EventConnection;
 import org.jetlinks.supports.event.EventConsumer;
@@ -133,18 +133,18 @@ public class ScalecubeEventBusBroker implements EventBroker, Disposable {
             connection
                     .subscriber
                     .emitNext(topicPayload,
-                              RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED
+                              Reactors.emitFailureHandler()
                     );
         }
         //订阅
         else if (Objects.equals(message.qualifier(), SUB_QUALIFIER)) {
             log.debug("subscribe from {} : {}", connection, message.data());
-            connection.subscriptions.emitNext(message.data(),RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+            connection.subscriptions.emitNext(message.data(),Reactors.emitFailureHandler());
         }
         //取消订阅
         else if (Objects.equals(message.qualifier(), UNSUB_QUALIFIER)) {
             log.debug("unsubscribe from {} : {}", connection, message.data());
-            connection.unSubscriptions.emitNext(message.data(),RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+            connection.unSubscriptions.emitNext(message.data(),Reactors.emitFailureHandler());
         }
     }
 

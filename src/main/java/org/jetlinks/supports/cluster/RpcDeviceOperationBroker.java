@@ -5,7 +5,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
-import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import io.scalecube.services.annotations.ServiceMethod;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -41,10 +40,7 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     private final RpcManager rpcManager;
     private final DeviceSessionManager sessionManager;
 
-    private final Sinks.Many<Message> sendToDevice = Sinks
-            .many()
-            .multicast()
-            .onBackpressureBuffer(Integer.MAX_VALUE,false);
+    private final Sinks.Many<Message> sendToDevice = Reactors.createMany(Integer.MAX_VALUE,false);
 
     private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
             .newBuilder()
@@ -124,7 +120,7 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         }
 
         try {
-            sendToDevice.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+            sendToDevice.emitNext(message, Reactors.emitFailureHandler());
         }catch (Throwable err){
             return doReply(createReply(message).error(err));
         }

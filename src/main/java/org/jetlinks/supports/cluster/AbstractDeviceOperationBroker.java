@@ -1,6 +1,5 @@
 package org.jetlinks.supports.cluster;
 
-import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cache.Caches;
@@ -125,7 +124,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                 AtomicInteger counter = fragmentCounter.computeIfAbsent(partMsgId, r -> new AtomicInteger(partTotal));
 
                 try {
-                    processor.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                    processor.emitNext(message, Reactors.emitFailureHandler());
                 } finally {
                     if (counter.decrementAndGet() <= 0 || message.getHeader(Headers.fragmentLast).orElse(false)) {
                         try {
@@ -141,8 +140,8 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
             Sinks.Many<DeviceMessageReply> processor = replyProcessor.get(messageId);
 
             if (processor != null) {
-                processor.emitNext(message, RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
-                processor.emitComplete(RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                processor.emitNext(message, Reactors.emitFailureHandler());
+                processor.emitComplete(Reactors.emitFailureHandler());
             } else {
                 replyProcessor.remove(messageId);
             }

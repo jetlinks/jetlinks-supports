@@ -25,6 +25,7 @@ import org.jctools.maps.NonBlockingHashSet;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
+import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.reactivestreams.Publisher;
 import org.springframework.util.StringUtils;
@@ -402,7 +403,7 @@ public class ScalecubeRpcManager implements RpcManager {
             Sinks.Many<ServiceEvent> sink = listener.get(serviceName);
             if (sink != null && sink.currentSubscriberCount() > 0) {
                 String id = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
-                sink.emitNext(new ServiceEvent(id, serviceName, memberId, type), RetryNonSerializedEmitFailureHandler.RETRY_NON_SERIALIZED);
+                sink.emitNext(new ServiceEvent(id, serviceName, memberId, type), Reactors.emitFailureHandler());
             }
         }
     }
