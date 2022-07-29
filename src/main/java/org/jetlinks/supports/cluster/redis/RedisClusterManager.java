@@ -160,7 +160,7 @@ public class RedisClusterManager implements ClusterManager {
 
     @Override
     public <V> ClusterSet<V> getSet(String name) {
-        return sets.computeIfAbsent(name, id -> new RedisClusterSet<V>(id, this.getRedis()));
+        return new RedisClusterSet<V>(name, this.getRedis());
     }
 
     @Override
