@@ -166,6 +166,31 @@ public class ScalecubeRpcManagerTest {
     }
 
     @Test
+    public void testRegisterTime() {
+
+        manager3
+                .listen(Service.class)
+                .doOnSubscribe(s -> {
+                    Mono.delay(Duration.ofSeconds(1))
+                        .subscribe(ignore -> {
+                            Disposable disposable = manager1
+                                    .registerService("t1", new ServiceImpl("t1"));
+                            Mono.delay(Duration.ofSeconds(1))
+                                .subscribe(i -> {
+                                    disposable.dispose();
+                                });
+                        });
+
+                })
+                .take(2)
+                .timeout(Duration.ofSeconds(4))
+                .as(StepVerifier::create)
+                .expectNextCount(2)
+                .verifyComplete();
+
+    }
+
+    @Test
     @SneakyThrows
     public void testNative() {
         manager1.registerService("n1", new ServiceImpl("1"));

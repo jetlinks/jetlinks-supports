@@ -6,7 +6,6 @@ import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import io.scalecube.net.Address;
-import io.scalecube.reactor.RetryNonSerializedEmitFailureHandler;
 import io.scalecube.services.*;
 import io.scalecube.services.api.Qualifier;
 import io.scalecube.services.api.ServiceMessage;
@@ -61,6 +60,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     static final String SERVICE_ID_TAG = "_sid";
     static final String SERVICE_NAME_TAG = "_sname";
+    static final String REGISTER_TIME_TAG = "_regtime";
 
     private ExtendedCluster cluster;
 
@@ -83,6 +83,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private Integer externalPort;
 
+    private String contentType = ServiceMessage.DEFAULT_DATA_FORMAT;
 
     private Disposable syncJob = Disposables.disposed();
 
@@ -103,6 +104,7 @@ public class ScalecubeRpcManager implements RpcManager {
         this.transportSupplier = another.transportSupplier;
         this.externalHost = another.externalHost;
         this.externalPort = another.externalPort;
+        this.contentType = another.contentType;
     }
 
     @Override
@@ -145,6 +147,12 @@ public class ScalecubeRpcManager implements RpcManager {
     public ScalecubeRpcManager cluster(ExtendedCluster cluster) {
         ScalecubeRpcManager m = new ScalecubeRpcManager(this);
         m.cluster = cluster;
+        return m;
+    }
+
+    public ScalecubeRpcManager contentType(String contentType) {
+        ScalecubeRpcManager m = new ScalecubeRpcManager(this);
+        m.contentType = contentType;
         return m;
     }
 
@@ -323,6 +331,7 @@ public class ScalecubeRpcManager implements RpcManager {
                     Map<String, String> tags = new HashMap<>(ref.tags());
                     tags.put(SERVICE_ID_TAG, service);
                     tags.put(SERVICE_NAME_TAG, ref.namespace());
+                    tags.put(REGISTER_TIME_TAG, String.valueOf(System.currentTimeMillis()));
                     return new ServiceRegistration(createMethodQualifier(service, ref.namespace()), tags, ref.methods());
                 })
                 .collect(Collectors.toList());
@@ -476,7 +485,6 @@ public class ScalecubeRpcManager implements RpcManager {
 
         }
 
-
         private boolean populateServiceReferences(String qualifier, ServiceReference serviceReference) {
             String id = serviceReference
                     .tags()
@@ -506,40 +514,13 @@ public class ScalecubeRpcManager implements RpcManager {
             return new RpcServiceCall<>(this.id, serviceId, name, api(call, serviceId, clazz));
         }
 
-        private boolean supportApiCall(Class<?> clazz) {
-            return supportApiCall(null, clazz);
-        }
-
-        private boolean supportApiCall(String id, Class<?> clazz) {
-            String serviceName = Reflect.serviceName(clazz);
-            for (ServiceRegistration service : services) {
-                String sname = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
-                String serviceId = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
-
-                if (null == id) {
-                    if (Objects.equals(serviceName, sname)) {
-                        return true;
-                    }
-                }
-
-                if (null != id) {
-                    if (Objects.equals(serviceId, id) && Objects.equals(serviceName, sname)) {
-                        return true;
-                    }
-                }
-
-            }
-
-            return false;
-        }
-
         private <I> List<RpcServiceCall<I>> getApiCalls(Class<I> clazz) {
             return getApiCalls(null, clazz);
         }
 
         private <I> List<RpcServiceCall<I>> getApiCalls(String id, Class<I> clazz) {
             String sName = Reflect.serviceName(clazz);
-            List<RpcServiceCall<I>> apis = new ArrayList<>();
+            List<RpcServiceCall<I>> registrations = new ArrayList<>();
             for (ServiceRegistration service : services) {
                 String name = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
                 String sid = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
@@ -549,16 +530,22 @@ public class ScalecubeRpcManager implements RpcManager {
                 if (id != null && !Objects.equals(sid, id)) {
                     continue;
                 }
-                apis.add(getApiCall(sid, clazz));
+
+                registrations.add(getApiCall(sid, clazz, service));
             }
-            return apis;
+            return registrations;
+        }
+
+        @SuppressWarnings("all")
+        private <I> RpcServiceCall<I> getApiCall(String id, Class<I> clazz, ServiceRegistration registration) {
+            return (RpcServiceCall<I>) serviceInstances
+                    .computeIfAbsent(clazz, type -> new NonBlockingHashMap<>())
+                    .computeIfAbsent(id, _id -> createApiCall(_id, clazz));
         }
 
         @SuppressWarnings("all")
         private <I> RpcServiceCall<I> getApiCall(String id, Class<I> clazz) {
-            return (RpcServiceCall<I>) serviceInstances
-                    .computeIfAbsent(clazz, type -> new NonBlockingHashMap<>())
-                    .computeIfAbsent(id, ignore -> createApiCall(ignore, clazz));
+            return getApiCall(id, clazz, null);
         }
 
         private ServiceMessage toServiceMessage(MethodInfo methodInfo, Object request) {
@@ -566,7 +553,6 @@ public class ScalecubeRpcManager implements RpcManager {
                 return ServiceMessage
                         .from((ServiceMessage) request)
                         .qualifier(methodInfo.qualifier())
-                        .dataFormatIfAbsent(ServiceMessage.DEFAULT_DATA_FORMAT)
                         .build();
             }
 
@@ -574,7 +560,7 @@ public class ScalecubeRpcManager implements RpcManager {
                     .builder()
                     .qualifier(methodInfo.qualifier())
                     .data(request)
-                    .dataFormatIfAbsent(ServiceMessage.DEFAULT_DATA_FORMAT)
+                    .dataFormatIfAbsent(contentType)
                     .build();
         }
 
