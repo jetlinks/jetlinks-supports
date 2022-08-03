@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.device.session.DeviceSessionManager;
+import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
 import org.springframework.util.StringUtils;
@@ -24,10 +25,12 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 @Slf4j
@@ -105,7 +108,18 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 .flatMap(DeviceSessionRef::ref);
     }
 
+    private Mono<Boolean> checkSessionAlive(String id) {
+        DeviceSessionRef ref = localSessions.get(id);
+        if (ref == null || ref.loaded == null) {
+            return Reactors.ALWAYS_FALSE;
+        }
+        return checkSessionAlive(ref.loaded);
+    }
+
     private Mono<Boolean> checkSessionAlive(DeviceSession session) {
+        if (session == null) {
+            return Reactors.ALWAYS_FALSE;
+        }
         return session
                 .isAliveAsync()
                 .defaultIfEmpty(true)
@@ -433,6 +447,18 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
         private volatile Disposable disposable;
 
+        private Set<String> children;
+
+        public Set<String> children() {
+            return children == null ? children = ConcurrentHashMap.newKeySet() : children;
+        }
+
+        public void removeChild(String id) {
+            if (children != null) {
+                children.remove(id);
+            }
+        }
+
         public DeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref) {
             this.deviceId = deviceId;
             this.manager = manager;
@@ -471,6 +497,9 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         private Mono<DeviceSession> handleLoaded(DeviceSession session) {
             DeviceSession old = this.loaded;
             this.loaded = session;
+
+            handleParent(parent -> parent.children().add(session.getDeviceId()));
+
             if (old == null) {
                 return manager
                         .doRegister(session)
@@ -487,14 +516,38 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             this.await.tryEmitValue(session);
         }
 
+        protected void handleParent(Consumer<DeviceSessionRef> parent) {
+            if (loaded.isWrapFrom(ChildrenDeviceSession.class)) {
+                DeviceSessionRef ref =
+                        manager.localSessions
+                                .get(
+                                        loaded.unwrap(ChildrenDeviceSession.class)
+                                              .getParent()
+                                              .getDeviceId()
+                                );
+
+                if (null != ref) {
+                    parent.accept(ref);
+                }
+            }
+        }
+
+        protected Mono<Void> checkChildren() {
+            if (children != null) {
+                return Flux
+                        .fromIterable(children)
+                        .flatMap(manager::checkSessionAlive)
+                        .then();
+            }
+            return Mono.empty();
+        }
+
         private Mono<Long> close(DeviceSession session) {
             if (this.loaded == session && manager.localSessions.remove(deviceId, this)) {
                 if (disposable != null && !disposable.isDisposed()) {
                     disposable.dispose();
                 }
-                return manager
-                        .closeSession(session)
-                        .then(Reactors.ALWAYS_ONE_LONG);
+                return doClose(loaded);
             }
             return Reactors.ALWAYS_ZERO_LONG;
         }
@@ -505,11 +558,19 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             }
             DeviceSession loaded = this.loaded;
             if (loaded != null) {
-                return manager
-                        .closeSession(loaded)
-                        .then(Reactors.ALWAYS_ONE_LONG);
+                return doClose(loaded);
             }
             return Reactors.ALWAYS_ZERO_LONG;
+        }
+
+        private Mono<Long> doClose(DeviceSession session) {
+            //移除上级设备的子设备信息
+            handleParent(ref -> ref.removeChild(session.getDeviceId()));
+
+            return manager
+                    .closeSession(session)
+                    .then(checkChildren())
+                    .then(Reactors.ALWAYS_ONE_LONG);
         }
 
         private void loadError(Throwable err) {
