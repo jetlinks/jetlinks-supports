@@ -11,6 +11,7 @@ import org.jetlinks.core.event.EventBus;
 import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.*;
 
 @AllArgsConstructor
@@ -62,7 +63,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         void reload() {
             cached = null;
-            ref = this.dataGetter.cache();
+            ref = this
+                    .dataGetter
+                    .cache(v -> Duration.ofMillis(expires <= 0 ? Long.MAX_VALUE : expires),
+                           error -> Duration.ZERO,
+                           () -> Duration.ZERO);
         }
 
         void init(Mono<Value> dataGetter) {
@@ -150,7 +155,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return clusterCache
                 .putAll(values)
                 .then(notifyRemoveKey("__all"))
-                .thenReturn(true);
+                .thenReturn(true)
+                .doOnSuccess(s -> {
+                    values.forEach((key, value) -> getOrCreateCache(key).reload());
+                });
     }
 
     @Override
