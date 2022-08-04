@@ -1,9 +1,7 @@
 package org.jetlinks.supports.server;
 
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.device.DeviceConfigKey;
-import org.jetlinks.core.device.DeviceOperator;
-import org.jetlinks.core.device.DeviceRegistry;
+import org.jetlinks.core.device.*;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.exception.DeviceOperationException;
@@ -32,6 +30,8 @@ import static org.jetlinks.core.trace.FluxTracer.create;
 
 @Slf4j
 public class ClusterSendToDeviceMessageHandler {
+
+    private static final HeaderKey<Boolean> resumeSession = HeaderKey.of("resume-session", true);
 
     private final DeviceSessionManager sessionManager;
 
@@ -196,8 +196,45 @@ public class ClusterSendToDeviceMessageHandler {
                         .flatMap(registry::getDevice)
                         //发给上级网关设备
                         .map(parentDevice -> this.sendToParentSession(device, parentDevice, message))
-                        .defaultIfEmpty(Mono.defer(() -> doReply(device, createReply(message).error(ErrorCode.CLIENT_OFFLINE)))))
+                        .defaultIfEmpty(Mono.defer(() -> sendToNoSession(device, message))))
                 .flatMap(Function.identity());
+    }
+
+    private Mono<Void> sendToNoSession(DeviceOperator device, DeviceMessage message) {
+        log.warn("device session state failed,try resume. {}", message);
+        return sessionManager
+                //检查整个集群的会话
+                .checkAlive(message.getDeviceId(), false)
+                .flatMap(exists -> {
+                    if (exists) {
+                        //会话依旧存在则尝试恢复发送
+                        return retryResume(device, message);
+                    }
+                    return doReply(device, createReply(message)
+                            .addHeader("reason", "session_not_exists")
+                            .error(ErrorCode.CLIENT_OFFLINE));
+                });
+    }
+
+    private Mono<Void> retryResume(DeviceOperator device, DeviceMessage message) {
+        //防止递归
+        if (message.getHeader(resumeSession).isPresent()) {
+            return doReply(device, createReply(message).error(ErrorCode.CLIENT_OFFLINE));
+        }
+        message.addHeader(resumeSession, true);
+        //尝试发送给其他节点
+        if (handler instanceof DeviceOperationBroker) {
+            return device
+                    .getSelfConfig(DeviceConfigKey.connectionServerId)
+                    .flatMap(serverId -> ((DeviceOperationBroker) handler).send(serverId, Mono.just(message)))
+                    .flatMap(i -> {
+                        if (i > 0) {
+                            return Mono.empty();
+                        }
+                        return doReply(device, createReply(message).error(ErrorCode.CLIENT_OFFLINE));
+                    });
+        }
+        return doReply(device, createReply(message).error(ErrorCode.CLIENT_OFFLINE));
     }
 
     private Mono<Void> sendToParentSession(DeviceOperator device,
