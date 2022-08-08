@@ -46,6 +46,11 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     @Getter
     private Duration sessionLoadTimeout = Duration.ofSeconds(5);
 
+    // 检查会话是否存活的并行度
+    @Setter
+    private int sessionCheckConcurrency = Integer.getInteger("jetlinks.session.check.concurrency",
+                                                             Runtime.getRuntime().availableProcessors() * 64);
+
     public abstract String getCurrentServerId();
 
     protected abstract Mono<Boolean> initSessionConnection(DeviceSession session);
@@ -430,7 +435,13 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return Flux
                 .fromIterable(localSessions.values())
                 .filter(ref -> ref.loaded != null)
-                .flatMap(ref -> this.checkSessionAlive(ref.loaded))
+                .flatMap(ref -> this
+                                 .checkSessionAlive(ref.loaded)
+                                 .onErrorResume(err -> {
+                                     log.warn("check session alive error", err);
+                                     return Mono.empty();
+                                 }),
+                         sessionCheckConcurrency)
                 .then();
     }
 
