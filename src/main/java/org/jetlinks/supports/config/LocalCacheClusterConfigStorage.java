@@ -28,18 +28,23 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     public static final Value NULL = Value.simple(null);
 
     class Cache {
-        long t = System.currentTimeMillis();
-        Mono<Value> dataGetter;
+        final String key;
+        long t;
         volatile Mono<Value> ref;
         volatile Value cached;
+
+        public Cache(String key) {
+            this.key = key;
+            updateTime();
+        }
 
         boolean isExpired() {
             return expires > 0 && System.currentTimeMillis() - t > expires;
         }
 
         Mono<Value> getRef() {
-            if (isExpired()) {
-                return dataGetter;
+            if (isExpired() || ref == null) {
+                reload();
             }
             return ref;
         }
@@ -51,37 +56,43 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             return cached;
         }
 
+        void updateTime() {
+            if (expires > 0) {
+                t = System.currentTimeMillis();
+            }
+        }
+
         void setValue(Object value) {
             setValue(value == null ? null : Value.simple(value));
         }
 
         void setValue(Value value) {
-            this.t = System.currentTimeMillis();
+            updateTime();
             this.ref = Mono.justOrEmpty(value);
             this.cached = value == null ? NULL : value;
         }
 
         void reload() {
             cached = null;
-            ref = this
-                    .dataGetter
+            ref = clusterCache
+                    .get(key)
+                    .map(Value::simple)
+                    .doOnNext(this::setValue)
+                    .switchIfEmpty(Mono.fromRunnable(() -> this.setValue(null)))
                     .cache(v -> Duration.ofMillis(expires <= 0 ? Long.MAX_VALUE : expires),
                            error -> Duration.ZERO,
                            () -> Duration.ZERO);
         }
 
-        void init(Mono<Value> dataGetter) {
-            this.dataGetter = dataGetter
-                    .doOnNext(this::setValue)
-                    .switchIfEmpty(Mono.fromRunnable(() -> this.setValue(null)));
-            reload();
+        void clear() {
+            cached = null;
+            ref = null;
         }
+
     }
 
     private Cache createCache(String key) {
-        Cache cache = new Cache();
-        cache.init(clusterCache.get(key).map(Value::simple));
-        return cache;
+        return new Cache(key);
     }
 
     private Cache getOrCreateCache(String key) {
@@ -157,7 +168,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .then(notifyRemoveKey("__all"))
                 .thenReturn(true)
                 .doOnSuccess(s -> {
-                    values.forEach((key, value) -> getOrCreateCache(key).reload());
+                    values.forEach((key, value) -> getOrCreateCache(key).clear());
                 });
     }
 
@@ -178,7 +189,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .doOnSuccess(s -> {
                     Cache cache = caches.get(key);
                     if (cache != null) {
-                        cache.reload();
+                        cache.clear();
                     }
                 });
     }
@@ -194,6 +205,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Value> getAndRemove(String key) {
+        caches.remove(key);
         return clusterCache
                 .getAndRemove(key)
                 .flatMap(res -> notifyRemoveKey("__all").thenReturn(res))
