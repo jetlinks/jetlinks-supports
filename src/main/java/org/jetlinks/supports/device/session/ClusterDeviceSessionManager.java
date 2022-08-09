@@ -73,7 +73,17 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         @Override
         public Mono<Boolean> isAlive(String deviceId) {
             return doWith(deviceId,
-                          (manager, id) -> manager.isAlive(id, true),
+                          (manager, id) -> {
+                              DeviceSessionRef ref = manager.localSessions.get(deviceId);
+                              if (ref == null) {
+                                  return Reactors.ALWAYS_FALSE;
+                              }
+                              //加载中也认为存活
+                              if (ref.loaded == null) {
+                                  return Reactors.ALWAYS_TRUE;
+                              }
+                              return ref.loaded.isAliveAsync();
+                          },
                           Reactors.ALWAYS_FALSE);
         }
 
