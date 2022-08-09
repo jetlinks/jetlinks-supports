@@ -16,6 +16,7 @@ import org.jetlinks.core.message.*;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.utils.Reactors;
+import org.jetlinks.core.utils.SerializeUtils;
 import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -40,7 +41,7 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     private final RpcManager rpcManager;
     private final DeviceSessionManager sessionManager;
 
-    private final Sinks.Many<Message> sendToDevice = Reactors.createMany(Integer.MAX_VALUE,false);
+    private final Sinks.Many<Message> sendToDevice = Reactors.createMany(Integer.MAX_VALUE, false);
 
     private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
             .newBuilder()
@@ -121,7 +122,7 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
 
         try {
             sendToDevice.emitNext(message, Reactors.emitFailureHandler());
-        }catch (Throwable err){
+        } catch (Throwable err) {
             return doReply(createReply(message).error(err));
         }
         return Mono.empty();
@@ -191,8 +192,11 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         try (ObjectInput input = createInput(buf)) {
             MessageType type = types[input.readByte()];
             Message msg = type.forDevice();
-            msg.readExternal(input);
-            return msg;
+            if (msg != null) {
+                msg.readExternal(input);
+                return msg;
+            }
+            return (Message) SerializeUtils.readObject(input);
         }
     }
 
@@ -201,7 +205,11 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         ByteBuf buf = ByteBufAllocator.DEFAULT.buffer();
         try (ObjectOutput output = createOutput(buf)) {
             output.writeByte(message.getMessageType().ordinal());
-            message.writeExternal(output);
+            if (message.getMessageType().iSupportDevice()) {
+                message.writeExternal(output);
+            } else {
+                SerializeUtils.writeObject(message, output);
+            }
             return buf;
         }
     }
