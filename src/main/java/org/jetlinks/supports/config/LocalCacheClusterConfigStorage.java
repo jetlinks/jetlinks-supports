@@ -79,9 +79,9 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     .map(Value::simple)
                     .doOnNext(this::setValue)
                     .switchIfEmpty(Mono.fromRunnable(() -> this.setValue(null)))
-                    .cache(v -> Duration.ofMillis(expires <= 0 ? Long.MAX_VALUE : expires),
-                           error -> Duration.ZERO,
-                           () -> Duration.ZERO);
+                    .cache(v -> Duration.ofMillis(Long.MAX_VALUE),
+                           error -> Duration.ofSeconds(1),
+                           () -> Duration.ofSeconds(2));
         }
 
         void clear() {
@@ -167,9 +167,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .putAll(values)
                 .then(notifyRemoveKey("__all"))
                 .thenReturn(true)
-                .doOnSuccess(s -> {
-                    values.forEach((key, value) -> getOrCreateCache(key).clear());
-                });
+                .doAfterTerminate(() -> values.forEach((key, value) -> getOrCreateCache(key).clear()));
     }
 
     @Override
@@ -186,7 +184,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .put(key, value)
                 .then(notifyRemoveKey(key))
                 .thenReturn(true)
-                .doOnSuccess(s -> {
+                .doAfterTerminate(() -> {
                     Cache cache = caches.get(key);
                     if (cache != null) {
                         cache.clear();
