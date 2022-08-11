@@ -28,6 +28,7 @@ import java.util.function.Function;
 
 import static com.google.common.cache.RemovalCause.EXPIRED;
 
+@Deprecated
 @Slf4j
 public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker {
 
@@ -92,7 +93,7 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
         return Flux
                 .fromIterable(deviceIdList)
                 .flatMap(id -> sessionManager
-                        .isAlive(id, false)
+                        .checkAlive(id, false)
                         .map(alive -> new DeviceStateInfo(id, alive ? DeviceState.online : DeviceState.offline))
                 );
     }

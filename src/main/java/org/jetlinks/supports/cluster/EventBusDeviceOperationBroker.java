@@ -26,6 +26,7 @@ import java.util.function.Function;
 
 import static com.google.common.cache.RemovalCause.EXPIRED;
 
+@Deprecated
 @Slf4j
 public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker implements Disposable {
 

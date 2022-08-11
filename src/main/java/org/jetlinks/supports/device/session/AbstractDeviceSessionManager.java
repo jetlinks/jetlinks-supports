@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.device.session.DeviceSessionManager;
@@ -190,13 +191,22 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 .flatMap(session -> session
                         .getOperator() == null
                         ? Reactors.ALWAYS_FALSE
-                        : session
-                        .getOperator()
-                        .online(getCurrentServerId(),
-                                deviceId,
-                                session.getClientAddress().map(String::valueOf).orElse(""))
-                        .thenReturn(true))
+                        : syncConnectionInfo(session.getOperator(), session))
                 .defaultIfEmpty(false);
+    }
+
+    protected final Mono<Boolean> syncConnectionInfo(DeviceOperator device, DeviceSession session) {
+        return device
+                .getConnectionServerId()
+                .filter(getCurrentServerId()::equals)
+                //serverId为空或者不是当前服务器，则同步连接信息
+                .switchIfEmpty(Mono.defer(() -> device
+                        .online(getCurrentServerId(),
+                                session.getId(),
+                                session.getClientAddress().map(String::valueOf).orElse(""))
+                        .then(Mono.empty())))
+                .thenReturn(true);
+
     }
 
     @Override

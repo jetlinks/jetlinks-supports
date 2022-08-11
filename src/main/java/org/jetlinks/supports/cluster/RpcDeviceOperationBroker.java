@@ -69,7 +69,7 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         return Flux
                 .fromIterable(deviceIdList)
                 .flatMap(id -> sessionManager
-                        .isAlive(id, false)
+                        .checkAlive(id, false)
                         .map(alive -> new DeviceStateInfo(id, alive ? DeviceState.online : DeviceState.offline))
                 );
     }

@@ -76,7 +76,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
             RpcEventConnection old = connections.put(event.getServerNodeId(), conn);
             if (old != null) {
                 disposeConnection(old);
-            } else {
+            } else if (acceptSink.currentSubscriberCount() > 0) {
                 acceptSink.emitNext(conn, Reactors.emitFailureHandler());
             }
         } catch (Throwable err) {
@@ -90,7 +90,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
             RpcEventConnection old = connections.put(service.serverNodeId(), conn);
             if (old != null) {
                 disposeConnection(old);
-            } else {
+            } else if (acceptSink.currentSubscriberCount() > 0) {
                 acceptSink.emitNext(conn, Reactors.emitFailureHandler());
             }
         } catch (Throwable err) {
@@ -141,7 +141,7 @@ public class ClusterEventBusBroker implements EventBroker, Disposable {
 
         private final Disposable.Composite disposable = Disposables.composite();
 
-        private final Sinks.Many<TopicPayload> consumer =Reactors.createMany(Integer.MAX_VALUE, false);
+        private final Sinks.Many<TopicPayload> consumer = Reactors.createMany(Integer.MAX_VALUE, false);
 
         private final Sinks.Many<TopicPayload> producer = Reactors.createMany(Integer.MAX_VALUE, false);
 
