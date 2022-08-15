@@ -111,7 +111,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         @Override
         public Flux<DeviceSessionInfo> sessions() {
             return doWith(null,
-                          (manager, ignore) -> manager.localSessionInfo(),
+                          (manager, ignore) -> manager.getLocalSessionInfo(),
                           Flux.empty());
         }
     }

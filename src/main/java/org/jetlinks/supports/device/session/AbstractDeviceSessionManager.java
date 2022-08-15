@@ -223,16 +223,17 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     @Override
     public final Flux<DeviceSessionInfo> getSessionInfo() {
-        return getSessionInfo(null);
+        return Flux.concat(
+                getLocalSessionInfo(),
+                remoteSessions(null));
     }
 
     @Override
-    public Flux<DeviceSessionInfo> getSessionInfo(String serverId) {
-        return Flux.concat(localSessionInfo(),
-                           remoteSessions(serverId));
+    public final Flux<DeviceSessionInfo> getSessionInfo(String serverId) {
+        return remoteSessions(serverId);
     }
 
-    protected final Flux<DeviceSessionInfo> localSessionInfo() {
+    public final Flux<DeviceSessionInfo> getLocalSessionInfo() {
         return Flux
                 .fromIterable(localSessions.values())
                 .mapNotNull(ref -> ref.loaded)
