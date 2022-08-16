@@ -230,6 +230,9 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     @Override
     public final Flux<DeviceSessionInfo> getSessionInfo(String serverId) {
+        if (getCurrentServerId().equals(serverId)) {
+            return getLocalSessionInfo();
+        }
         return remoteSessions(serverId);
     }
 
