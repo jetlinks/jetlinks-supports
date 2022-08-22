@@ -13,7 +13,6 @@ import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.DeviceSessionManager;
 import org.jetlinks.core.trace.MonoTracer;
-import org.jetlinks.core.utils.DeviceMessageTracer;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -130,8 +129,6 @@ public class DefaultSendToDeviceMessageHandler {
     }
 
     protected void doSend(DeviceMessage message, DeviceSession session) {
-        DeviceMessageTracer.trace(message, "send.do.before");
-
         DeviceSession fSession =DeviceSession.trace(session.unwrap(DeviceSession.class)) ;
         if (fSession.getOperator() == null) {
             log.warn("unsupported send message to {}", fSession);
