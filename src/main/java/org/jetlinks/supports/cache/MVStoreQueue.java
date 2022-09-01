@@ -1,6 +1,7 @@
 package org.jetlinks.supports.cache;
 
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.h2.mvstore.Cursor;
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
@@ -11,6 +12,7 @@ import org.jetlinks.core.config.ConfigKey;
 import org.springframework.util.Assert;
 
 import javax.annotation.Nonnull;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -21,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * @param <T> Type
  */
+@Slf4j
 class MVStoreQueue<T> implements FileQueue<T> {
 
     private MVStore store;
@@ -32,7 +35,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     private final Path storageFile;
 
-    private Map<String, Object> options;
+    private final Map<String, Object> options;
 
     @SneakyThrows
     MVStoreQueue(Path filePath,
@@ -42,7 +45,17 @@ class MVStoreQueue<T> implements FileQueue<T> {
         this.name = name;
         this.storageFile = filePath.resolve(name);
         this.options = options;
-        open();
+        try {
+            open();
+        } catch (Throwable err) {
+            File back = filePath.resolve(name + "_" + System.currentTimeMillis() + ".crash").toFile();
+            if (this.storageFile.toFile().renameTo(back)) {
+                open();
+                log.warn("open queue file error,rename to {}", back, err);
+            } else {
+                throw err;
+            }
+        }
     }
 
     protected void open() {
@@ -84,6 +97,18 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
         store.commit();
         store.sync();
+    }
+
+    @Override
+    public T removeFirst() {
+        checkClose();
+        return mvMap.remove(mvMap.firstKey());
+    }
+
+    @Override
+    public T removeLast() {
+        checkClose();
+        return mvMap.remove(mvMap.lastKey());
     }
 
     @Override
@@ -160,7 +185,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
         T val = t;
         do {
-            val = mvMap.put(index.incrementAndGet(), val);
+            val = mvMap.putIfAbsent(index.incrementAndGet(), val);
         } while (val != null);
         return true;
     }
