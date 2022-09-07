@@ -7,10 +7,12 @@ import org.junit.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -21,32 +23,26 @@ public class MVStoreQueueBuilderFactoryTest {
     @Test
     @SneakyThrows
     public void testBack() {
-        Sinks.Many<Long> sink = FileQueue
-                .<Long>builder()
+        AtomicInteger total = new AtomicInteger(10_0000);
+
+        Sinks.Many<Integer> sink = FileQueue
+                .<Integer>builder()
                 .name("test")
                 .path(Paths.get("./target/buf.queue"))
                 .buildFluxProcessor(false);
 
-        Flux.interval(Duration.ofMillis(1))
-            .doOnNext(i -> {
-                sink.emitNext(i, Reactors.emitFailureHandler());
-              //  System.out.println("write:" + i);
-            })
-            .subscribe();
-
         sink.asFlux()
-            .buffer(5)
-            .flatMap(i -> {
-                System.out.print(i);
-                return Mono
-                        .delay(Duration.ofSeconds(1))
-                        .thenReturn(i)
-                        .doOnNext(ignore-> System.out.println(" ok"));
-            }, 2)
-            .subscribe();
+            .subscribe(i -> total.addAndGet(-1));
 
+        Flux.range(0, total.get())
+            .flatMap(i -> Mono.fromRunnable(() -> sink.emitNext(i, Reactors.emitFailureHandler()))
+                              .subscribeOn(Schedulers.parallel()))
+            .then()
+            .as(StepVerifier::create)
+            .expectComplete()
+            .verify();
 
-        Thread.sleep(10000);
+        assertEquals(0, total.get());
 
     }
 

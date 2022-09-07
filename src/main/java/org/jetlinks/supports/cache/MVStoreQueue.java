@@ -16,7 +16,7 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 
 /**
  * 基于 <a href="http://www.h2database.com/html/mvstore.html">h2database mvstore</a>实现的本地队列,可使用此队列进行数据本地持久化
@@ -26,10 +26,14 @@ import java.util.concurrent.atomic.AtomicLong;
 @Slf4j
 class MVStoreQueue<T> implements FileQueue<T> {
 
+    @SuppressWarnings("all")
+    private final static AtomicLongFieldUpdater<MVStoreQueue> INDEX =
+            AtomicLongFieldUpdater.newUpdater(MVStoreQueue.class, "index");
+
     private MVStore store;
     private MVMap<Long, T> mvMap;
 
-    private final AtomicLong index = new AtomicLong();
+    private volatile long index = 0;
 
     private final String name;
 
@@ -84,8 +88,9 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
 
         mvMap = store.openMap(name, mapBuilder);
-        if (!mvMap.isEmpty())
-            index.set(mvMap.lastKey());
+        if (!mvMap.isEmpty()) {
+            INDEX.set(this, mvMap.lastKey());
+        }
 
     }
 
@@ -185,7 +190,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
         T val = t;
         do {
-            val = mvMap.putIfAbsent(index.incrementAndGet(), val);
+            val = mvMap.putIfAbsent(INDEX.incrementAndGet(this), val);
         } while (val != null);
         return true;
     }
@@ -226,7 +231,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
             return;
         }
         mvMap.clear();
-        index.set(0);
+        INDEX.set(this, 0);
     }
 
     @Override
@@ -255,7 +260,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
             Long key = mvMap.firstKey();
             removed = key == null ? null : mvMap.remove(key);
             if (removed == null) {
-                index.set(0);
+                INDEX.set(this, 0);
                 return null;
             }
         }
