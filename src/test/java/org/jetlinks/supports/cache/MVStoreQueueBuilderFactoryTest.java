@@ -4,6 +4,8 @@ import lombok.SneakyThrows;
 import org.jetlinks.core.cache.FileQueue;
 import org.jetlinks.core.utils.Reactors;
 import org.junit.Test;
+import org.reactivestreams.Subscription;
+import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -23,8 +25,8 @@ public class MVStoreQueueBuilderFactoryTest {
     @Test
     @SneakyThrows
     public void testBack() {
-        AtomicInteger total = new AtomicInteger(10_0000);
-
+        AtomicInteger total = new AtomicInteger(100_0000);
+        int size = total.get();
         Sinks.Many<Integer> sink = FileQueue
                 .<Integer>builder()
                 .name("test")
@@ -32,16 +34,36 @@ public class MVStoreQueueBuilderFactoryTest {
                 .buildFluxProcessor(false);
 
         sink.asFlux()
-            .subscribe(i -> total.addAndGet(-1));
+            .subscribe(new BaseSubscriber<Integer>() {
+                final AtomicInteger count = new AtomicInteger();
 
-        Flux.range(0, total.get())
-            .flatMap(i -> Mono.fromRunnable(() -> sink.emitNext(i, Reactors.emitFailureHandler()))
-                              .subscribeOn(Schedulers.parallel()))
-            .then()
-            .as(StepVerifier::create)
-            .expectComplete()
-            .verify();
+                @Override
+                protected void hookOnSubscribe(Subscription subscription) {
+                    subscription.request(1000);
+                }
 
+                @Override
+                @SneakyThrows
+                protected void hookOnNext(Integer value) {
+                    total.decrementAndGet();
+                    if (count.incrementAndGet() >= 1000) {
+                        count.set(0);
+                        request(1000);
+                        Thread.sleep(1);
+                    }
+                }
+            });
+
+        Duration time = Flux.range(0, size)
+                            .flatMap(i -> Mono
+                                    .fromRunnable(() -> sink.emitNext(i, Reactors.emitFailureHandler()))
+                                    .subscribeOn(Schedulers.parallel()))
+                            .then()
+                            .as(StepVerifier::create)
+                            .expectComplete()
+                            .verify();
+        System.out.println(time);
+        sink.tryEmitComplete();
         assertEquals(0, total.get());
 
     }

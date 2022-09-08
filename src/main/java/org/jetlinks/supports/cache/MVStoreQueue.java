@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 基于 <a href="http://www.h2database.com/html/mvstore.html">h2database mvstore</a>实现的本地队列,可使用此队列进行数据本地持久化
@@ -40,6 +41,9 @@ class MVStoreQueue<T> implements FileQueue<T> {
     private final Path storageFile;
 
     private final Map<String, Object> options;
+
+    private final ReentrantLock pollLock = new ReentrantLock();
+    private final ReentrantLock writeLock = new ReentrantLock();
 
     @SneakyThrows
     MVStoreQueue(Path filePath,
@@ -87,7 +91,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
             mapBuilder.valueType(((DataType<T>) type));
         }
 
-        mvMap = store.openMap(name, mapBuilder);
+        mvMap = store.openMap("queue", mapBuilder);
         if (!mvMap.isEmpty()) {
             INDEX.set(this, mvMap.lastKey());
         }
@@ -166,6 +170,11 @@ class MVStoreQueue<T> implements FileQueue<T> {
             public T next() {
                 return cursor.getValue();
             }
+
+            @Override
+            public void remove() {
+                mvMap.remove(cursor.getKey());
+            }
         };
     }
 
@@ -188,11 +197,21 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (null == t) {
             return false;
         }
-        T val = t;
+        //lock, 多线程下,mvMap的锁可能导致性能问题
+        writeLock.lock();
+        try {
+            doAdd(t);
+        } finally {
+            writeLock.unlock();
+        }
+        return true;
+    }
+
+    private void doAdd(T value) {
+        T val = value;
         do {
             val = mvMap.putIfAbsent(INDEX.incrementAndGet(this), val);
         } while (val != null);
-        return true;
     }
 
     @Override
@@ -209,8 +228,13 @@ class MVStoreQueue<T> implements FileQueue<T> {
     @Override
     public boolean addAll(Collection<? extends T> c) {
         checkClose();
-        for (T t : c) {
-            add(t);
+        writeLock.lock();
+        try {
+            for (T t : c) {
+                doAdd(t);
+            }
+        } finally {
+            writeLock.unlock();
         }
         return true;
     }
@@ -256,13 +280,12 @@ class MVStoreQueue<T> implements FileQueue<T> {
             return null;
         }
         T removed;
-        synchronized (this) {
+        try {
+            pollLock.lock();
             Long key = mvMap.firstKey();
             removed = key == null ? null : mvMap.remove(key);
-            if (removed == null) {
-                INDEX.set(this, 0);
-                return null;
-            }
+        } finally {
+            pollLock.unlock();
         }
         return removed;
 
