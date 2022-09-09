@@ -30,12 +30,16 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 @Slf4j
 public abstract class AbstractDeviceSessionManager implements DeviceSessionManager {
+
+    private static final AtomicLongFieldUpdater<AbstractDeviceSessionManager>
+            CLOSE_WIP = AtomicLongFieldUpdater.newUpdater(AbstractDeviceSessionManager.class, "closeWip");
 
     protected final Map<String, DeviceSessionRef> localSessions = new ConcurrentHashMap<>(2048);
 
@@ -52,6 +56,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     private int sessionCheckConcurrency = Integer.getInteger("jetlinks.session.check.concurrency",
                                                              Runtime.getRuntime().availableProcessors() * 64);
 
+    @Setter
+    private int sessionCloseConcurrency = Integer.getInteger("jetlinks.session.close.concurrency",
+                                                             3000);
+
     public abstract String getCurrentServerId();
 
     protected abstract Mono<Boolean> initSessionConnection(DeviceSession session);
@@ -66,6 +74,9 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     protected abstract Flux<DeviceSessionInfo> remoteSessions(String serverId);
 
+    protected Sinks.Many<DeviceSession> closeSink = Reactors.createMany();
+    private volatile long closeWip = 0;
+
     public void init() {
         Scheduler scheduler = Schedulers.newSingle("device-session-checker");
         disposable.add(scheduler);
@@ -74,6 +85,19 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     .concatMap(time -> executeInterval())
                     .subscribe()
         );
+
+        disposable.add(
+                closeSink
+                        .asFlux()
+                        .bufferTimeout(1000, Duration.ofSeconds(1))
+                        .onBackpressureBuffer()
+                        .concatMap(flux -> Flux.fromIterable(flux)
+                                .filter(session -> !localSessions.containsKey(session.getDeviceId()))
+                                .flatMap(this::closeSessionSafe)
+                                .then(),0)
+                        .subscribe()
+        );
+
     }
 
     protected Mono<Void> executeInterval() {
@@ -311,12 +335,21 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return Mono.just(newSession);
     }
 
-    protected Mono<Void> closeSession(DeviceSession session) {
+    protected final Mono<Void> closeSessionSafe(DeviceSession session) {
+        return closeSession0(session)
+                .onErrorResume(err -> {
+                    log.warn("close session [{}] error", session.getDeviceId(), err);
+                    return Mono.empty();
+                });
+    }
+
+    private Mono<Void> closeSession0(DeviceSession session) {
         try {
             session.close();
         } catch (Throwable ignore) {
         }
         if (session.getOperator() == null) {
+            CLOSE_WIP.decrementAndGet(this);
             return Mono.empty();
         }
         return this
@@ -339,8 +372,18 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                                         fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.unregister, session, false))
                                 );
                     }
+                })
+                .doAfterTerminate(() -> CLOSE_WIP.decrementAndGet(this));
+    }
 
-                });
+    protected final Mono<Void> closeSession(DeviceSession session) {
+        //同时离线数量太大
+        if (CLOSE_WIP.incrementAndGet(this) > sessionCloseConcurrency) {
+            if (closeSink.tryEmitNext(session).isSuccess()) {
+                return Mono.empty();
+            }
+        }
+        return closeSession0(session);
     }
 
     @SneakyThrows
@@ -600,7 +643,6 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         private Mono<Long> doClose(DeviceSession session) {
             //移除上级设备的子设备信息
             handleParent(ref -> ref.removeChild(session.getDeviceId()));
-
             return manager
                     .closeSession(session)
                     .then(checkChildren())
