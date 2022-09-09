@@ -105,19 +105,31 @@ class MVStoreQueue<T> implements FileQueue<T> {
             return;
         }
         store.commit();
-        store.sync();
+        store.compactMoveChunks();
     }
 
     @Override
     public T removeFirst() {
         checkClose();
-        return mvMap.remove(mvMap.firstKey());
+        pollLock.lock();
+        try {
+            Long key = mvMap.firstKey();
+            return key == null ? null : mvMap.remove(key);
+        } finally {
+            pollLock.unlock();
+        }
     }
 
     @Override
     public T removeLast() {
         checkClose();
-        return mvMap.remove(mvMap.lastKey());
+        pollLock.lock();
+        try {
+            Long key = mvMap.lastKey();
+            return key == null ? null : mvMap.remove(key);
+        } finally {
+            pollLock.unlock();
+        }
     }
 
     @Override
