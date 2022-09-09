@@ -311,7 +311,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return Mono.just(newSession);
     }
 
-    protected final Mono<Void> closeSession(DeviceSession session) {
+    protected Mono<Void> closeSession(DeviceSession session) {
         try {
             session.close();
         } catch (Throwable ignore) {
