@@ -231,13 +231,15 @@ public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> 
                                 })
                                 : this.operations.execute(lifoPollScript, Arrays.asList(id, String.valueOf(size)))
                 )
-                        .handle((list, synchronousSink) -> {
-                            for (Object o : list) {
-                                if (o != null) {
-                                    synchronousSink.next(o);
+                        .flatMap(list -> {
+                            return Flux.create(sink -> {
+                                for (Object o : list) {
+                                    if (o != null) {
+                                        sink.next(o);
+                                    }
                                 }
-                            }
-                            synchronousSink.complete();
+                                sink.complete();
+                            });
                         })
                         .map(i -> (T) i);
 
