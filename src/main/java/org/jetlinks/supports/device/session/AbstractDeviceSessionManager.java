@@ -587,7 +587,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         }
 
         private void afterLoaded(DeviceSession session) {
-            if (session != loaded) {
+            if (!session.equals(loaded)) {
                 loaded.close();
             }
             loaded = session;
