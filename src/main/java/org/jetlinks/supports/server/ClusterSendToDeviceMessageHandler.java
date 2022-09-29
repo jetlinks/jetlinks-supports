@@ -1,7 +1,10 @@
 package org.jetlinks.supports.server;
 
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.device.*;
+import org.jetlinks.core.device.DeviceConfigKey;
+import org.jetlinks.core.device.DeviceOperationBroker;
+import org.jetlinks.core.device.DeviceOperator;
+import org.jetlinks.core.device.DeviceRegistry;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.exception.DeviceOperationException;
@@ -12,6 +15,7 @@ import org.jetlinks.core.message.state.DeviceStateCheckMessage;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
+import org.jetlinks.core.server.session.LostDeviceSession;
 import org.jetlinks.core.trace.DeviceTracer;
 import org.jetlinks.core.trace.TraceHolder;
 import org.reactivestreams.Publisher;
@@ -103,6 +107,7 @@ public class ClusterSendToDeviceMessageHandler {
                 msg.setChildDeviceMessage(message);
                 msg.setChildDeviceId(message.getDeviceId());
                 msg.setDeviceId(device.getDeviceId());
+                msg.setMessageId(message.getMessageId());
                 message = msg;
             }
         } else {
@@ -113,6 +118,10 @@ public class ClusterSendToDeviceMessageHandler {
             return this
                     .doReply((DeviceOperator) null, createReply(message).error(ErrorCode.CONNECTION_LOST))
                     .then();
+        }
+
+        if (session.isWrapFrom(LostDeviceSession.class)) {
+            return retryResume(device, message);
         }
         CodecContext context = new CodecContext(device, message, DeviceSession.trace(session));
 
@@ -210,16 +219,18 @@ public class ClusterSendToDeviceMessageHandler {
                         //会话依旧存在则尝试恢复发送
                         return retryResume(device, message);
                     }
+                    boolean resume = message.getHeader(resumeSession).orElse(false);
+
                     return doReply(device, createReply(message)
                             .addHeader("reason", "session_not_exists")
-                            .error(ErrorCode.CLIENT_OFFLINE));
+                            .error(resume ? ErrorCode.CONNECTION_LOST : ErrorCode.CLIENT_OFFLINE));
                 });
     }
 
     private Mono<Void> retryResume(DeviceOperator device, DeviceMessage message) {
         //防止递归
         if (message.getHeader(resumeSession).isPresent()) {
-            return doReply(device, createReply(message).error(ErrorCode.CLIENT_OFFLINE));
+            return doReply(device, createReply(message).error(ErrorCode.CONNECTION_LOST));
         }
         message.addHeader(resumeSession, true);
         //尝试发送给其他节点
@@ -231,10 +242,10 @@ public class ClusterSendToDeviceMessageHandler {
                         if (i > 0) {
                             return Mono.empty();
                         }
-                        return doReply(device, createReply(message).error(ErrorCode.CLIENT_OFFLINE));
+                        return doReply(device, createReply(message).error(ErrorCode.CONNECTION_LOST));
                     });
         }
-        return doReply(device, createReply(message).error(ErrorCode.CLIENT_OFFLINE));
+        return doReply(device, createReply(message).error(ErrorCode.CONNECTION_LOST));
     }
 
     private Mono<Void> sendToParentSession(DeviceOperator device,
