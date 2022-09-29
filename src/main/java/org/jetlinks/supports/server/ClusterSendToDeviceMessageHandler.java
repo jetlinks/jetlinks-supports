@@ -97,32 +97,22 @@ public class ClusterSendToDeviceMessageHandler {
                 .contextWrite(TraceHolder.readToContext(Context.empty(), message.getHeaders()));
     }
 
+    @SuppressWarnings("all")
     private Mono<Void> sendTo(DeviceSession session, DeviceMessage message) {
         DeviceOperator device;
         //子设备会话都发给网关
         if (session.isWrapFrom(ChildrenDeviceSession.class)) {
-            device = session.unwrap(ChildrenDeviceSession.class).getParentDevice();
-            if (!(message instanceof ChildDeviceMessage)) {
-                ChildDeviceMessage msg = new ChildDeviceMessage();
-                msg.setChildDeviceMessage(message);
-                msg.setChildDeviceId(message.getDeviceId());
-                msg.setDeviceId(device.getDeviceId());
-                msg.setMessageId(message.getMessageId());
-                message = msg;
-            }
+            return sendToParentSession(session.getOperator(),
+                                       session.unwrap(ChildrenDeviceSession.class).getParentDevice(),
+                                       message);
         } else {
             device = session.getOperator();
-        }
-        //never happen
-        if (null == device) {
-            return this
-                    .doReply((DeviceOperator) null, createReply(message).error(ErrorCode.CONNECTION_LOST))
-                    .then();
         }
 
         if (session.isWrapFrom(LostDeviceSession.class)) {
             return retryResume(device, message);
         }
+
         CodecContext context = new CodecContext(device, message, DeviceSession.trace(session));
 
         return device
