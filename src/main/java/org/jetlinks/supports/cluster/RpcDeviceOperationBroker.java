@@ -23,6 +23,7 @@ import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.util.concurrent.Queues;
 
 import java.io.ObjectInput;
 import java.io.ObjectInputStream;
@@ -41,7 +42,11 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     private final RpcManager rpcManager;
     private final DeviceSessionManager sessionManager;
 
-    private final Sinks.Many<Message> sendToDevice = Reactors.createMany(Integer.MAX_VALUE, false);
+    private final Sinks.Many<Message> sendToDevice = Sinks
+            .unsafe()
+            .many()
+            .unicast()
+            .onBackpressureBuffer(Queues.<Message>unboundedMultiproducer().get());
 
     private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
             .newBuilder()

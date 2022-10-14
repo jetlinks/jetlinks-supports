@@ -61,10 +61,11 @@ public class ClusterSendToDeviceMessageHandler {
         handler
                 .handleSendToDeviceMessage(sessionManager.getCurrentServerId())
                 .flatMap(msg -> handleMessage(msg)
-                        .onErrorResume(err -> {
-                            log.error("handle send to device message error {}", msg, err);
-                            return Mono.empty();
-                        }))
+                                 .onErrorResume(err -> {
+                                     log.error("handle send to device message error {}", msg, err);
+                                     return Mono.empty();
+                                 }),
+                         10240)
                 .subscribe();
     }
 
