@@ -15,6 +15,7 @@ import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.message.*;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
+import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.core.utils.SerializeUtils;
 import org.reactivestreams.Publisher;
@@ -120,17 +121,21 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     }
 
     private Mono<Void> doSendToDevice(Message message) {
-        if (sendToDevice.currentSubscriberCount() == 0) {
-            log.warn("no handler for message {}", message);
-            return doReply(createReply(message).error(ErrorCode.SYSTEM_ERROR));
-        }
+        return TraceHolder
+                .writeContextTo(message, Message::addHeader)
+                .flatMap(msg -> {
+                    if (sendToDevice.currentSubscriberCount() == 0) {
+                        log.warn("no handler for message {}", msg);
+                        return doReply(createReply(msg).error(ErrorCode.SYSTEM_ERROR));
+                    }
 
-        try {
-            sendToDevice.emitNext(message, Reactors.emitFailureHandler());
-        } catch (Throwable err) {
-            return doReply(createReply(message).error(err));
-        }
-        return Mono.empty();
+                    try {
+                        sendToDevice.emitNext(msg, Reactors.emitFailureHandler());
+                    } catch (Throwable err) {
+                        return doReply(createReply(msg).error(err));
+                    }
+                    return Mono.empty();
+                });
     }
 
     private DeviceMessageReply createReply(Message message) {

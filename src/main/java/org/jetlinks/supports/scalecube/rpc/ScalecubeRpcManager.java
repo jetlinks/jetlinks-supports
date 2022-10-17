@@ -24,6 +24,7 @@ import org.jctools.maps.NonBlockingHashSet;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
+import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.reactivestreams.Publisher;
@@ -548,20 +549,26 @@ public class ScalecubeRpcManager implements RpcManager {
             return getApiCall(id, clazz, null);
         }
 
-        private ServiceMessage toServiceMessage(MethodInfo methodInfo, Object request) {
+        private Mono<ServiceMessage> toServiceMessage(MethodInfo methodInfo, Object request) {
+
+            ServiceMessage.Builder builder;
+
             if (request instanceof ServiceMessage) {
-                return ServiceMessage
+                builder = ServiceMessage
                         .from((ServiceMessage) request)
+                        .qualifier(methodInfo.qualifier());
+            } else {
+                builder = ServiceMessage
+                        .builder()
                         .qualifier(methodInfo.qualifier())
-                        .build();
+                        .data(request)
+                        .dataFormatIfAbsent(contentType);
             }
 
-            return ServiceMessage
-                    .builder()
-                    .qualifier(methodInfo.qualifier())
-                    .data(request)
-                    .dataFormatIfAbsent(contentType)
-                    .build();
+            return TraceHolder
+                    .writeContextTo(builder, (ServiceMessage.Builder::header))
+                    .map(ServiceMessage.Builder::build);
+
         }
 
         @SuppressWarnings("all")
@@ -606,17 +613,18 @@ public class ScalecubeRpcManager implements RpcManager {
 
                                     switch (methodInfo.communicationMode()) {
                                         case FIRE_AND_FORGET:
-                                            return serviceCall
-                                                    .oneWay(toServiceMessage(methodInfo, request));
+                                            return toServiceMessage(methodInfo, request)
+                                                    .flatMap(serviceCall::oneWay);
 
                                         case REQUEST_RESPONSE:
-                                            return serviceCall
-                                                    .requestOne(toServiceMessage(methodInfo, request), returnType)
+                                            return toServiceMessage(methodInfo, request)
+                                                    .flatMap(msg->serviceCall.requestOne(msg,returnType))
                                                     .transform(asMono(isServiceMessage));
 
                                         case REQUEST_STREAM:
-                                            return serviceCall
-                                                    .requestMany(toServiceMessage(methodInfo, request), returnType)
+
+                                            return toServiceMessage(methodInfo, request)
+                                                    .flatMapMany(msg->serviceCall.requestMany(msg,returnType))
                                                     .transform(asFlux(isServiceMessage));
 
                                         case REQUEST_CHANNEL:
@@ -626,7 +634,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                             return serviceCall
                                                     .requestBidirectional(
                                                             Flux.from((Publisher) request)
-                                                                .map(data -> toServiceMessage(methodInfo, data)),
+                                                                .flatMap(data -> toServiceMessage(methodInfo, data)),
                                                             returnType)
                                                     .transform(asFlux(isServiceMessage));
 
