@@ -1,6 +1,7 @@
 package org.jetlinks.supports.scalecube.rpc;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.util.internal.ThreadLocalRandom;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
@@ -360,6 +361,22 @@ public class ScalecubeRpcManager implements RpcManager {
     }
 
     @Override
+    public <I> Mono<RpcService<I>> selectService(Class<I> service) {
+        List<RpcServiceCall<I>> calls = new ArrayList<>(serverServiceRef.size());
+
+        for (Map.Entry<String, ClusterNode> entry : serverServiceRef.entrySet()) {
+            calls.addAll(entry.getValue().getApiCalls(service));
+        }
+        if (calls.isEmpty()) {
+            return Mono.empty();
+        }
+        if (calls.size() == 1) {
+            return Mono.just(calls.get(0));
+        }
+        return Mono.just(calls.get(ThreadLocalRandom.current().nextInt(calls.size())));
+    }
+
+    @Override
     public <I> Flux<RpcService<I>> getServices(String id, Class<I> service) {
         return Flux
                 .fromIterable(serverServiceRef.entrySet())
@@ -521,7 +538,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
         private <I> List<RpcServiceCall<I>> getApiCalls(String id, Class<I> clazz) {
             String sName = Reflect.serviceName(clazz);
-            List<RpcServiceCall<I>> registrations = new ArrayList<>();
+            List<RpcServiceCall<I>> registrations = new ArrayList<>(1);
             for (ServiceRegistration service : services) {
                 String name = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
                 String sid = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
@@ -618,13 +635,13 @@ public class ScalecubeRpcManager implements RpcManager {
 
                                         case REQUEST_RESPONSE:
                                             return toServiceMessage(methodInfo, request)
-                                                    .flatMap(msg->serviceCall.requestOne(msg,returnType))
+                                                    .flatMap(msg -> serviceCall.requestOne(msg, returnType))
                                                     .transform(asMono(isServiceMessage));
 
                                         case REQUEST_STREAM:
 
                                             return toServiceMessage(methodInfo, request)
-                                                    .flatMapMany(msg->serviceCall.requestMany(msg,returnType))
+                                                    .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
                                                     .transform(asFlux(isServiceMessage));
 
                                         case REQUEST_CHANNEL:
