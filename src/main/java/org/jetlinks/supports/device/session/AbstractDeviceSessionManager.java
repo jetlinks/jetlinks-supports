@@ -92,9 +92,9 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         .bufferTimeout(1000, Duration.ofSeconds(1))
                         .onBackpressureBuffer()
                         .concatMap(flux -> Flux.fromIterable(flux)
-                                .filter(session -> !localSessions.containsKey(session.getDeviceId()))
-                                .flatMap(this::closeSessionSafe)
-                                .then(),0)
+                                               .filter(session -> !localSessions.containsKey(session.getDeviceId()))
+                                               .flatMap(this::closeSessionSafe)
+                                               .then(), 0)
                         .subscribe()
         );
 
@@ -521,10 +521,18 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
         private volatile Disposable disposable;
 
-        private Set<String> children;
+        private volatile Set<String> children;
 
         public Set<String> children() {
-            return children == null ? children = ConcurrentHashMap.newKeySet() : children;
+            if (children != null) {
+                return children;
+            }
+            synchronized (this) {
+                if (children != null) {
+                    return children;
+                }
+                return children = ConcurrentHashMap.newKeySet();
+            }
         }
 
         public void removeChild(String id) {
@@ -570,6 +578,17 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     .doOnNext(this::afterLoaded);
         }
 
+        private void handleParentChanged(DeviceSession from, DeviceSession to) {
+            DeviceSessionRef fromRef = manager.localSessions.get(from.getDeviceId());
+            DeviceSessionRef toRef = manager.localSessions.get(to.getDeviceId());
+            if (null != fromRef) {
+                fromRef.removeChild(deviceId);
+            }
+            if (null != toRef) {
+                toRef.children().add(deviceId);
+            }
+        }
+
         private Mono<DeviceSession> handleLoaded(DeviceSession session) {
             DeviceSession old = this.loaded;
             this.loaded = session;
@@ -577,6 +596,11 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             await().tryEmitValue(session);
 
             handleParent(parent -> parent.children().add(session.getDeviceId()));
+
+            if (session.isWrapFrom(ChildrenDeviceSession.class)) {
+                session.unwrap(ChildrenDeviceSession.class)
+                       .doOnParentChanged(this::handleParentChanged);
+            }
 
             if (old == null) {
                 return manager
@@ -597,11 +621,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             if (loaded.isWrapFrom(ChildrenDeviceSession.class)) {
                 DeviceSessionRef ref =
                         manager.localSessions
-                                .get(
-                                        loaded.unwrap(ChildrenDeviceSession.class)
-                                              .getParent()
-                                              .getDeviceId()
-                                );
+                                .get(loaded.unwrap(ChildrenDeviceSession.class).getParent().getDeviceId());
 
                 if (null != ref) {
                     parent.accept(ref);
