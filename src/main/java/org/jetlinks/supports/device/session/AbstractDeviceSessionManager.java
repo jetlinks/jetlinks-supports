@@ -51,6 +51,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     @Getter
     private Duration sessionLoadTimeout = Duration.ofSeconds(5);
 
+    @Getter
+    @Setter
+    private Duration sessionCheckInterval  = Duration.ofSeconds(30);
+
     // 检查会话是否存活的并行度
     @Setter
     private int sessionCheckConcurrency = Integer.getInteger("jetlinks.session.check.concurrency",
@@ -81,7 +85,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         Scheduler scheduler = Schedulers.newSingle("device-session-checker");
         disposable.add(scheduler);
         disposable.add(
-                Flux.interval(Duration.ofSeconds(30), scheduler)
+                Flux.interval(sessionCheckInterval, scheduler)
+                    .onBackpressureDrop()
                     .concatMap(time -> executeInterval())
                     .subscribe()
         );
@@ -91,10 +96,11 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         .asFlux()
                         .bufferTimeout(1000, Duration.ofSeconds(1))
                         .onBackpressureBuffer()
-                        .concatMap(flux -> Flux.fromIterable(flux)
-                                               .filter(session -> !localSessions.containsKey(session.getDeviceId()))
-                                               .flatMap(this::closeSessionSafe)
-                                               .then(), 0)
+                        .concatMap(flux -> Flux
+                                .fromIterable(flux)
+                                .filter(session -> !localSessions.containsKey(session.getDeviceId()))
+                                .flatMap(this::closeSessionSafe)
+                                .then(), 0)
                         .subscribe()
         );
 
