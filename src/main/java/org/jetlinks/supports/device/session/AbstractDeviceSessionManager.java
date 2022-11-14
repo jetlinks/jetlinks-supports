@@ -53,7 +53,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     @Getter
     @Setter
-    private Duration sessionCheckInterval  = Duration.ofSeconds(30);
+    private Duration sessionCheckInterval = Duration.ofSeconds(30);
 
     // 检查会话是否存活的并行度
     @Setter
@@ -232,8 +232,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 //serverId为空或者不是当前服务器，则同步连接信息
                 .switchIfEmpty(Mono.defer(() -> device
                         .online(getCurrentServerId(),
-                                session.getId(),
-                                session.getClientAddress().map(String::valueOf).orElse(""))
+                                session.getClientAddress().map(String::valueOf).orElse(""),
+                                session.connectTime())
                         .then(Mono.empty())))
                 .thenReturn(true);
 
@@ -325,13 +325,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             old.close();
             return newSession
                     .getOperator()
-                    .online(getCurrentServerId(), newSession.getId(), newSession
-                            .getClientAddress()
-                            .map(InetSocketAddress::toString)
-                            .orElse(null))
-                    .then(
-                            handleSessionCompute(old, newSession)
-                    );
+                    .online(getCurrentServerId(),
+                            newSession.getClientAddress().map(InetSocketAddress::toString).orElse(null),
+                            old.connectTime())
+                    .then(handleSessionCompute(old, newSession));
         }
         return handleSessionCompute(old, newSession);
     }
@@ -418,10 +415,11 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 .remoteSessionIsAlive(session.getDeviceId())
                 .flatMap(alive -> session
                         .getOperator()
-                        .online(getCurrentServerId(), session.getId(), session
-                                .getClientAddress()
-                                .map(InetSocketAddress::toString)
-                                .orElse(null))
+                        .online(getCurrentServerId(), session
+                                        .getClientAddress()
+                                        .map(InetSocketAddress::toString)
+                                        .orElse(null),
+                                session.connectTime())
                         .then(fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.register, session, alive))))
                 .thenReturn(session);
     }
