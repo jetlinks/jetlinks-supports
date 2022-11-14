@@ -327,7 +327,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     .getOperator()
                     .online(getCurrentServerId(),
                             newSession.getClientAddress().map(InetSocketAddress::toString).orElse(null),
-                            old.connectTime())
+                            -1)
                     .then(handleSessionCompute(old, newSession));
         }
         return handleSessionCompute(old, newSession);
@@ -419,7 +419,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                                         .getClientAddress()
                                         .map(InetSocketAddress::toString)
                                         .orElse(null),
-                                session.connectTime())
+                                alive ? -1 : session.connectTime())
                         .then(fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.register, session, alive))))
                 .thenReturn(session);
     }
