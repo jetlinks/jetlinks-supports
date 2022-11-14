@@ -15,7 +15,7 @@ public class ClusterLocalCache<K, V> extends AbstractLocalCache<K, V> {
     private final ClusterTopic<K> clearTopic;
 
     public ClusterLocalCache(String name, ClusterManager clusterManager) {
-        this(name, clusterManager, clusterManager.getCache(name), CacheBuilder.newBuilder().build());
+        this(name, clusterManager, clusterManager.createCache(name), CacheBuilder.newBuilder().build());
     }
 
     public ClusterLocalCache(String name,

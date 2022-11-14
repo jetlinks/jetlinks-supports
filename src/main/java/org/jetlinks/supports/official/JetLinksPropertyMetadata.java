@@ -44,6 +44,15 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
 
     }
 
+    public JetLinksPropertyMetadata(String id, String name, DataType type) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(name, "name cannot be null");
+        Objects.requireNonNull(type, "type cannot be null");
+        this.id = id;
+        this.name = name;
+        this.dataType = type;
+    }
+
     public JetLinksPropertyMetadata(JSONObject json) {
         fromJson(json);
     }
@@ -125,8 +134,11 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
         if (metadata.expands == null) {
             metadata.expands = new HashMap<>();
         }
-
+        if (!MergeOption.has(MergeOption.ignoreExists, option)) {
+            metadata.dataType = another.getValueType();
+        }
         MergeOption.ExpandsMerge.doWith(DeviceMetadataType.property, another.getExpands(), metadata.expands, option);
+
 
         return metadata;
     }

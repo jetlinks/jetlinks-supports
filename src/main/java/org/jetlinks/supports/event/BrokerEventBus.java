@@ -5,6 +5,7 @@ import io.netty.util.internal.ThreadLocalRandom;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.SneakyThrows;
 import org.hswebframework.web.dict.EnumDict;
 import org.jetlinks.core.Payload;
 import org.jetlinks.core.codec.Codecs;
@@ -14,6 +15,7 @@ import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import org.jetlinks.core.topic.Topic;
+import org.jetlinks.core.trace.TraceHolder;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,12 +28,10 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import javax.validation.constraints.NotNull;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /**
@@ -65,8 +65,10 @@ public class BrokerEventBus implements EventBus {
                 .subscribe(subscription)
                 .flatMap(payload -> {
                     try {
+                        //收到消息后解码
                         return Mono.justOrEmpty(payload.decode(decoder, false));
                     } catch (Throwable e) {
+                        //忽略解码错误,如果返回错误,可能会导致整个流中断
                         log.error("decode message [{}] error", payload.getTopic(), e);
                     } finally {
                         ReferenceCountUtil.safeRelease(payload);
@@ -79,10 +81,11 @@ public class BrokerEventBus implements EventBus {
     @Override
     public Flux<TopicPayload> subscribe(Subscription subscription) {
         return Flux
-                .create(sink -> {
+                .<TopicPayload>create(sink -> {
                     Disposable.Composite disposable = Disposables.composite();
                     String subscriberId = subscription.getSubscriber();
                     for (String topic : subscription.getTopics()) {
+                        //追加订阅信息到订阅表中
                         Topic<SubscriptionInfo> topicInfo = root.append(topic);
                         SubscriptionInfo subInfo = SubscriptionInfo.of(
                                 subscriberId,
@@ -90,14 +93,16 @@ public class BrokerEventBus implements EventBus {
                                 sink,
                                 false
                         );
+                        //添加订阅信息
                         topicInfo.subscribe(subInfo);
+                        //Flux结束时(dispose,error),取消订阅
                         disposable.add(() -> {
                             topicInfo.unsubscribe(subInfo);
                             subInfo.dispose();
                         });
                     }
                     sink.onDispose(disposable);
-                    //订阅代理消息
+                    //从其他代理中订阅消息,比如集群.
                     if (subscription.hasFeature(Subscription.Feature.broker)) {
                         doSubscribeBroker(subscription)
                                 .doOnSuccess(nil -> {
@@ -106,6 +111,8 @@ public class BrokerEventBus implements EventBus {
                                     }
                                 })
                                 .subscribe();
+
+                        //Flux dislose时从集群取消订阅
                         disposable.add(() -> doUnsubscribeBroker(subscription).subscribe());
                     } else {
                         if (subscription.getDoOnSubscribe() != null) {
@@ -116,7 +123,9 @@ public class BrokerEventBus implements EventBus {
                               subscriberId,
                               subscription.getFeatures(),
                               subscription.getTopics());
-                });
+                })
+                //TopicPayload被丢弃时自定释放
+                .doOnDiscard(TopicPayload.class, ReferenceCountUtil::safeRelease);
     }
 
     public void addBroker(EventBroker broker) {
@@ -173,6 +182,7 @@ public class BrokerEventBus implements EventBus {
                                   .getAllSubscriber()
                                   .doOnNext(sub -> {
                                       for (SubscriptionInfo subscriber : sub.getSubscribers()) {
+                                          //只处理本地订阅者并且需要订阅其他代理消息的订阅者
                                           if (subscriber.isLocal()) {
                                               if (subscriber.hasFeature(Subscription.Feature.broker)) {
                                                   eventProducer
@@ -183,13 +193,15 @@ public class BrokerEventBus implements EventBus {
                                       }
                                   })
                                   .then(Mono.just(eventProducer)))
+                          //接收来自代理的消息
                           .flatMapMany(EventProducer::subscribe)
                           .flatMap(payload -> this
                                   .doPublishFromBroker(payload, sub -> {
-                                      //本地订阅的
+                                      //只推送给订阅了代理的本地订阅者
                                       if (sub.isLocal()) {
                                           return sub.hasFeature(Subscription.Feature.broker);
                                       }
+                                      //跨broker间转发,比如A推送给B,B推送给C.
                                       if (sub.isBroker()) {
                                           //消息来自同一个broker
                                           if (sub.getEventBroker() == broker) {
@@ -219,10 +231,10 @@ public class BrokerEventBus implements EventBus {
                                                         handleBrokerSubscription(
                                                                 subscription,
                                                                 SubscriptionInfo.of(
-                                                                        subscription.getSubscriber(),
-                                                                        EnumDict.toMask(subscription.getFeatures()),
-                                                                        subscriber.sink(),
-                                                                        true)
+                                                                                        subscription.getSubscriber(),
+                                                                                        EnumDict.toMask(subscription.getFeatures()),
+                                                                                        subscriber.sink(),
+                                                                                        true)
                                                                                 .connection(broker, connection),
                                                                 connection
                                                         ))
@@ -284,6 +296,7 @@ public class BrokerEventBus implements EventBus {
             .subscribe();
     }
 
+    //处理来自其他broker的订阅请求
     private void handleBrokerSubscription(Subscription subscription, SubscriptionInfo info, EventConnection connection) {
         if (log.isDebugEnabled()) {
             log.debug("broker [{}] subscribe : {}", info, subscription.getTopics());
@@ -319,67 +332,61 @@ public class BrokerEventBus implements EventBus {
         return false;
     }
 
-    private Mono<Long> doPublish(String topic,
-                                 Predicate<SubscriptionInfo> predicate,
-                                 Function<Flux<SubscriptionInfo>, Mono<Long>> subscriberConsumer) {
-        return root
-                .findTopic(topic)
-                .flatMapIterable(Topic::getSubscribers)
-                .filter(sub -> {
-                    //订阅者来自代理,但是代理已经挂了,应该自动取消订阅?
-                    if (sub.isBroker() && !sub.getEventConnection().isAlive()) {
-                        sub.dispose();
-                        return false;
-                    }
-                    return predicate.test(sub);
-                })
-                //根据订阅者标识进行分组,以进行订阅模式判断
-                .groupBy(SubscriptionInfo::getSubscriber, Integer.MAX_VALUE)
-                .flatMap(group -> group
-                                 .groupBy(sub -> sub.hasFeature(Subscription.Feature.shared))
-                                 .flatMap(groups -> {
-                                     //共享订阅
-                                     if (Boolean.TRUE.equals(groups.key())) {
-                                         return selectSharedSubscription(groups);
-                                     }
-                                     return groups;
-                                 }),
-                         Integer.MAX_VALUE)
-                // 防止多次推送给同一个消费者,
-                // 比如同一个消费者订阅了: /device/1/2 和/device/1/*/
-                // 推送 /device/1/2,会获取到2个相同到订阅者
-                .distinct(SubscriptionInfo::getSink)
-                .as(subscriberConsumer);
-
-    }
-
-    private Flux<SubscriptionInfo> selectSharedSubscription(Flux<SubscriptionInfo> subscriptionInfoFlux) {
-        return subscriptionInfoFlux
-                .collectList()
-                //随机转发订阅者
-                .flatMapMany(subs -> Flux.just(subs.get(ThreadLocalRandom.current().nextInt(0, subs.size()))));
+    private long doPublish(String topic,
+                           Predicate<SubscriptionInfo> predicate,
+                           Consumer<SubscriptionInfo> subscriberConsumer) {
+        //共享订阅,只有一个订阅者能收到
+        Map<String, List<SubscriptionInfo>> sharedMap = new HashMap<>();
+        //去重
+        Set<Object> distinct = new HashSet<>(64);
+        //从订阅表中查找topic
+        root.findTopic(topic, subs -> {
+            for (SubscriptionInfo sub : subs.getSubscribers()) {
+                //broker已经失效则不推送
+                if (sub.isBroker() && !sub.getEventConnection().isAlive()) {
+                    sub.dispose();
+                    continue;
+                }
+                if (!predicate.test(sub) || !distinct.add(sub.sink)) {
+                    continue;
+                }
+                //共享订阅时,添加到缓存,最后再处理
+                if (sub.hasFeature(Subscription.Feature.shared)) {
+                    sharedMap
+                            .computeIfAbsent(sub.subscriber, ignore -> new ArrayList<>(8))
+                            .add(sub);
+                    continue;
+                }
+                subscriberConsumer.accept(sub);
+            }
+        }, () -> {
+            //处理共享订阅
+            for (List<SubscriptionInfo> value : sharedMap.values()) {
+                subscriberConsumer.accept(value.get(ThreadLocalRandom.current().nextInt(0, value.size())));
+            }
+        });
+        return distinct.size();
     }
 
     private Mono<Long> doPublishFromBroker(TopicPayload payload, Predicate<SubscriptionInfo> predicate) {
-        return this
+        long total = this
                 .doPublish(
                         payload.getTopic(),
                         predicate,
-                        flux -> flux
-                                .doOnNext(info -> {
-                                    try {
-                                        payload.retain();
-                                        info.sink.next(payload);
-                                        if (log.isDebugEnabled()) {
-                                            log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), info);
-                                        }
-                                    } catch (Throwable e) {
-                                        log.warn("broker publish [{}] to [{}] error", payload.getTopic(), info, e);
-                                    }
-                                })
-                                .count()
-                )
-                .doFinally(i -> ReferenceCountUtil.safeRelease(payload));
+                        info -> {
+                            try {
+                                payload.retain();
+                                info.sink.next(payload);
+                                if (log.isDebugEnabled()) {
+                                    log.debug("broker publish [{}] to [{}] complete", payload.getTopic(), info);
+                                }
+                            } catch (Throwable e) {
+                                log.warn("broker publish [{}] to [{}] error", payload.getTopic(), info, e);
+                            }
+                        }
+                );
+        ReferenceCountUtil.safeRelease(payload);
+        return Mono.just(total);
     }
 
     @Override
@@ -390,45 +397,68 @@ public class BrokerEventBus implements EventBus {
 
 
     @Override
+    @SneakyThrows
     public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream) {
         return publish(topic, encoder, eventStream, publishScheduler);
     }
 
     @Override
-    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream, Scheduler publisher) {
-        return this
-                .doPublish(topic,
-                           sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
-                           subscribers -> {
-                               Flux<TopicPayload> cache = Flux
-                                       .from(eventStream)
-                                       .map(payload -> TopicPayload.of(topic, Payload.of(payload, encoder)))
-                                       .cache();
-                               return subscribers
-                                       .flatMap(sub -> cache
-                                               .map((payload) -> doPublish(topic, sub, payload))
-                                               .count())
-                                       .count()
-                                       .flatMap((s) -> {
-                                           if (s > 0) {
-                                               return cache
-                                                       .map(payload -> {
-                                                           ReferenceCountUtil.safeRelease(payload);
-                                                           return true;
-                                                       })
-                                                       .then()
-                                                       .thenReturn(s);
-                                           }
-                                           return Mono.just(s);
-                                       });
-                           }
-                )
-                .as(res -> {
+    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T event) {
+        return this.publish(topic, encoder, event, publishScheduler);
+    }
+
+    @Override
+    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T payload, Scheduler scheduler) {
+        return TraceHolder
+                //写入跟踪信息到header中
+                .writeContextTo(TopicPayload.of(topic, Payload.of(payload, encoder)), TopicPayload::addHeader)
+                .map(pld -> {
+                    long subs = this
+                            .doPublish(pld.getTopic(),
+                                       sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
+                                       sub -> doPublish(pld.getTopic(), sub, pld)
+                            );
                     if (log.isTraceEnabled()) {
-                        return res.doOnNext(subs -> log.trace("topic [{}] has {} subscriber", topic, subs));
+                        log.trace("topic [{}] has {} subscriber", pld.getTopic(), subs);
                     }
-                    return res;
+                    ReferenceCountUtil.safeRelease(pld);
+                    return subs;
                 });
+    }
+
+    @Override
+    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, Publisher<? extends T> eventStream, Scheduler publisher) {
+        Flux<TopicPayload> cache = Flux
+                .from(eventStream)
+                .flatMap(payload -> TraceHolder
+                        //写入跟踪信息到header中
+                        .writeContextTo(TopicPayload.of(topic, Payload.of(payload, encoder)), TopicPayload::addHeader))
+                .cache();
+        return Flux
+                .<SubscriptionInfo>create(sink -> {
+                    this.doPublish(topic,
+                                   sub -> !sub.isLocal() || sub.hasFeature(Subscription.Feature.local),
+                                   sink::next
+                    );
+                    sink.complete();
+                })
+                .flatMap(sub -> cache
+                        .doOnNext(payload -> doPublish(topic, sub, payload))
+                        .count())
+                .count()
+                .flatMap((s) -> {
+                    // if (s > 0) {
+                    //释放Payload
+                    return cache
+                            .map(payload -> {
+                                ReferenceCountUtil.safeRelease(payload);
+                                return true;
+                            })
+                            .then(Mono.just(s));
+                    //  }
+                    //  return Mono.just(s);
+                });
+
     }
 
     @AllArgsConstructor(staticName = "of")
@@ -440,7 +470,8 @@ public class BrokerEventBus implements EventBus {
         FluxSink<TopicPayload> sink;
         @Getter
         boolean broker;
-        Disposable.Composite disposable;
+
+        Composite disposable;
 
         //broker only
         EventBroker eventBroker;

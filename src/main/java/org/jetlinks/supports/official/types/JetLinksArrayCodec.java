@@ -27,8 +27,8 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
         JSONObject jsonObject = new JSONObject(config);
         ofNullable(jsonObject.get("elementType"))
                 .map(v -> {
-                    if (v instanceof JSONObject) {
-                        return ((JSONObject) v);
+                    if (v instanceof Map) {
+                        return new JSONObject(((Map) v));
                     }
                     JSONObject eleType = new JSONObject();
                     eleType.put("type", v);

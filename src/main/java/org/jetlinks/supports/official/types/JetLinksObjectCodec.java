@@ -1,5 +1,6 @@
 package org.jetlinks.supports.official.types;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
@@ -29,6 +30,7 @@ public class JetLinksObjectCodec extends AbstractDataTypeCodec<ObjectType> {
         ofNullable(jsonObject.getJSONArray("properties"))
                 .map(list -> list
                         .stream()
+                        .map(JSON::toJSON)
                         .map(JSONObject.class::cast)
                         .<PropertyMetadata>map(JetLinksPropertyMetadata::new)
                         .collect(Collectors.toList()))

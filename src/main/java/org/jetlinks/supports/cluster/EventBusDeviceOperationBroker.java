@@ -1,6 +1,7 @@
 package org.jetlinks.supports.cluster;
 
 import com.google.common.cache.CacheBuilder;
+import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.codec.Codecs;
@@ -8,15 +9,15 @@ import org.jetlinks.core.device.DeviceStateInfo;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.message.*;
+import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.supports.cluster.redis.DeviceCheckRequest;
 import org.jetlinks.supports.cluster.redis.DeviceCheckResponse;
 import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.*;
@@ -25,6 +26,7 @@ import java.util.function.Function;
 
 import static com.google.common.cache.RemovalCause.EXPIRED;
 
+@Deprecated
 @Slf4j
 public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker implements Disposable {
 
@@ -36,7 +38,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
     private final Disposable.Composite disposable = Disposables.composite();
 
-    private final Map<String, FluxProcessor<DeviceCheckResponse, DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
+    private final Map<String, Sinks.One<DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
 
     private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
 
@@ -100,8 +102,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                                    .subscribe(response -> Optional
                                            .ofNullable(checkRequests.remove(response.getRequestId()))
                                            .ifPresent(processor -> {
-                                               processor.onNext(response);
-                                               processor.onComplete();
+                                               processor.tryEmitValue(response);
                                            }))
             );
         }
@@ -120,7 +121,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
             String uid = UUID.randomUUID().toString();
 
             DeviceCheckRequest request = new DeviceCheckRequest(serverId, uid, new ArrayList<>(deviceIdList));
-            EmitterProcessor<DeviceCheckResponse> processor = EmitterProcessor.create(true);
+            Sinks.One<DeviceCheckResponse> processor = Sinks.one();
 
             checkRequests.put(uid, processor);
 
@@ -131,7 +132,7 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                             log.warn("JetLinks server [{}] not found", deviceGatewayServerId);
                             return Mono.empty();
                         }
-                        return processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList()));
+                        return processor.asMono().flatMapIterable(DeviceCheckResponse::getStateInfoList);
                     })
                     .timeout(Duration.ofSeconds(5), Flux.empty())
                     .doFinally((s) -> {
@@ -201,7 +202,16 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                     Subscription.Feature.broker);
 
         return eventBus
-                .subscribe(subscription, messageCodec)
+                .subscribe(subscription)
+                .map(payload -> {
+                    try {
+                        //copy trace上下文
+                        Message message = payload.decode(messageCodec, false);
+                        return TraceHolder.copyContext(payload.getHeaders(), message, Message::addHeader);
+                    } finally {
+                        ReferenceCountUtil.safeRelease(payload);
+                    }
+                })
                 .doOnNext(message -> {
                     if (message instanceof RepayableDeviceMessage && !message
                             .getHeader(Headers.sendAndForget)

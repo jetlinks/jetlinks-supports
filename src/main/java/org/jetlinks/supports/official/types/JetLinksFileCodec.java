@@ -3,6 +3,7 @@ package org.jetlinks.supports.official.types;
 import lombok.Getter;
 import lombok.Setter;
 import org.jetlinks.core.metadata.types.FileType;
+import org.springframework.http.MediaType;
 
 import java.util.Map;
 import java.util.Optional;
@@ -26,6 +27,11 @@ public class JetLinksFileCodec extends AbstractDataTypeCodec<FileType> {
                 .flatMap(FileType.BodyType::of)
                 .ifPresent(type::setBodyType);
 
+        Optional.ofNullable(config.get("mediaType"))
+                .map(String::valueOf)
+                .map(MediaType::parseMediaType)
+                .ifPresent(type::setMediaType);
+
         return type;
 
     }
@@ -34,5 +40,6 @@ public class JetLinksFileCodec extends AbstractDataTypeCodec<FileType> {
     protected void doEncode(Map<String, Object> encoded, FileType type) {
         super.doEncode(encoded, type);
         encoded.put("bodyType", type.getBodyType().name());
+        encoded.put("mediaType", type.getMediaType().toString());
     }
 }

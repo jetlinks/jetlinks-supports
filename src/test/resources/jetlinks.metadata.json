@@ -6,7 +6,10 @@
       "id": "name",
       "name": "名称",
       "valueType": {
-        "type": "string"
+        "type": "string",
+        "expands": {
+          "maxLength": 128
+        }
       }
     }
   ],
@@ -46,7 +49,10 @@
             "id": "location",
             "name": "地点",
             "valueType": {
-              "type": "string"
+              "type": "string",
+              "expands": {
+                "maxLength": 128
+              }
             }
           },
           {

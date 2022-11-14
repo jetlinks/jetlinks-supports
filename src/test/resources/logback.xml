@@ -18,7 +18,11 @@
 
     <!--    　<logger name="org.jetlinks.supports.cluster" level="trace"/>-->
     　
-    <logger name="org.jetlinks.supports.cluster.event.RedisRSocketEventBroker" level="trace"/>
+    <logger name="org.jetlinks.supports.scalecube.event.ScalecubeEventBusBroker" level="debug"/>
+
+    <logger name="org.jetlinks.supports.scalecube.ExtendedClusterImpl" level="debug"/>
+
+    <logger name="org.jetlinks.supports.scalecube.rpc.ScalecubeRpcManager" level="debug"/>
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>

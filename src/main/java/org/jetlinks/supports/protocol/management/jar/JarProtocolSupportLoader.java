@@ -6,8 +6,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.ProtocolSupport;
 import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
+import org.jetlinks.core.trace.MonoTracer;
+import org.jetlinks.core.trace.ProtocolTracer;
+import org.jetlinks.core.utils.ClassUtils;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -15,7 +19,6 @@ import java.io.File;
 import java.net.URL;
 import java.util.Map;
 import java.util.Optional;
-import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -51,62 +54,88 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
     @Override
     @SneakyThrows
     public Mono<? extends ProtocolSupport> load(ProtocolSupportDefinition definition) {
-        return Mono.defer(() -> {
-            try {
-                Map<String, Object> config = definition.getConfiguration();
-                String location = Optional
-                        .ofNullable(config.get("location"))
-                        .map(String::valueOf)
-                        .orElseThrow(() -> new IllegalArgumentException("location"));
+        String id = definition.getId();
+        return Mono
+                .defer(() -> {
+                    try {
 
-                String provider = Optional.ofNullable(config.get("provider"))
-                                          .map(String::valueOf)
-                                          .map(String::trim).orElse(null);
-                URL url;
+                        Map<String, Object> config = definition.getConfiguration();
+                        String location = Optional
+                                .ofNullable(config.get("location"))
+                                .map(String::valueOf)
+                                .orElseThrow(() -> new IllegalArgumentException("location"));
 
-                if (!location.contains("://")) {
-                    url = new File(location).toURI().toURL();
-                } else {
-                    url = new URL("jar:" + location + "!/");
-                }
+                        URL url;
 
-                ProtocolClassLoader loader;
-                URL fLocation = url;
-                {
-                    ProtocolSupportProvider oldProvider = loaded.remove(provider);
-                    if (null != oldProvider) {
-                        oldProvider.dispose();
-                    }
-                }
-                loader = protocolLoaders.compute(definition.getId(), (key, old) -> {
-                    if (null != old) {
-                        try {
-                            closeLoader(old);
-                        } catch (Exception ignore) {
+                        if (!location.contains("://")) {
+                            url = new File(location).toURI().toURL();
+                        } else {
+                            url = new URL("jar:" + location + "!/");
                         }
-                    }
-                    return createClassLoader(fLocation);
-                });
 
-                ProtocolSupportProvider supportProvider;
-                log.debug("load protocol support from : {}", location);
-                if (provider != null) {
-                    supportProvider = (ProtocolSupportProvider) Class.forName(provider, true, loader).newInstance();
-                } else {
-                    supportProvider = ServiceLoader.load(ProtocolSupportProvider.class, loader).iterator().next();
-                }
-                ProtocolSupportProvider oldProvider = loaded.put(provider, supportProvider);
-                try {
-                    if (null != oldProvider) {
-                        oldProvider.dispose();
+                        ProtocolClassLoader loader;
+                        URL fLocation = url;
+                        {
+                            ProtocolSupportProvider oldProvider = loaded.remove(id);
+                            if (null != oldProvider) {
+                                oldProvider.dispose();
+                            }
+                        }
+                        loader = protocolLoaders.compute(id, (key, old) -> {
+                            if (null != old) {
+                                try {
+                                    closeLoader(old);
+                                } catch (Exception ignore) {
+                                }
+                            }
+                            return createClassLoader(fLocation);
+                        });
+
+                        ProtocolSupportProvider supportProvider;
+                        log.debug("load protocol support from : {}", location);
+                        String provider = Optional
+                                .ofNullable(config.get("provider"))
+                                .map(String::valueOf)
+                                .map(String::trim)
+                                .orElse(null);
+                        if (provider != null) {
+                            //直接从classLoad获取,防止冲突
+                            @SuppressWarnings("all")
+                            Class<ProtocolSupportProvider> providerType = (Class) loader.loadSelfClass(provider);
+                            supportProvider = providerType.getDeclaredConstructor().newInstance();
+                        } else {
+                            supportProvider = lookupProvider(loader);
+                            if (null == supportProvider) {
+                                return Mono.error(new IllegalArgumentException("error.protocol_provider_not_found"));
+                            }
+                        }
+                        ProtocolSupportProvider oldProvider = loaded.put(id, supportProvider);
+                        try {
+                            if (null != oldProvider) {
+                                oldProvider.dispose();
+                            }
+                        } catch (Throwable e) {
+                            log.error(e.getMessage(), e);
+                        }
+                        return supportProvider
+                                .create(serviceContext)
+                                .onErrorMap(Exceptions::bubble);
+                    } catch (Throwable e) {
+                        return Mono.error(e);
                     }
-                } catch (Exception e) {
-                    log.error(e.getMessage(), e);
-                }
-                return supportProvider.create(serviceContext);
-            } catch (Throwable e) {
-                return Mono.error(e);
-            }
-        }).subscribeOn(Schedulers.elastic());
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .as(MonoTracer.create(ProtocolTracer.SpanName.install(id)));
+    }
+
+    protected ProtocolSupportProvider lookupProvider(ProtocolClassLoader classLoader) {
+
+        return ClassUtils
+                .findImplClass(ProtocolSupportProvider.class,
+                               "classpath:**/*.class",
+                               true,
+                               classLoader,
+                               ProtocolClassLoader::loadSelfClass)
+                .orElse(null);
     }
 }

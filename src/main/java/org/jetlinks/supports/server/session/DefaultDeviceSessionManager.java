@@ -30,6 +30,7 @@ import java.util.stream.Collectors;
  * @author zhouhao
  * @since 1.0.0
  */
+@Deprecated
 public class DefaultDeviceSessionManager implements DeviceSessionManager {
 
     private final Map<String, DeviceSession> repository = new ConcurrentHashMap<>(4096);

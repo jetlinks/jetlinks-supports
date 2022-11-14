@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentMap;
 import static io.rsocket.SocketAcceptor.forRequestStream;
 
 @Slf4j
+@Deprecated
 public class RedisRSocketEventBroker extends RedisClusterEventBroker {
 
     private final RSocketAddress address;

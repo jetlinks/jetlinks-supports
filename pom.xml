@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>jetlinks</artifactId>
         <groupId>org.jetlinks</groupId>
@@ -38,6 +36,7 @@
             <artifactId>netty-transport-native-epoll</artifactId>
             <optional>true</optional>
         </dependency>
+
         <dependency>
             <groupId>org.eclipse.californium</groupId>
             <artifactId>californium-core</artifactId>
@@ -48,7 +47,6 @@
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
-            <version>29.0-jre</version>
         </dependency>
 
         <dependency>
@@ -82,12 +80,6 @@
         </dependency>
 
         <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-tools</artifactId>
             <scope>test</scope>
@@ -97,6 +89,11 @@
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>io.scalecube</groupId>
+            <artifactId>scalecube-cluster</artifactId>
         </dependency>
 
         <dependency>
@@ -115,20 +112,28 @@
             <groupId>io.scalecube</groupId>
             <artifactId>scalecube-services-transport-rsocket</artifactId>
             <version>${scalecube.version}</version>
-            <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>io.scalecube</groupId>
-            <artifactId>scalecube-services-bytebuf-codec</artifactId>
-            <version>${scalecube.version}</version>
-            <scope>test</scope>
+            <artifactId>scalecube-transport-netty</artifactId>
         </dependency>
+
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>io.scalecube</groupId>
             <artifactId>scalecube-services-transport-jackson</artifactId>
             <version>${scalecube.version}</version>
-            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.scalecube</groupId>
+            <artifactId>scalecube-services-transport-protostuff</artifactId>
+            <version>${scalecube.version}</version>
         </dependency>
 
     </dependencies>

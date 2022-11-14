@@ -8,8 +8,8 @@ import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceRegistry;
 import org.jetlinks.core.message.codec.DeviceMessageCodec;
 import org.jetlinks.core.message.codec.Transport;
-import org.jetlinks.core.metadata.DeviceMetadata;
 import org.jetlinks.core.metadata.DeviceMetadataCodec;
+import org.jetlinks.supports.official.JetLinksDeviceMetadataCodec;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -47,17 +47,7 @@ public class MockProtocolSupport implements ProtocolSupport, ProtocolSupports {
     @Nonnull
     @Override
     public DeviceMetadataCodec getMetadataCodec() {
-        return new DeviceMetadataCodec() {
-            @Override
-            public Mono<DeviceMetadata> decode(String source) {
-                return Mono.empty();
-            }
-
-            @Override
-            public Mono<String> encode(DeviceMetadata metadata) {
-                return Mono.empty();
-            }
-        };
+        return JetLinksDeviceMetadataCodec.getInstance();
     }
 
     @Nonnull

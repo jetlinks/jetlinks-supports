@@ -104,9 +104,8 @@ public class RedisHaManager implements HaManager {
     public void shutdown() {
         inRedisNode
                 .remove(allNodeHashKey, current.getId())
-                .then(offlineTopic
-                              .publish(Mono.just(current)))
-                .block();
+                .then(offlineTopic.publish(Mono.just(current)))
+                .block(Duration.ofSeconds(2));
     }
 
     public synchronized void startup() {

@@ -1,214 +1,221 @@
 package org.jetlinks.supports.cluster;
 
-import lombok.Setter;
+import com.google.common.cache.CacheBuilder;
+import io.scalecube.cluster.ClusterMessageHandler;
+import io.scalecube.cluster.Member;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.cluster.ClusterManager;
-import org.jetlinks.core.device.DeviceOperationBroker;
+import org.jetlinks.core.device.DeviceState;
 import org.jetlinks.core.device.DeviceStateInfo;
-import org.jetlinks.core.device.ReplyFailureHandler;
+import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.enums.ErrorCode;
-import org.jetlinks.core.exception.DeviceOperationException;
-import org.jetlinks.core.message.BroadcastMessage;
-import org.jetlinks.core.message.DeviceMessageReply;
-import org.jetlinks.core.message.Headers;
-import org.jetlinks.core.message.Message;
-import org.jetlinks.core.server.MessageHandler;
-import org.jetlinks.supports.cluster.redis.DeviceCheckRequest;
-import org.jetlinks.supports.cluster.redis.DeviceCheckResponse;
+import org.jetlinks.core.message.*;
+import org.jetlinks.core.trace.TraceHolder;
+import org.jetlinks.core.utils.Reactors;
+import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.reactivestreams.Publisher;
-import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
-import reactor.core.publisher.*;
+import reactor.core.Disposables;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.util.context.Context;
 
 import java.time.Duration;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Collection;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 
+import static com.google.common.cache.RemovalCause.EXPIRED;
+
+@Deprecated
 @Slf4j
-public class ClusterDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
+public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker {
 
-    private final ClusterManager clusterManager;
-    private final String serverId;
+    private static final String QUALIFIER_REPLY = "cdob_r";
+    private static final String QUALIFIER_SEND = "cdob_s";
 
+    final ExtendedCluster cluster;
 
-    private final Map<String, FluxProcessor<DeviceMessageReply, DeviceMessageReply>> replyProcessor = new ConcurrentHashMap<>();
-    private final Map<String, FluxProcessor<DeviceCheckResponse, DeviceCheckResponse>> checkRequests = new ConcurrentHashMap<>();
+    final DeviceSessionManager sessionManager;
 
+    private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
+            .newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(5))
+            .<String, RepayableDeviceMessage<?>>removalListener(notify -> {
+                if (notify.getCause() == EXPIRED) {
+                    try {
+                        ClusterDeviceOperationBroker.log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());
+                    } catch (Throwable ignore) {
+                    }
+                }
+            })
+            .build()
+            .asMap();
 
-    private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
+    private final Sinks.Many<Message> sendToDevice = Sinks.many().multicast().onBackpressureBuffer(Integer.MAX_VALUE,false);
 
-    public ClusterDeviceOperationBroker(ClusterManager clusterManager) {
-        this.clusterManager = clusterManager;
-        this.serverId = clusterManager.getCurrentServerId();
-        init();
+    public ClusterDeviceOperationBroker(ExtendedCluster cluster,
+                                        DeviceSessionManager sessionManager) {
+        this.cluster = cluster;
+        this.sessionManager = sessionManager;
+        cluster.handler(ignore -> new ClusterHandler());
     }
 
-    public void init() {
-        //接收设备状态检查
-        clusterManager.<DeviceCheckResponse>getTopic("device:state:check:result:".concat(serverId)).subscribe()
-                .subscribe(msg ->
-                        Optional.ofNullable(checkRequests.remove(msg.getRequestId()))
-                                .ifPresent(processor -> {
-                                    processor.onNext(msg);
-                                    processor.onComplete();
-                                }));
-        //接收消息返回
-        clusterManager.getTopic("device:msg:reply")
-                .subscribe()
-                .subscribe(msg -> {
-                    if (msg instanceof DeviceMessageReply) {
-                        handleReply(((DeviceMessageReply) msg));
-                    }
-                });
+    class ClusterHandler implements ClusterMessageHandler {
+        @Override
+        public void onGossip(io.scalecube.cluster.transport.api.Message gossip) {
+            onMessage(gossip);
+        }
+
+        @Override
+        public void onMessage(io.scalecube.cluster.transport.api.Message message) {
+            if (QUALIFIER_SEND.equals(message.qualifier())) {
+                Message msg = message.data();
+                TraceHolder.copyContext(message.headers(), msg, Message::addHeader);
+                handleSendToDevice(message.data())
+                        .contextWrite(TraceHolder.readToContext(Context.empty(), message.headers()))
+                        .subscribe();
+            } else if (QUALIFIER_REPLY.equals(message.qualifier())) {
+                Message msg = message.data();
+                TraceHolder.copyContext(message.headers(), msg, Message::addHeader);
+                handleReply(message.data());
+            }
+        }
+    }
+
+    private String currentServerId() {
+        return sessionManager.getCurrentServerId();
     }
 
     @Override
     public Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId, Collection<String> deviceIdList) {
-        return Flux.defer(() -> {
-            //本地检查
-            if (serverId.equals(deviceGatewayServerId) && localStateChecker != null) {
-                return localStateChecker.apply(Flux.fromIterable(deviceIdList));
-            }
-            String uid = UUID.randomUUID().toString();
-
-            DeviceCheckRequest request = new DeviceCheckRequest(serverId, uid, new ArrayList<>(deviceIdList));
-            EmitterProcessor<DeviceCheckResponse> processor = EmitterProcessor.create(true);
-
-            checkRequests.put(uid, processor);
-
-            return clusterManager.getTopic("device:state:checker:".concat(deviceGatewayServerId))
-                    .publish(Mono.just(request))
-                    .flatMapMany(m -> processor.flatMap(deviceCheckResponse -> Flux.fromIterable(deviceCheckResponse.getStateInfoList())))
-                    .timeout(Duration.ofSeconds(5), Flux.empty());
-        });
+        return Flux
+                .fromIterable(deviceIdList)
+                .flatMap(id -> sessionManager
+                        .checkAlive(id, false)
+                        .map(alive -> new DeviceStateInfo(id, alive ? DeviceState.online : DeviceState.offline))
+                );
     }
 
     @Override
-    public Disposable handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
-        localStateChecker = stateMapper;
-       return clusterManager.<DeviceCheckRequest>getTopic("device:state:checker:".concat(serverId))
-                .subscribe()
-                .subscribe(request ->
-                        stateMapper.apply(Flux.fromIterable(request.getDeviceId()))
-                                .collectList()
-                                .map(resp -> new DeviceCheckResponse(resp, request.getRequestId()))
-                                .as(clusterManager.getTopic("device:state:check:result:".concat(request.getFrom()))::publish)
-                                .subscribe(len -> {
-                                    if (len <= 0) {
-                                        log.warn("device check reply fail");
-                                    }
-                                }));
-    }
-
-    @Override
-    public Flux<DeviceMessageReply> handleReply(String deviceId,String messageId, Duration timeout) {
-        return replyProcessor
-                .computeIfAbsent(messageId, ignore -> UnicastProcessor.create())
-                .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
-                .doFinally(signal -> {
-                    replyProcessor.remove(messageId);
-                    fragmentCounter.remove(messageId);
+    public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
+        return super
+                .handleReply(deviceId, messageId, timeout)
+                .doOnCancel(() -> {
+                    awaits.remove(getAwaitReplyKey(deviceId, messageId));
                 });
     }
 
     @Override
-    public Mono<Integer> send(String deviceGatewayServerId, Publisher<? extends Message> message) {
+    public Mono<Integer> send(String deviceGatewayServerId,
+                              Publisher<? extends Message> message) {
+        //发给同一个服务节点
+        if (currentServerId().equals(deviceGatewayServerId)) {
+            return Flux
+                    .from(message)
+                    .flatMap(this::handleSendToDevice)
+                    .then(Reactors.ALWAYS_ONE);
+        }
 
-        return Flux.from(message)
-                .map(msg -> msg.addHeader(Headers.sendFrom, clusterManager.getCurrentServerId()))
-                .flatMap(msg -> clusterManager.getTopic("device:msg:p2p:".concat(deviceGatewayServerId)).publish(Mono.just(msg)))
-                .takeWhile(l -> l > 0)
-                .last(0);
+        Member member = getMember(deviceGatewayServerId);
+        if (null == member) {
+            return Reactors.ALWAYS_ZERO;
+        }
+
+        return Flux
+                .from(message)
+                .flatMap(msg -> {
+                    msg.addHeader(Headers.sendFrom, sessionManager.getCurrentServerId());
+                    if (msg instanceof RepayableDeviceMessage) {
+                        String key = getAwaitReplyKey(((RepayableDeviceMessage<?>) msg));
+                        awaits.put(key, ((RepayableDeviceMessage<?>) msg));
+                    }
+                    return cluster
+                            .send(member, io.scalecube.cluster.transport.api.Message
+                                    .builder()
+                                    .qualifier(QUALIFIER_SEND)
+                                    .data(msg)
+                                    .build());
+                })
+                .then(Reactors.ALWAYS_ONE);
     }
 
     @Override
     public Mono<Integer> send(Publisher<? extends BroadcastMessage> message) {
-
-        return clusterManager
-                .<BroadcastMessage>getTopic("device:msg:broadcast")
-                .publish(message);
+        return Reactors.ALWAYS_ZERO;
     }
 
     @Override
     public Flux<Message> handleSendToDeviceMessage(String serverId) {
-        return clusterManager
-                .getTopic("device:msg:p2p:".concat(serverId))
-                .subscribe()
-                .cast(Message.class);
+        return sendToDevice.asFlux();
     }
 
-    private final Map<String, AtomicInteger> fragmentCounter = new ConcurrentHashMap<>();
+    private Mono<Void> handleSendToDevice(Message message) {
+        if (message instanceof RepayableDeviceMessage) {
+            RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
+            awaits.put(getAwaitReplyKey(msg), msg);
+        }
+        if (sendToDevice.currentSubscriberCount() == 0) {
+            log.warn("no handler for message {}", message);
+            return doReply(createReply(message).error(ErrorCode.SYSTEM_ERROR));
+        }
+        try {
+            sendToDevice.emitNext(message, Reactors.emitFailureHandler());
+        }catch (Throwable err){
+            return doReply(createReply(message).error(err));
+        }
+        return Mono.empty();
+    }
+
+    private DeviceMessageReply createReply(Message message) {
+        if (message instanceof RepayableDeviceMessage) {
+            return ((RepayableDeviceMessage<?>) message).newReply();
+        }
+        return new CommonDeviceMessageReply<>()
+                .messageId(message.getMessageId());
+    }
+
 
     @Override
-    public Mono<Boolean> reply(DeviceMessageReply message) {
-        if (StringUtils.isEmpty(message.getMessageId())) {
-            log.warn("reply message messageId is empty: {}", message);
-            return Mono.just(false);
+    protected Mono<Void> doReply(DeviceMessageReply reply) {
+        RepayableDeviceMessage<?> msg = awaits.remove(getAwaitReplyKey(reply));
+        Member member = null;
+
+        if (null != msg) {
+            member = msg.getHeader(Headers.sendFrom)
+                        .map(this::getMember)
+                        .orElse(null);
         }
-        return Mono.defer(() -> {
-            message.addHeader(Headers.replyFrom, serverId);
-            if (replyProcessor.containsKey(message.getMessageId())) {
-                handleReply(message);
-                return Mono.just(true);
-            }
-            return clusterManager
-                    .getTopic("device:msg:reply")
-                    .publish(Mono.just(message))
-                    .map(l -> l > 0)
-                    .switchIfEmpty(Mono.just(false));
-        });
+
+        Function<Member, Mono<Void>> handler = _member -> cluster
+                .send(_member, io.scalecube.cluster.transport.api.Message
+                        .builder()
+                        .qualifier(QUALIFIER_REPLY)
+                        .data(reply)
+                        .build());
+        //fast reply
+        if (null != member) {
+            return handler.apply(member);
+        }
+        return Flux
+                .fromIterable(cluster.otherMembers())
+                .flatMap(handler)
+                .then();
     }
 
-    private void handleReply(DeviceMessageReply message) {
-        try {
-            String messageId = message.getMessageId();
-            if (StringUtils.isEmpty(messageId)) {
-                log.warn("reply message messageId is empty: {}", message);
-                return;
-            }
-
-            String partMsgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(null);
-            if (partMsgId != null) {
-                FluxProcessor<DeviceMessageReply, DeviceMessageReply> processor = replyProcessor.getOrDefault(partMsgId, replyProcessor.get(messageId));
-
-                if (processor == null || processor.isDisposed()) {
-                    replyProcessor.remove(partMsgId);
-                    return;
-                }
-                int partTotal = message.getHeader(Headers.fragmentNumber).orElse(1);
-                AtomicInteger counter = fragmentCounter.computeIfAbsent(partMsgId, r -> new AtomicInteger(partTotal));
-
-                try {
-                    processor.onNext(message);
-                } finally {
-                    if (counter.decrementAndGet() <= 0 || message.getHeader(Headers.fragmentLast).orElse(false)) {
-                        try {
-                            processor.onComplete();
-                        } finally {
-                            replyProcessor.remove(partMsgId);
-                            fragmentCounter.remove(partMsgId);
-                        }
-                    }
-                }
-                return;
-            }
-            FluxProcessor<DeviceMessageReply, DeviceMessageReply> processor = replyProcessor.get(messageId);
-
-            if (processor != null && !processor.isDisposed()) {
-                processor.onNext(message);
-                processor.onComplete();
-            } else {
-                replyProcessor.remove(messageId);
-            }
-        } catch (Exception e) {
-            replyFailureHandler.handle(e, message);
-        }
+    @Override
+    public Disposable handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
+        return Disposables.disposed();
     }
 
-    @Setter
-    private ReplyFailureHandler replyFailureHandler = (error, message) -> log.warn("unhandled reply message:{}", message, error);
-
+    public Member getMember(String id) {
+        for (Member member : cluster.otherMembers()) {
+            if (Objects.equals(member.id(), id) || Objects.equals(member.alias(), id)) {
+                return member;
+            }
+        }
+        return null;
+    }
 
 }

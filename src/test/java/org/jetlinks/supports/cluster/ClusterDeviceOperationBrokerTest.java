@@ -1,135 +1,119 @@
 package org.jetlinks.supports.cluster;
 
+
+import io.scalecube.cluster.ClusterConfig;
+import io.scalecube.transport.netty.tcp.TcpTransportFactory;
 import lombok.SneakyThrows;
-import org.jetlinks.core.device.DeviceState;
-import org.jetlinks.core.device.DeviceStateInfo;
-import org.jetlinks.core.device.StandaloneDeviceMessageBroker;
-import org.jetlinks.core.message.DeviceMessageReply;
-import org.jetlinks.core.message.Headers;
-import org.jetlinks.core.message.function.FunctionInvokeMessage;
-import org.jetlinks.core.message.function.FunctionInvokeMessageReply;
-import org.jetlinks.supports.cluster.redis.RedisClusterManager;
+import org.jetlinks.core.device.DeviceInfo;
+import org.jetlinks.core.device.DeviceOperator;
+import org.jetlinks.core.device.DeviceRegistry;
+import org.jetlinks.core.device.ProductInfo;
+import org.jetlinks.core.message.property.ReadPropertyMessage;
+import org.jetlinks.supports.device.session.LocalDeviceSessionManager;
+import org.jetlinks.supports.scalecube.ExtendedClusterImpl;
+import org.jetlinks.supports.test.InMemoryDeviceRegistry;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
-import java.util.Arrays;
-import java.util.Collections;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class ClusterDeviceOperationBrokerTest {
-
-    private ReactiveRedisTemplate<Object, Object> operations = RedisHelper.getRedisTemplate();
-
-    public RedisClusterManager clusterManager;
-
-    private ClusterDeviceOperationBroker broker;
+    ClusterDeviceOperationBroker broker1;
+    ClusterDeviceOperationBroker broker2;
+    private DeviceRegistry registry;
+    private DeviceOperator device;
 
     @Before
+    @SneakyThrows
     public void init() {
-        clusterManager = new RedisClusterManager("default", "test", operations);
-        broker = new ClusterDeviceOperationBroker(clusterManager);
+        ExtendedClusterImpl cluster1 = new ExtendedClusterImpl(
+                ClusterConfig.defaultConfig()
+                             .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+        );
+        cluster1.startAwait();
+
+        ExtendedClusterImpl cluster2 = new ExtendedClusterImpl(
+                ClusterConfig.defaultConfig()
+                             .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+                             .membership(ship -> ship.seedMembers(cluster1.address()))
+        );
+        cluster2.startAwait();
+
+
+        Thread.sleep(1000);
+
+        registry = InMemoryDeviceRegistry.create();
+
+        registry.register(ProductInfo.builder()
+                                     .id("test")
+                                     .protocol("test")
+                                     .metadata("{}")
+                                     .build())
+                .block();
+
+        broker1 = new ClusterDeviceOperationBroker(cluster1, LocalDeviceSessionManager.create());
+        broker2 = new ClusterDeviceOperationBroker(cluster2, LocalDeviceSessionManager.create());
+
+
+        device = registry.register(DeviceInfo.builder()
+                                             .id("test")
+                                             .productId("test")
+                                             .build())
+                         .block();
     }
 
 
     @Test
-    public void testStateCheck() {
-        broker.handleGetDeviceState("test", list ->
-                Flux.from(list)
-                        .map(id -> new DeviceStateInfo(id, DeviceState.online)));
+    @SneakyThrows
+    public void testSend() {
+        AtomicInteger count = new AtomicInteger();
 
-        broker.getDeviceState("test", Collections.singletonList("testId"))
-                .map(DeviceStateInfo::getState)
-                .as(StepVerifier::create)
-                .expectNext(DeviceState.online)
-                .verifyComplete();
-    }
+        broker2.handleSendToDeviceMessage(broker2.cluster.member().id())
+               .doOnNext(msg -> {
+                   count.incrementAndGet();
+               })
+               .subscribe();
 
+        ReadPropertyMessage msg = new ReadPropertyMessage();
+        msg.setDeviceId("test");
+        msg.setMessageId("1");
 
-    @Test
-    public void testHmget() {
-        operations.opsForHash().put("test1", "1", "1")
-                .then(operations.opsForHash().put("test1", "2", "2"))
-                .then(operations.opsForHash().put("test1", "3", "3"))
-                .then(operations.opsForHash().multiGet("test1", Arrays.asList("1", "5", "2")))
-                .as(StepVerifier::create)
-                .expectNextMatches(list -> {
-                    System.out.println(list);
-                    return true;
-                })
-                .verifyComplete()
-        ;
+        broker1.send(broker2.cluster.member().id(), Flux.just(msg))
+               .as(StepVerifier::create)
+               .expectNext(1)
+               .verifyComplete();
+
+        Thread.sleep(500);
+        Assert.assertEquals(1, count.get());
     }
 
     @Test
     @SneakyThrows
-    public void test() {
-        broker.handleSendToDeviceMessage("test")
-                .subscribe(msg -> {
-                    broker.reply(new FunctionInvokeMessageReply().from(msg).success())
-                            .subscribe();
-                });
+    public void testReply() {
+        AtomicInteger count = new AtomicInteger();
 
-        FunctionInvokeMessage message = new FunctionInvokeMessage();
-        message.setFunctionId("test");
-        message.setMessageId("test");
+        broker2.handleReply("test", "2", Duration.ofSeconds(10))
+               .doOnNext(msg -> {
+                   count.incrementAndGet();
+               })
+               .subscribe();
 
-        Flux<Boolean> successReply = broker.handleReply("test", message.getMessageId(), Duration.ofSeconds(10))
-                .map(DeviceMessageReply::isSuccess);
+        ReadPropertyMessage msg = new ReadPropertyMessage();
+        msg.setDeviceId("test");
+        msg.setMessageId("2");
 
-        broker.send("test", Mono.just(message))
-                .as(StepVerifier::create)
-                .expectNext(1)
-                .verifyComplete();
+        broker1.reply(msg.newReply().success())
+               .as(StepVerifier::create)
+               .expectNext(true)
+               .verifyComplete();
 
-        successReply.as(StepVerifier::create)
-                .expectNext(true)
-                .verifyComplete();
+        Thread.sleep(500);
+        Assert.assertEquals(1, count.get());
     }
 
-    @Test
-    public void testParting() {
-        StandaloneDeviceMessageBroker handler = new StandaloneDeviceMessageBroker();
-        handler.handleSendToDeviceMessage("test")
-                .subscribe(msg -> {
-                    handler.reply(new FunctionInvokeMessageReply()
-                            .from(msg)
-                            .addHeader(Headers.fragmentBodyMessageId, msg.getMessageId())
-                            .addHeader(Headers.fragmentNumber, 2)
-                            .messageId("2")
-                            .success())
-                            .delayElement(Duration.ofSeconds(1))
-                            .flatMap(success ->
-                                    handler.reply(new FunctionInvokeMessageReply()
-                                            .from(msg)
-                                            .messageId("1")
-                                            .addHeader(Headers.fragmentBodyMessageId, msg.getMessageId())
-                                            .addHeader(Headers.fragmentNumber, 2)
-                                            .success()))
-                            .subscribe();
-                });
-
-        FunctionInvokeMessage message = new FunctionInvokeMessage();
-        message.setFunctionId("test");
-        message.setMessageId("test");
-
-        Flux<Boolean> successReply = handler
-                .handleReply("test",message.getMessageId(), Duration.ofSeconds(2))
-                .doOnNext(System.out::println)
-                .map(DeviceMessageReply::isSuccess);
-
-        handler.send("test", Mono.just(message))
-                .as(StepVerifier::create)
-                .expectNext(1)
-                .verifyComplete();
-
-        successReply.
-                as(StepVerifier::create)
-                .expectNext(true, true)
-                .verifyComplete();
-    }
 
 }

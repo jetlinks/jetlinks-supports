@@ -1,8 +1,12 @@
 package org.jetlinks.supports.event;
 
 import io.netty.util.ReferenceCountUtil;
+import org.jetlinks.core.codec.Codec;
+import org.jetlinks.core.codec.Codecs;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
+import org.jetlinks.core.message.DeviceMessage;
+import org.jetlinks.core.message.property.ReportPropertyMessage;
 import org.junit.Test;
 import reactor.core.Disposable;
 import reactor.core.publisher.EmitterProcessor;
@@ -16,6 +20,38 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class BrokerEventBusTest {
 
+
+    @Test
+    public void benchmark() {
+        BrokerEventBus eventBus = new BrokerEventBus();
+//        eventBus.setPublishScheduler(Schedulers.parallel());
+        long startWith = System.currentTimeMillis();
+        Codec<DeviceMessage> codec= Codecs.lookup(DeviceMessage.class);
+        eventBus
+                .subscribe(Subscription
+                                   .builder()
+                                   .subscriberId("test")
+                                   .topics("/device/**")
+                                   .build(),
+                           DeviceMessage.class)
+                .doOnSubscribe(sub -> {
+                    Mono.delay(Duration.ofMillis(50))
+                        .then(
+                                Flux.range(0, 10_0000)
+                                    .flatMap(i -> {
+                                        ReportPropertyMessage msg = new ReportPropertyMessage();
+                                        return eventBus.publish("/device/test/test/message/property/report",codec, msg);
+                                    })
+                                    .then()
+                        )
+                        .subscribe();
+                })
+                .take(10_0000)
+                .blockLast();
+
+        System.out.println(System.currentTimeMillis()-startWith-50);
+
+    }
 
     @Test
     public void test() {
@@ -38,10 +74,10 @@ public class BrokerEventBusTest {
         BrokerEventBus eventBus = new BrokerEventBus();
 
         eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local))
-                .doOnSubscribe(sub->{
+                .doOnSubscribe(sub -> {
                     Mono.delay(Duration.ofSeconds(1))
-                        .subscribe((r)->{
-                            eventBus.publish("/test/1/2/3","test")
+                        .subscribe((r) -> {
+                            eventBus.publish("/test/1/2/3", "test")
                                     .subscribe();
                         });
                 })
@@ -57,9 +93,9 @@ public class BrokerEventBusTest {
         BrokerEventBus eventBus = new BrokerEventBus();
 
         Flux.merge(
-                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class),
-                eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class)
-        )
+                    eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class),
+                    eventBus.subscribe(Subscription.of("test", new String[]{"/test/1/2/3"}, Subscription.Feature.local, Subscription.Feature.shared), String.class)
+            )
             .doOnSubscribe(sub -> {
                 Mono.delay(Duration.ofSeconds(1))
                     .flatMap(i -> eventBus.publish("/test/1/2/3", "hello"))
@@ -124,9 +160,9 @@ public class BrokerEventBusTest {
 
             TestEventConnection() {
                 processor.doOnNext(i -> {
-                    ReferenceCountUtil.safeRelease(i);
-                    counter.incrementAndGet();
-                })
+                             ReferenceCountUtil.safeRelease(i);
+                             counter.incrementAndGet();
+                         })
                          .subscribe();
             }
 
