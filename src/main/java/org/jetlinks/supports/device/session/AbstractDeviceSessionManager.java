@@ -233,7 +233,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 .switchIfEmpty(Mono.defer(() -> device
                         .online(getCurrentServerId(),
                                 session.getClientAddress().map(String::valueOf).orElse(""),
-                                session.connectTime())
+                                -1)
                         .then(Mono.empty())))
                 .thenReturn(true);
 
@@ -442,11 +442,15 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     protected Mono<Boolean> doInit(String deviceId) {
         DeviceSessionRef ref = localSessions.get(deviceId);
 
-        if (ref != null && ref.loaded != null && ref.loaded.getOperator() != null) {
-            return ref
-                    .loaded
-                    .getOperator()
-                    .online(getCurrentServerId(), null)
+        DeviceSession session;
+        DeviceOperator device;
+        if (ref != null && (session = ref.loaded) != null && (device = ref.loaded.getOperator()) != null) {
+            return device
+                    .online(getCurrentServerId(),
+                            session
+                                    .getClientAddress()
+                                    .map(String::valueOf).orElse(""),
+                            -1)
                     .thenReturn(true);
         }
         return Mono.empty();
