@@ -1,6 +1,7 @@
 package org.jetlinks.supports.config;
 
 import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
 import lombok.AllArgsConstructor;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.Value;
@@ -11,6 +12,7 @@ import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.utils.Reactors;
 import org.springframework.util.CollectionUtils;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
@@ -75,6 +77,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 return null;
             }
             return cached;
+        }
+
+        public Object getCachedValue() {
+            Value cached = getCached();
+            return cached == null ? null : cached.get();
         }
 
         void updateTime() {
@@ -170,9 +177,16 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return getOrCreateCache(key).getRef();
     }
 
+    Values wrapCache(Collection<String> keys) {
+        return Values
+                .of(Maps.filterEntries(
+                        Maps.transformValues(caches, Cache::getCachedValue),
+                        e -> e.getValue() != null && keys.contains(e.getKey())
+                ));
+    }
+
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
-        Map<String, Cache> caches = Maps.newHashMapWithExpectedSize(keys.size());
         int hits = 0;
         //获取一级缓存
         for (String key : keys) {
@@ -181,21 +195,22 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (cached != null) {
                 //命中一级缓存
                 hits++;
-                caches.put(key, local);
             }
         }
         //全部来自一级缓存则直接返回
         if (hits == keys.size()) {
-            return Mono.just(
-                    Values.of(Maps.filterValues(
-                            Maps.transformValues(caches, cache -> cache.getCached().get()),
-                            Objects::nonNull
-                    ))
-            );
+            return Mono.just(wrapCache(keys));
         }
+        Values wrap = wrapCache(keys);
         //需要从二级缓存中加载的配置
         Set<String> needLoadKeys = new HashSet<>(keys);
-        needLoadKeys.removeAll(caches.keySet());
+        needLoadKeys.removeAll(wrap.getAllValues().keySet());
+
+        if (needLoadKeys.isEmpty()) {
+            return Mono.just(wrap);
+        }
+
+        //当前版本信息
         Map<String, Integer> versions = Maps.newHashMapWithExpectedSize(caches.size());
         for (Map.Entry<String, Cache> entry : caches.entrySet()) {
             versions.put(entry.getKey(), entry.getValue().version);
@@ -203,11 +218,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         return clusterCache
                 .get(needLoadKeys)
-                .reduce(caches, (map, entry) -> {
+                .<Map<String, Cache>>reduce(new HashMap<>(), (map, entry) -> {
                     String key = entry.getKey();
                     Object value = entry.getValue();
                     //加载到一级缓存中
-                    Cache cache = caches.computeIfAbsent(key, this::getOrCreateCache);
+                    Cache cache = getOrCreateCache(key);
                     int version = versions.getOrDefault(key, cache.version);
                     updateValue(cache, version, value);
                     if (null != value) {
@@ -227,11 +242,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                         }
                     }
                 })
-                .map(map -> Values.of(
-                        Maps.filterValues(
-                                Maps.transformValues(map, cache -> cache.getCached().get()),
-                                Objects::nonNull
-                        )));
+                .thenReturn(wrap);
     }
 
     private void updateValue(Cache cache, int version, Object value) {
@@ -323,5 +334,15 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     Mono<Void> notifyRemoveKey(String key) {
         return notify(CacheNotify.expires(id, Collections.singleton(key)));
+    }
+
+    @Override
+    public Mono<Void> refresh() {
+        return notify(CacheNotify.expiresAll(id));
+    }
+
+    @Override
+    public Mono<Void> refresh(Collection<String> keys) {
+        return notify(CacheNotify.expires(id, keys));
     }
 }
