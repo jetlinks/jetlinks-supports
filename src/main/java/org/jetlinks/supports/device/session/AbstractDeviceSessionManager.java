@@ -226,16 +226,22 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     protected final Mono<Boolean> syncConnectionInfo(DeviceOperator device, DeviceSession session) {
-        return device
-                .getConnectionServerId()
-                .filter(getCurrentServerId()::equals)
-                //serverId为空或者不是当前服务器，则同步连接信息
-                .switchIfEmpty(Mono.defer(() -> device
-                        .online(getCurrentServerId(),
-                                session.getClientAddress().map(String::valueOf).orElse(""),
-                                session.connectTime())
-                        .then(Mono.empty())))
+       return device
+                .online(getCurrentServerId(),
+                        session.getClientAddress().map(String::valueOf).orElse(""),
+                        -1)
                 .thenReturn(true);
+//
+//        return device
+//                .getConnectionServerId()
+//                .filter(getCurrentServerId()::equals)
+//                //serverId为空或者不是当前服务器，则同步连接信息
+//                .switchIfEmpty(Mono.defer(() -> device
+//                        .online(getCurrentServerId(),
+//                                session.getClientAddress().map(String::valueOf).orElse(""),
+//                                -1)
+//                        .then(Mono.empty())))
+//                .thenReturn(true);
 
     }
 
@@ -327,7 +333,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     .getOperator()
                     .online(getCurrentServerId(),
                             newSession.getClientAddress().map(InetSocketAddress::toString).orElse(null),
-                            old.connectTime())
+                            -1)
                     .then(handleSessionCompute(old, newSession));
         }
         return handleSessionCompute(old, newSession);
@@ -419,7 +425,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                                         .getClientAddress()
                                         .map(InetSocketAddress::toString)
                                         .orElse(null),
-                                session.connectTime())
+                                alive ? -1 : session.connectTime())
                         .then(fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.register, session, alive))))
                 .thenReturn(session);
     }
@@ -442,11 +448,15 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     protected Mono<Boolean> doInit(String deviceId) {
         DeviceSessionRef ref = localSessions.get(deviceId);
 
-        if (ref != null && ref.loaded != null && ref.loaded.getOperator() != null) {
-            return ref
-                    .loaded
-                    .getOperator()
-                    .online(getCurrentServerId(), null)
+        DeviceSession session;
+        DeviceOperator device;
+        if (ref != null && (session = ref.loaded) != null && (device = ref.loaded.getOperator()) != null) {
+            return device
+                    .online(getCurrentServerId(),
+                            session
+                                    .getClientAddress()
+                                    .map(String::valueOf).orElse(""),
+                            -1)
                     .thenReturn(true);
         }
         return Mono.empty();
