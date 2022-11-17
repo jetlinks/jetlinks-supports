@@ -249,4 +249,15 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .publish("/_sys/cluster_cache/" + id, key)
                 .then();
     }
+
+    @Override
+    public Mono<Void> refresh() {
+        caches.clear();
+        return notifyRemoveKey("__all");
+    }
+
+    @Override
+    public Mono<Void> refresh(Collection<String> keys) {
+        return refresh();
+    }
 }
