@@ -13,7 +13,6 @@ import org.jetlinks.core.event.Subscription;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
-import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
@@ -22,6 +21,7 @@ import java.util.function.Supplier;
 @Slf4j
 public class EventBusStorageManager implements ConfigStorageManager, Disposable {
 
+    static final String NOTIFY_TOPIC = "/_sys/cluster_cache";
     private static final AtomicReferenceFieldUpdater<EventBusStorageManager, Disposable>
             CLUSTER_SUBSCRIBER = AtomicReferenceFieldUpdater.newUpdater(
             EventBusStorageManager.class, Disposable.class, "disposable"
@@ -75,28 +75,29 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
 
     private Disposable subscribeCluster() {
         return eventBus
-                .subscribe(Subscription
-                                   .builder()
-                                   .subscriberId("event-bus-storage-listener")
-                                   .topics("/_sys/cluster_cache/*")
-                                   .justBroker()
-                                   .build()
-                )
-                .subscribe(payload -> {
-                    try {
-                        Map<String, String> vars = payload.getTopicVars("/_sys/cluster_cache/{name}");
-                        String key = payload.bodyToString();
-                        LocalCacheClusterConfigStorage storage = cache.get(vars.get("name"));
-                        if (storage != null) {
-                            log.trace("clear local cache :{}", vars);
-                            storage.clearLocalCache(key);
-                        } else {
-                            log.trace("ignore clear local cache :{}", vars);
-                        }
-                    } catch (Throwable error) {
-                        log.warn("clearn local cache error", error);
-                    }
-                });
+                .subscribe(
+                        Subscription
+                                .builder()
+                                .subscriberId("event-bus-storage-listener")
+                                .topics(NOTIFY_TOPIC)
+                                .justBroker()
+                                .build(),
+                        (topicPayload -> {
+                            try {
+                                CacheNotify cacheNotify = (CacheNotify) topicPayload.decode();
+                                LocalCacheClusterConfigStorage storage = cache.get(cacheNotify.getName());
+                                if (storage != null) {
+                                    log.trace("clear local cache :{}", cacheNotify);
+                                    storage.clearLocalCache(cacheNotify);
+                                } else {
+                                    log.trace("ignore clear local cache :{}", cacheNotify);
+                                }
+                            } catch (Throwable error) {
+                                log.warn("clear local cache error", error);
+                            }
+                            return Mono.empty();
+                        })
+                );
     }
 
     @Override
@@ -110,7 +111,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
     @SneakyThrows
     public Mono<ConfigStorage> getStorage(String id) {
         if (disposable == null) {
-            synchronized (this){
+            synchronized (this) {
                 Disposable disp = subscribeCluster();
                 if (!CLUSTER_SUBSCRIBER.compareAndSet(this, null, disp)) {
                     disp.dispose();
@@ -119,4 +120,5 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
         }
         return Mono.fromSupplier(() -> cache.computeIfAbsent(id, storageBuilder));
     }
+
 }
