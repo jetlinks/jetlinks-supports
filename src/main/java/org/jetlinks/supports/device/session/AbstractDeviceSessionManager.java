@@ -226,16 +226,22 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     protected final Mono<Boolean> syncConnectionInfo(DeviceOperator device, DeviceSession session) {
-        return device
-                .getConnectionServerId()
-                .filter(getCurrentServerId()::equals)
-                //serverId为空或者不是当前服务器，则同步连接信息
-                .switchIfEmpty(Mono.defer(() -> device
-                        .online(getCurrentServerId(),
-                                session.getClientAddress().map(String::valueOf).orElse(""),
-                                -1)
-                        .then(Mono.empty())))
+       return device
+                .online(getCurrentServerId(),
+                        session.getClientAddress().map(String::valueOf).orElse(""),
+                        -1)
                 .thenReturn(true);
+//
+//        return device
+//                .getConnectionServerId()
+//                .filter(getCurrentServerId()::equals)
+//                //serverId为空或者不是当前服务器，则同步连接信息
+//                .switchIfEmpty(Mono.defer(() -> device
+//                        .online(getCurrentServerId(),
+//                                session.getClientAddress().map(String::valueOf).orElse(""),
+//                                -1)
+//                        .then(Mono.empty())))
+//                .thenReturn(true);
 
     }
 
