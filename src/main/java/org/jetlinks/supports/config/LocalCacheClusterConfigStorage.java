@@ -46,13 +46,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     public static final Value NULL = Value.simple(null);
 
-    class Cache {
+    public class Cache {
         final String key;
         long t;
         volatile int version;
-        volatile Mono<Value> ref;
         volatile Value cached;
 
+        volatile Mono<Value> ref;
         Sinks.One<Value> sink;
         volatile Disposable loader;
 
