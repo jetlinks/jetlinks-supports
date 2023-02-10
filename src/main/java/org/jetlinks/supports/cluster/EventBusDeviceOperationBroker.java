@@ -3,8 +3,10 @@ package org.jetlinks.supports.cluster;
 import com.google.common.cache.CacheBuilder;
 import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.core.cluster.ServerNode;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.codec.Codecs;
+import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceStateInfo;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
@@ -30,10 +32,12 @@ import static com.google.common.cache.RemovalCause.EXPIRED;
 @Slf4j
 public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker implements Disposable {
 
+    //消息编解码器
     private static final Codec<Message> messageCodec = Codecs.lookup(Message.class);
 
     private final String serverId;
 
+    //基于订阅发布的事件总线,可用于事件传递,消息转发等.
     private final EventBus eventBus;
 
     private final Disposable.Composite disposable = Disposables.composite();
@@ -109,6 +113,14 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
     }
 
+    /**
+     * 获取指定服务里设备状态
+     *
+     * @param deviceGatewayServerId 设备所在服务ID {@link ServerNode#getId()}
+     * @param deviceIdList          设备列表
+     * @return 设备状态
+     * @see DeviceOperator#getConnectionServerId()
+     */
     @Override
     public Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId,
                                                 Collection<String> deviceIdList) {
@@ -142,6 +154,12 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
         });
     }
 
+    /**
+     * 监听获取设备真实状态请求,并响应状态结果
+     *
+     * @param serverId    服务ID,在集群时,不同的节点serverId不同
+     * @param stateMapper 状态检查器
+     */
     @Override
     public Disposable handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper) {
         Subscription subscription = Subscription
@@ -176,6 +194,13 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                 .then();
     }
 
+    /**
+     * 发送设备消息到指定到服务
+     *
+     * @param deviceGatewayServerId 设备所在服务ID {@link ServerNode#getId()}
+     * @return 有多少服务收到了此消息
+     * @see DeviceOperator#getConnectionServerId()
+     */
     @Override
     public Mono<Integer> send(String deviceGatewayServerId, Publisher<? extends Message> message) {
         return eventBus
@@ -186,6 +211,12 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                 .map(Long::intValue);
     }
 
+    /**
+     * 发送广播消息
+     *
+     * @param message 广播消息
+     * @return 有多少服务收到了此消息
+     */
     @Override
     public Mono<Integer> send(Publisher<? extends BroadcastMessage> message) {
         return eventBus
@@ -193,6 +224,12 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
                 .map(Long::intValue);
     }
 
+    /**
+     * 监听发往设备的指令
+     *
+     * @param serverId 服务ID,在集群时,不同的节点serverId不同 {@link ServerNode#getId()}
+     * @return 发网设备的消息指令流
+     */
     @Override
     public Flux<Message> handleSendToDeviceMessage(String serverId) {
         Subscription subscription = Subscription
