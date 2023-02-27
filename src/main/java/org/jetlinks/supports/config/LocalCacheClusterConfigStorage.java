@@ -1,7 +1,6 @@
 package org.jetlinks.supports.config;
 
 import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
 import lombok.AllArgsConstructor;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.Value;
@@ -12,11 +11,9 @@ import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.utils.Reactors;
 import org.springframework.util.CollectionUtils;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
@@ -112,27 +109,35 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             sink = Sinks.one();
             CACHE_REF.set(this, sink.asMono());
 
-            loader = clusterCache
-                    .get(key)
-                    .switchIfEmpty(Mono.fromRunnable(() -> {
-                        if (version == this.version) {
-                            this.setValue(null);
-                        } else {
-                            this.clear();
-                        }
-                    }))
-                    .subscribe(
-                            value -> {
-                                if (this.version == version) {
-                                    this.setValue(value);
+            Disposable[] disposables = new Disposable[1];
+
+            CACHE_LOADER.set(
+                    this,
+                    disposables[0] = clusterCache
+                            .get(key)
+                            .switchIfEmpty(Mono.fromRunnable(() -> {
+                                if (version == this.version) {
+                                    this.setValue(null);
                                 } else {
                                     this.clear();
                                 }
-                            },
-                            err -> {
-                                this.clear();
-                                sink.tryEmitError(err);
-                            });
+                                CACHE_LOADER.compareAndSet(this, disposables[0], null);
+                            }))
+                            .subscribe(
+                                    value -> {
+                                        if (this.version == version) {
+                                            this.setValue(value);
+                                        } else {
+                                            this.clear();
+                                        }
+                                        CACHE_LOADER.compareAndSet(this, disposables[0], null);
+                                    },
+                                    err -> {
+                                        this.clear();
+                                        sink.tryEmitError(err);
+                                        CACHE_LOADER.compareAndSet(this, disposables[0], null);
+                                    })
+            );
         }
 
         void clear() {
