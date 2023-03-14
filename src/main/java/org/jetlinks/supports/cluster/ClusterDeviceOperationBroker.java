@@ -127,7 +127,9 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
                 .from(message)
                 .flatMap(msg -> {
                     msg.addHeader(Headers.sendFrom, sessionManager.getCurrentServerId());
-                    if (msg instanceof RepayableDeviceMessage) {
+                    if (msg instanceof RepayableDeviceMessage && !msg
+                         .getHeader(Headers.sendAndForget)
+                         .orElse(false)) {
                         String key = getAwaitReplyKey(((RepayableDeviceMessage<?>) msg));
                         awaits.put(key, ((RepayableDeviceMessage<?>) msg));
                     }
@@ -152,7 +154,9 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
     }
 
     private Mono<Void> handleSendToDevice(Message message) {
-        if (message instanceof RepayableDeviceMessage) {
+        if (message instanceof RepayableDeviceMessage && !message
+                .getHeader(Headers.sendAndForget)
+                .orElse(false)) {
             RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
             awaits.put(getAwaitReplyKey(msg), msg);
         }
