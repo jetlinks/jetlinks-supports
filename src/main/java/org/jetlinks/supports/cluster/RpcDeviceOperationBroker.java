@@ -100,7 +100,9 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
                 .from(message)
                 .flatMap(msg -> {
                     msg.addHeader(Headers.sendFrom, rpcManager.currentServerId());
-                    if (msg instanceof RepayableDeviceMessage) {
+                    if (msg instanceof RepayableDeviceMessage && !msg
+                            .getHeader(Headers.sendAndForget)
+                            .orElse(false)) {
                         String key = getAwaitReplyKey(((RepayableDeviceMessage<?>) msg));
                         awaits.putIfAbsent(key, ((RepayableDeviceMessage<?>) msg));
                     }
@@ -113,7 +115,9 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     }
 
     private Mono<Void> handleSendToDevice(Message message) {
-        if (message instanceof RepayableDeviceMessage) {
+        if (message instanceof RepayableDeviceMessage && !message
+                            .getHeader(Headers.sendAndForget)
+                            .orElse(false)) {
             RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
             awaits.put(getAwaitReplyKey(msg), msg);
         }
