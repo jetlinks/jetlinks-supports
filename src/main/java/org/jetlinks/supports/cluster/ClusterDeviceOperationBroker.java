@@ -127,10 +127,7 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
                 .from(message)
                 .flatMap(msg -> {
                     msg.addHeader(Headers.sendFrom, sessionManager.getCurrentServerId());
-                    if (msg instanceof RepayableDeviceMessage) {
-                        String key = getAwaitReplyKey(((RepayableDeviceMessage<?>) msg));
-                        awaits.put(key, ((RepayableDeviceMessage<?>) msg));
-                    }
+                    addAwaitReplyKey(msg);
                     return cluster
                             .send(member, io.scalecube.cluster.transport.api.Message
                                     .builder()
@@ -151,11 +148,8 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
         return sendToDevice.asFlux();
     }
 
-    private Mono<Void> handleSendToDevice(Message message) {
-        if (message instanceof RepayableDeviceMessage) {
-            RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
-            awaits.put(getAwaitReplyKey(msg), msg);
-        }
+    private Mono<Void> handleSendToDevice(Message message) {  
+        addAwaitReplyKey(message);
         if (sendToDevice.currentSubscriberCount() == 0) {
             log.warn("no handler for message {}", message);
             return doReply(createReply(message).error(ErrorCode.SYSTEM_ERROR));
@@ -166,6 +160,15 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
             return doReply(createReply(message).error(err));
         }
         return Mono.empty();
+    }
+    
+   private void addAwaitReplyKey(Message message){
+       if (message instanceof RepayableDeviceMessage && !message
+                .getHeader(Headers.sendAndForget)
+                .orElse(false)) {  
+           RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);      
+           awaits.put(getAwaitReplyKey(msg), msg);
+        }
     }
 
     private DeviceMessageReply createReply(Message message) {
