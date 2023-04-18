@@ -125,9 +125,9 @@ public class RedisHaManager implements HaManager {
                            allNode.put(serverNode.getId(), serverNode);
                        }
                        electionLeader();
-                       Flux.interval(Duration.ZERO, Duration.ofSeconds(5))
-                           .doOnNext(i -> this.checkAlive())
-                           .subscribe();
+//                       Flux.interval(Duration.ZERO, Duration.ofSeconds(5))
+//                           .doOnNext(i -> this.checkAlive())
+//                           .subscribe();
                    })
                    .block();
 

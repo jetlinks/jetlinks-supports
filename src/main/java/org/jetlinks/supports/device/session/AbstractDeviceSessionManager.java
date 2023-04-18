@@ -19,6 +19,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.context.Context;
 import reactor.util.context.ContextView;
 
 import javax.annotation.Nonnull;
@@ -226,7 +227,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     protected final Mono<Boolean> syncConnectionInfo(DeviceOperator device, DeviceSession session) {
-       return device
+        return device
                 .online(getCurrentServerId(),
                         session.getClientAddress().map(String::valueOf).orElse(""),
                         -1)
@@ -566,7 +567,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             this.manager = manager;
             this.loaded = ref;
             this.await = Sinks.one();
-            this.await.tryEmitValue(ref);
+            this.await.emitValue(ref, Reactors.emitFailureHandler());
         }
 
         public void update(Function<Mono<DeviceSession>, Mono<DeviceSession>> updater) {
@@ -581,7 +582,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             Sinks.One<DeviceSession> old = AWAIT.getAndSet(this, Sinks.one());
 
             if (old != null) {
-                old.tryEmitEmpty();
+                old.emitEmpty(Reactors.emitFailureHandler());
             }
 
             loader = ref
@@ -607,7 +608,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             DeviceSession old = this.loaded;
             this.loaded = session;
 
-            await().tryEmitValue(session);
+            await().emitValue(session, Reactors.emitFailureHandler());
 
             handleParent(parent -> parent.children().add(session.getDeviceId()));
 
@@ -688,7 +689,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 //已经加载了会话，但是初始化失败了?
                 this.loaded.close();
             }
-            await().tryEmitError(err);
+            await().emitError(err, Reactors.emitFailureHandler());
             manager.localSessions.remove(deviceId, this);
         }
 
@@ -696,7 +697,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             if (this.loaded != null) {
                 this.loaded.close();
             }
-            await().tryEmitEmpty();
+            await().emitEmpty(Reactors.emitFailureHandler());
             manager.localSessions.remove(deviceId, this);
         }
 
@@ -706,8 +707,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
             if (loader != null) {
                 disposable = loader
-                        .contextWrite(contextView)
-                        .subscribe();
+                        .subscribe(null,
+                                   null,
+                                   null,
+                                   Context.of(contextView));
             }
         }
 

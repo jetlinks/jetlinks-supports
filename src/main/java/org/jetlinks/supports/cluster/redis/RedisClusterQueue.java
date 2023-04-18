@@ -21,19 +21,25 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.*;
 
 @SuppressWarnings("all")
 @Slf4j
 public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> {
 
+    private static final AtomicReferenceFieldUpdater<RedisClusterQueue, Boolean> POLLING =
+            AtomicReferenceFieldUpdater.newUpdater(RedisClusterQueue.class, Boolean.class, "polling");
+
+    private static final AtomicIntegerFieldUpdater<RedisClusterQueue> ROUND_ROBIN =
+            AtomicIntegerFieldUpdater.newUpdater(RedisClusterQueue.class, "roundRobin");
+
     private final String id;
 
     protected final ReactiveRedisOperations<String, T> operations;
 
-    private AtomicBoolean polling = new AtomicBoolean(false);
+    private volatile boolean polling = false;
+
+    private volatile int roundRobin = 0;
 
     private int maxBatchSize = 32;
 
@@ -45,7 +51,9 @@ public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> 
 
     private Mod mod = Mod.FIFO;
 
-    private List<FluxSink<T>> subscribers = new CopyOnWriteArrayList<>();
+    long lastEmptyTime = 0;
+
+    private final List<FluxSink<T>> subscribers = new CopyOnWriteArrayList<>();
 
     @Override
     public void setLocalConsumerPercent(float localConsumerPercent) {
@@ -100,8 +108,6 @@ public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> 
         doPoll(lastRequestSize);
     }
 
-    AtomicInteger lastPush = new AtomicInteger(0);
-
     private boolean push(Iterable<T> data) {
         for (T datum : data) {
             if (!push(datum)) {
@@ -120,10 +126,11 @@ public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> 
             subscribers.get(0).next(data);
             return true;
         }
-        if (lastPush.incrementAndGet() >= size) {
-            lastPush.set(0);
+        int index = ROUND_ROBIN.incrementAndGet(this);
+        if (index >= size) {
+            ROUND_ROBIN.set(this, index = 0);
         }
-        subscribers.get(lastPush.get()).next(data);
+        subscribers.get(index).next(data);
         return true;
     }
 
@@ -132,7 +139,7 @@ public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> 
             return;
         }
         visit();
-        if (polling.compareAndSet(false, true)) {
+        if (POLLING.compareAndSet(this, false, true)) {
 
             AtomicLong total = new AtomicLong(size);
             long pollSize = Math.min(total.get(), maxBatchSize);
@@ -150,12 +157,14 @@ public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> 
                         }
                     })
                     .count()
-                    .doFinally((s) -> polling.set(false))
+                    .doFinally((s) -> POLLING.set(this, false))
                     .subscribe(r -> {
                         if (r > 0 && total.addAndGet(-r) > 0) { //继续poll
-                            polling.set(false);
+                            POLLING.set(this, false);
                             doPoll(total.get());
                             log.trace("poll datas[{}] from redis [{}] ", r, id);
+                        } else {
+                            lastEmptyTime = System.currentTimeMillis();
                         }
                     });
         }

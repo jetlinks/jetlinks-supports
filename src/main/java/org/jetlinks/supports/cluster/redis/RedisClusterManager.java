@@ -86,6 +86,7 @@ public class RedisClusterManager implements ClusterManager {
                                 return Flux
                                         .fromIterable(queues.entrySet())
                                         .doOnNext(queue -> {
+
                                             queue.getValue().tryPoll();
                                             //移除太久未使用的队列,释放内存
                                             if (!queue.getValue().hasLocalConsumer()

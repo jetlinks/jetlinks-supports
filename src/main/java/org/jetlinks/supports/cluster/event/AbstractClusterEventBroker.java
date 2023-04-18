@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
+@Deprecated
 public abstract class AbstractClusterEventBroker implements EventBroker {
 
     protected final ReactiveRedisOperations<String, byte[]> redis;
