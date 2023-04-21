@@ -19,6 +19,7 @@ import org.jetlinks.core.server.session.LostDeviceSession;
 import org.jetlinks.core.trace.DeviceTracer;
 import org.jetlinks.core.trace.TraceHolder;
 import org.reactivestreams.Publisher;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.context.Context;
@@ -44,6 +45,8 @@ public class ClusterSendToDeviceMessageHandler {
 
     private final DecodedClientMessageHandler decodedClientMessageHandler;
 
+    private final int concurrency = Integer.getInteger("jetlinks.device.message.send.concurrency", 10240);
+
     public ClusterSendToDeviceMessageHandler(DeviceSessionManager sessionManager,
                                              MessageHandler handler,
                                              DeviceRegistry registry,
@@ -59,22 +62,34 @@ public class ClusterSendToDeviceMessageHandler {
     private void init() {
         handler
                 .handleSendToDeviceMessage(sessionManager.getCurrentServerId())
-                .flatMap(msg -> handleMessage(msg)
-                                 .onErrorResume(err -> {
-                                     log.error("handle send to device message error {}", msg, err);
-                                     return Mono.empty();
-                                 }),
-                         10240)
+                .onBackpressureDrop(msg -> {
+
+                    @SuppressWarnings("all")
+                    Disposable disposable = this
+                            .doReply((DeviceOperator) null, createReply(msg).error(ErrorCode.SYSTEM_BUSY))
+                            .subscribe();
+
+                })
+                .flatMap(msg -> this
+                        .handleMessage(msg)
+                        .onErrorResume(err -> {
+                            log.error("handle send to device message error {}", msg, err);
+                            return Mono.empty();
+                        }),
+                         concurrency)
                 .subscribe();
     }
 
     private DeviceMessageReply createReply(Message message) {
+        DeviceMessageReply reply;
         if (message instanceof RepayableDeviceMessage) {
-            return ((RepayableDeviceMessage<?>) message).newReply();
+            reply = ((RepayableDeviceMessage<?>) message).newReply();
+        } else {
+            reply = new CommonDeviceMessageReply<>()
+                    .deviceId(((DeviceMessage) message).getDeviceId())
+                    .messageId(message.getMessageId());
         }
-        return new CommonDeviceMessageReply<>()
-                .deviceId(((DeviceMessage) message).getDeviceId())
-                .messageId(message.getMessageId());
+        return TraceHolder.copyContext(message.getHeaders(), reply, Message::addHeader);
     }
 
     private Mono<Void> handleMessage(Message msg) {
