@@ -89,7 +89,7 @@ public class ClusterSendToDeviceMessageHandler {
                     .deviceId(((DeviceMessage) message).getDeviceId())
                     .messageId(message.getMessageId());
         }
-        return TraceHolder.copyContext(message.getHeaders(), reply, Message::addHeader);
+        return TraceHolder.copyContext(message.getHeaders(), reply, Message::addHeaderIfAbsent);
     }
 
     private Mono<Void> handleMessage(Message msg) {
