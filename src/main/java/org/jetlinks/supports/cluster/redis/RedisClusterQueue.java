@@ -37,7 +37,7 @@ public class RedisClusterQueue<T> extends VisitCount implements ClusterQueue<T> 
 
     protected final ReactiveRedisOperations<String, T> operations;
 
-    private volatile boolean polling = false;
+    private volatile Boolean polling = false;
 
     private volatile int roundRobin = 0;
 
