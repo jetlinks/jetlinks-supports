@@ -135,7 +135,7 @@ public class ClusterSendToDeviceMessageHandler {
                 .flatMap(protocol -> protocol.getMessageCodec(context.session.getTransport()))
                 .flatMapMany(codec -> codec.encode(context))
                 .as(create(DeviceTracer.SpanName.encode(device.getDeviceId()),
-                           (span, msg) -> span.setAttribute(DeviceTracer.SpanKey.message, msg.toString())))
+                           (span, msg) -> span.setAttributeLazy(DeviceTracer.SpanKey.message, msg::toString)))
                 //发送给会话
                 .map(msg -> context.session.send(msg).then())
                 //协议包返回了empty,可能是不支持这类消息
