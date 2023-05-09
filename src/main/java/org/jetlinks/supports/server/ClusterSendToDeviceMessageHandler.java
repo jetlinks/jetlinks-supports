@@ -71,11 +71,11 @@ public class ClusterSendToDeviceMessageHandler {
 
                 })
                 .flatMap(msg -> this
-                        .handleMessage(msg)
-                        .onErrorResume(err -> {
-                            log.error("handle send to device message error {}", msg, err);
-                            return Mono.empty();
-                        }),
+                                 .handleMessage(msg)
+                                 .onErrorResume(err -> {
+                                     log.error("handle send to device message error {}", msg, err);
+                                     return Mono.empty();
+                                 }),
                          concurrency)
                 .subscribe();
     }
@@ -109,7 +109,9 @@ public class ClusterSendToDeviceMessageHandler {
                 //处理会话不存在的消息
                 .defaultIfEmpty(Mono.defer(() -> sendToUnknownSession(message)))
                 .flatMap(Function.identity())
-                .contextWrite(TraceHolder.readToContext(Context.empty(), message.getHeaders()));
+                .contextWrite(ctx -> TraceHolder
+                        .readToContext(ctx, message.getHeaders())
+                        .put(DeviceMessage.class, message));
     }
 
     @SuppressWarnings("all")
@@ -125,6 +127,13 @@ public class ClusterSendToDeviceMessageHandler {
         }
 
         if (session.isWrapFrom(LostDeviceSession.class)) {
+            if (message instanceof DisconnectDeviceMessage) {
+                return sessionManager
+                        .remove(session.getDeviceId(), false)
+                        .then(
+                                doReply(device, ((DisconnectDeviceMessage) message).newReply().success())
+                        );
+            }
             return retryResume(device, message);
         }
 
