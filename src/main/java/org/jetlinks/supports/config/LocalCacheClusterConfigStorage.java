@@ -63,8 +63,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
 
         Mono<Value> getRef() {
+            @SuppressWarnings("unchecked")
+            Mono<Value> ref = CACHE_REF.get(this);
             if (isExpired() || ref == null) {
-                reload();
+                return reload();
             }
             return ref;
         }
@@ -101,13 +103,14 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             dispose();
         }
 
-        synchronized void reload() {
+        synchronized Mono<Value> reload() {
             cached = null;
             dispose();
 
             int version = this.version;
             sink = Sinks.one();
-            CACHE_REF.set(this, sink.asMono());
+            Mono<Value> ref = sink.asMono();
+            CACHE_REF.set(this, ref);
 
             Disposable[] disposables = new Disposable[1];
 
@@ -138,6 +141,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                                         CACHE_LOADER.compareAndSet(this, disposables[0], null);
                                     })
             );
+            return ref;
         }
 
         void clear() {
@@ -182,17 +186,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return getOrCreateCache(key).getRef();
     }
 
-    Values wrapCache(Collection<String> keys) {
-        return Values
-                .of(Maps.filterEntries(
-                        Maps.transformValues(caches, Cache::getCachedValue),
-                        e -> e.getValue() != null && keys.contains(e.getKey())
-                ));
-    }
-
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
         int hits = 0;
+        Map<String, Object> loaded = Maps.newHashMapWithExpectedSize(keys.size());
         //获取一级缓存
         for (String key : keys) {
             Cache local = getOrCreateCache(key);
@@ -200,30 +197,34 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (cached != null) {
                 //命中一级缓存
                 hits++;
+                loaded.put(key, cached.get());
             }
         }
+        Values wrap = Values.of(Maps.filterValues(loaded, Objects::nonNull));
         //全部来自一级缓存则直接返回
         if (hits == keys.size()) {
-            return Mono.just(wrapCache(keys));
+            return Mono.just(wrap);
         }
-        Values wrap = wrapCache(keys);
+
         //需要从二级缓存中加载的配置
         Set<String> needLoadKeys = new HashSet<>(keys);
-        needLoadKeys.removeAll(wrap.getAllValues().keySet());
-
+        needLoadKeys.removeAll(loaded.keySet());
         if (needLoadKeys.isEmpty()) {
             return Mono.just(wrap);
         }
 
         //当前版本信息
-        Map<String, Integer> versions = Maps.newHashMapWithExpectedSize(caches.size());
-        for (Map.Entry<String, Cache> entry : caches.entrySet()) {
-            versions.put(entry.getKey(), entry.getValue().version);
+        Map<String, Integer> versions = Maps.newHashMapWithExpectedSize(needLoadKeys.size());
+        for (String needLoadKey : needLoadKeys) {
+            Cache cache = caches.get(needLoadKey);
+            if (cache != null) {
+                versions.put(needLoadKey, cache.version);
+            }
         }
 
         return clusterCache
                 .get(needLoadKeys)
-                .<Map<String, Cache>>reduce(new HashMap<>(), (map, entry) -> {
+                .reduce(loaded, (map, entry) -> {
                     String key = entry.getKey();
                     Object value = entry.getValue();
                     //加载到一级缓存中
@@ -231,7 +232,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     int version = versions.getOrDefault(key, cache.version);
                     updateValue(cache, version, value);
                     if (null != value) {
-                        map.put(key, cache);
+                        map.put(key, value);
                     }
                     return map;
                 })
