@@ -122,7 +122,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
                     .orElse(Collections.emptyMap());
         }
         if (functions == null) {
-            this.functions = new HashMap<>();
+            this.functions = new LinkedHashMap<>();
         }
         return new ArrayList<>(functions.values());
     }
@@ -142,7 +142,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
                     .orElse(Collections.emptyMap());
         }
         if (tags == null) {
-            this.tags = new HashMap<>();
+            this.tags = new LinkedHashMap<>();
         }
         return new ArrayList<>(tags.values());
     }
@@ -162,7 +162,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
                     .orElse(Collections.emptyMap());
         }
         if (events == null) {
-            this.events = new HashMap<>();
+            this.events = new LinkedHashMap<>();
         }
         return new ArrayList<>(events.values());
     }
@@ -180,7 +180,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
         if (properties == null) {
             getProperties();
         }
-        return properties.get(id);
+        return properties == null ? null : properties.get(id);
     }
 
     @Override
@@ -188,7 +188,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
         if (functions == null) {
             getFunctions();
         }
-        return functions.get(id);
+        return functions == null ? null : functions.get(id);
     }
 
     @Override
@@ -196,19 +196,14 @@ public class DefaultThingsMetadata implements ThingMetadata {
         if (tags == null) {
             getTags();
         }
-        return tags.get(id);
+        return tags == null ? null : tags.get(id);
     }
 
     @Override
     public PropertyMetadata findProperty(Predicate<PropertyMetadata> predicate) {
-        if (this.properties == null) {
-            getProperties();
-        }
-
-        for (Map.Entry<String, PropertyMetadata> value : this.properties.entrySet()) {
-            PropertyMetadata val = value.getValue();
-            if (predicate.test(val)) {
-                return val;
+        for (PropertyMetadata metadata : getProperties()) {
+            if (predicate.test(metadata)) {
+                return metadata;
             }
         }
         return null;
