@@ -28,6 +28,7 @@ public class JetLinksDataTypeCodecs {
         register(new JetLinksFileCodec());
         register(new JetLinksGeoShapeCodec());
         register(new JetLinksUserCodec());
+        register(new JetLinksShortCodec());
     }
 
     public static void register(DataTypeCodec<? extends DataType> codec) {
