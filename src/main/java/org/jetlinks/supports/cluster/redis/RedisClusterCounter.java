@@ -24,10 +24,10 @@ public class RedisClusterCounter implements ClusterCounter {
     @Override
     public Mono<Double> get() {
         return redis.opsForValue()
-                .get(redisKey)
-                .map(BigDecimal::new)
-                .map(Number::doubleValue)
-                .defaultIfEmpty(0D);
+                    .get(redisKey)
+                    .map(BigDecimal::new)
+                    .map(Number::doubleValue)
+                    .defaultIfEmpty(0D);
     }
 
     @Override
@@ -51,5 +51,14 @@ public class RedisClusterCounter implements ClusterCounter {
                 .map(BigDecimal::new)
                 .map(Number::doubleValue)
                 .defaultIfEmpty(0D);
+    }
+
+    @Override
+    public Mono<Double> remove() {
+        return get()
+                .flatMap(val -> redis
+                        .delete(redisKey)
+                        .thenReturn(val))
+                ;
     }
 }
