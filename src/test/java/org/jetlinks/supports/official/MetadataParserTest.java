@@ -11,6 +11,8 @@ import org.jetlinks.core.metadata.types.*;
 import org.junit.Test;
 import org.springframework.core.ResolvableType;
 
+import java.util.List;
+
 import static org.junit.Assert.assertTrue;
 
 public class MetadataParserTest {
@@ -81,6 +83,9 @@ public class MetadataParserTest {
 
         @Schema(description = "递归")
         private TestClazz nest;
+
+        @Schema(description = "递归List")
+        private List<Entity> nestList;
     }
 
     @Getter

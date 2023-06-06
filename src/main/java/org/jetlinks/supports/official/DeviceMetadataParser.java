@@ -39,7 +39,7 @@ public class DeviceMetadataParser {
         JetLinksPropertyMetadata metadata = new JetLinksPropertyMetadata();
         metadata.setId(id);
         metadata.setName(name);
-        metadata.setDataType(withType0(owner, type));
+        metadata.setDataType(withType0(field, type));
 
         return metadata;
 
@@ -52,12 +52,12 @@ public class DeviceMetadataParser {
         }
         if (List.class.isAssignableFrom(clazz)) {
             ArrayType arrayType = new ArrayType();
-            arrayType.setElementType(withType0(null, type.getGeneric(0)));
+            arrayType.setElementType(withType0(owner, type.getGeneric(0)));
             return arrayType;
         }
         if (clazz.isArray()) {
             ArrayType arrayType = new ArrayType();
-            arrayType.setElementType(withType0(null, ResolvableType.forType(clazz.getComponentType())));
+            arrayType.setElementType(withType0(owner, ResolvableType.forType(clazz.getComponentType())));
             return arrayType;
         }
         if (Map.class.isAssignableFrom(clazz)) {
