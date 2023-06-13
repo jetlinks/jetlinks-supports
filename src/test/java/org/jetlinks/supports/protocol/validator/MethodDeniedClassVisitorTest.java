@@ -2,19 +2,15 @@ package org.jetlinks.supports.protocol.validator;
 
 import lombok.SneakyThrows;
 import org.hswebframework.web.exception.I18nSupportException;
-import org.hswebframework.web.i18n.LocaleUtils;
 import org.hswebframework.web.i18n.MessageSourceInitializer;
 import org.junit.Test;
-import org.springframework.asm.ClassReader;
 import org.springframework.context.support.ResourceBundleMessageSource;
 import reactor.core.publisher.Mono;
 
-import java.io.FileInputStream;
 import java.time.Duration;
-import java.util.concurrent.ExecutionException;
 
-import static java.lang.System.out;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class MethodDeniedClassVisitorTest {
 
@@ -33,9 +29,7 @@ public class MethodDeniedClassVisitorTest {
 
         try {
             visitor.validate(TestBlock.class.getName(),
-                             new FileInputStream(
-                                     "/Users/zhouhao/IdeaProjects/jetlinks-v2/jetlinks-cloud/dev/jetlinks-official-protocol/target/classes/org/jetlinks/protocol/official/JetLinksCoapDTLSDeviceMessageCodec.class"
-                             ));
+                             TestBlock.class.getResourceAsStream("/" + TestBlock.class.getName().replace(".", "/") + ".class"));
             fail();
         } catch (I18nSupportException e) {
            // out.println(e.getLocalizedMessage());
@@ -45,11 +39,15 @@ public class MethodDeniedClassVisitorTest {
 
     }
 
+    static Mono<Integer> getData(){
+        return Mono.just(1);
+    }
+
     static class TestBlock {
         public void test() {
             Mono.delay(Duration.ofSeconds(1))
                 .doOnNext((e) -> {
-                    Mono.just(1).block();
+                   getData().block();
                 })
                 .subscribe();
         }
