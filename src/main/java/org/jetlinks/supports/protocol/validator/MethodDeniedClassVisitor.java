@@ -6,19 +6,45 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.asm.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.MonoProcessor;
 
 import java.io.InputStream;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 public class MethodDeniedClassVisitor extends ClassVisitor {
 
-    private final Set<String> methods = new HashSet<>();
+    private final Set<String> denied = new HashSet<>();
 
     static final FastThreadLocal<String> clazzName = new FastThreadLocal<>();
+
+    private final static MethodDeniedClassVisitor GLOBAL = new MethodDeniedClassVisitor();
+
+    static {
+        GLOBAL.addDenied(MethodDeniedClassVisitor.class, "*");
+
+        GLOBAL.addDenied(Flux.class, "blockFirst");
+        GLOBAL.addDenied(Flux.class, "blockLast");
+        GLOBAL.addDenied(Flux.class, "toIterable");
+        GLOBAL.addDenied(Flux.class, "toStream");
+
+        GLOBAL.addDenied(Mono.class, "block");
+        GLOBAL.addDenied(Mono.class, "blockOptional");
+        GLOBAL.addDenied(Mono.class, "toFuture");
+
+        GLOBAL.addDenied("reactor.core.publisher.MonoProcessor.block");
+        GLOBAL.addDenied("reactor.core.publisher.MonoProcessor.blockOptional");
+
+        GLOBAL.addDenied(System.class, "exit");
+        GLOBAL.addDenied(Runtime.class, "exit");
+        GLOBAL.addDenied(Runtime.class, "exec");
+        GLOBAL.addDenied(Runtime.class, "halt");
+    }
+
+    public static MethodDeniedClassVisitor global() {
+        return GLOBAL;
+    }
+
 
     @SneakyThrows
     public void validate(String className, InputStream classStream) {
@@ -31,32 +57,24 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
         }
     }
 
-
     public void addDefaultDenied() {
-        addDenied(Flux.class, "blockFirst");
-        addDenied(Flux.class, "blockLast");
-        addDenied(Mono.class, "block");
-        addDenied(Mono.class, "blockOptional");
+        denied.addAll(GLOBAL.denied);
+    }
 
-        addDenied("reactor/core/publisher/MonoProcessor.block");
-        addDenied("reactor/core/publisher/MonoProcessor.blockOptional");
-
-        addDenied(CompletableFuture.class, "get");
-        addDenied(System.class, "exit");
-        addDenied(Runtime.class, "exit");
-        addDenied(Runtime.class, "exec");
-        addDenied(Runtime.class, "halt");
-
-       // addDenied(Thread.class, "sleep");
-       // addDenied(Thread.class, "interrupt");
+    public void removeDenied(String method) {
+        denied.remove(method);
     }
 
     public void addDenied(String method) {
-        methods.add(method);
+        denied.add(method);
+    }
+
+    public void removeDenied(Class<?> clazz, String method) {
+        removeDenied(clazz.getName() + "." + method);
     }
 
     public void addDenied(Class<?> clazz, String method) {
-        addDenied(clazz.getName().replace(".", "/") + "." + method);
+        addDenied(clazz.getName() + "." + method);
     }
 
     public MethodDeniedClassVisitor() {
@@ -72,8 +90,9 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
 
             @Override
             public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean isInterface) {
-                if (methods.contains(owner + "." + name) ||
-                        methods.contains(owner + ".*")) {
+                owner = owner.replace("/", ".");
+                if (denied.contains(owner + "." + name) ||
+                        denied.contains(owner + ".*")) {
                     throw new MethodInvokeDeniedException(
                             clazzName.get(),
                             methodName,

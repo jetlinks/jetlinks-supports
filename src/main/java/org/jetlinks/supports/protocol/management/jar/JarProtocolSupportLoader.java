@@ -37,10 +37,10 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
 
     private final Map<String, ProtocolSupportProvider> loaded = new ConcurrentHashMap<>();
 
-    protected final MethodDeniedClassVisitor visitor = new MethodDeniedClassVisitor();
+    protected final MethodDeniedClassVisitor visitor = MethodDeniedClassVisitor.global();
 
     public JarProtocolSupportLoader() {
-        visitor.addDefaultDenied();
+
     }
 
     @Override

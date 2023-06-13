@@ -24,14 +24,16 @@ public class MethodDeniedClassVisitorTest {
         MessageSourceInitializer.init(
                 source
         );
-        MethodDeniedClassVisitor visitor = new MethodDeniedClassVisitor();
-        visitor.addDefaultDenied();
 
         try {
-            visitor.validate(
-                    TestBlock.class.getName(),
-                    TestBlock.class.getResourceAsStream("/" + TestBlock.class.getName().replace(".", "/") + ".class")
-            );
+            MethodDeniedClassVisitor
+                    .global()
+                    .validate(
+                            TestBlock.class.getName(),
+                            TestBlock.class.getResourceAsStream("/" + TestBlock.class
+                                    .getName()
+                                    .replace(".", "/") + ".class")
+                    );
             fail();
         } catch (I18nSupportException e) {
             // out.println(e.getLocalizedMessage());
