@@ -11,14 +11,20 @@ import org.jetlinks.core.trace.ProtocolTracer;
 import org.jetlinks.core.utils.ClassUtils;
 import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.jetlinks.supports.protocol.management.ProtocolSupportLoaderProvider;
+import org.jetlinks.supports.protocol.validator.MethodDeniedClassVisitor;
+import org.springframework.asm.ClassReader;
 import reactor.core.Exceptions;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -30,6 +36,12 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
     private final Map<String, ProtocolClassLoader> protocolLoaders = new ConcurrentHashMap<>();
 
     private final Map<String, ProtocolSupportProvider> loaded = new ConcurrentHashMap<>();
+
+    protected final MethodDeniedClassVisitor visitor = new MethodDeniedClassVisitor();
+
+    public JarProtocolSupportLoader() {
+        visitor.addDefaultDenied();
+    }
 
     @Override
     public String getProvider() {
@@ -135,7 +147,14 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                                "classpath:**/*.class",
                                true,
                                classLoader,
-                               ProtocolClassLoader::loadSelfClass)
+                               this::loadProvider)
                 .orElse(null);
+    }
+
+    @SneakyThrows
+    protected Class<?> loadProvider(ProtocolClassLoader loader, String className, InputStream classStream) {
+        visitor.validate(className,classStream);
+
+        return loader.loadSelfClass(className);
     }
 }

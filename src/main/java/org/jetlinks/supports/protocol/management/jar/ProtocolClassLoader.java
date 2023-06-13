@@ -40,15 +40,18 @@ public class ProtocolClassLoader extends URLClassLoader {
     }
 
     @SneakyThrows
-    public Class<?> loadSelfClass(String name){
-        Class<?> clazz = super.findClass(name);
-        resolveClass(clazz);
+    public synchronized Class<?> loadSelfClass(String name) {
+        Class<?> clazz = super.findLoadedClass(name);
+        if (clazz == null) {
+            clazz = super.findClass(name);
+            resolveClass(clazz);
+        }
         return clazz;
     }
 
     @Override
     public URL getResource(String name) {
-        if(StringUtils.isEmpty(name)){
+        if (StringUtils.isEmpty(name)) {
             return urls[0];
         }
         return super.findResource(name);
