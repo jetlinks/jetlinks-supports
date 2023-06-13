@@ -47,9 +47,8 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
         addDenied(Runtime.class, "exec");
         addDenied(Runtime.class, "halt");
 
-        addDenied(Thread.class, "sleep");
-        addDenied(Thread.class, "interrupt");
-
+       // addDenied(Thread.class, "sleep");
+       // addDenied(Thread.class, "interrupt");
     }
 
     public void addDenied(String method) {
