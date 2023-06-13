@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.asm.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoProcessor;
 
 import java.io.InputStream;
 import java.util.HashSet;
@@ -36,6 +37,9 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
         addDenied(Flux.class, "blockLast");
         addDenied(Mono.class, "block");
         addDenied(Mono.class, "blockOptional");
+
+        addDenied("reactor/core/publisher/MonoProcessor.block");
+        addDenied("reactor/core/publisher/MonoProcessor.blockOptional");
 
         addDenied(CompletableFuture.class, "get");
         addDenied(System.class, "exit");

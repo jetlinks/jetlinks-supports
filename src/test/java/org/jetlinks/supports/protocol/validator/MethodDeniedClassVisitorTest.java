@@ -18,7 +18,7 @@ public class MethodDeniedClassVisitorTest {
     @SneakyThrows
     public void testBlock() {
 
-        ResourceBundleMessageSource source=new ResourceBundleMessageSource();
+        ResourceBundleMessageSource source = new ResourceBundleMessageSource();
         source.setDefaultEncoding("UTF-8");
         source.setBasename("i18n/jetlinks-core/messages");
         MessageSourceInitializer.init(
@@ -28,18 +28,20 @@ public class MethodDeniedClassVisitorTest {
         visitor.addDefaultDenied();
 
         try {
-            visitor.validate(TestBlock.class.getName(),
-                             TestBlock.class.getResourceAsStream("/" + TestBlock.class.getName().replace(".", "/") + ".class"));
+            visitor.validate(
+                    TestBlock.class.getName(),
+                    TestBlock.class.getResourceAsStream("/" + TestBlock.class.getName().replace(".", "/") + ".class")
+            );
             fail();
         } catch (I18nSupportException e) {
-           // out.println(e.getLocalizedMessage());
+            // out.println(e.getLocalizedMessage());
             e.printStackTrace();
             assertTrue(true);
         }
 
     }
 
-    static Mono<Integer> getData(){
+    static Mono<Integer> getData() {
         return Mono.just(1);
     }
 
@@ -47,7 +49,7 @@ public class MethodDeniedClassVisitorTest {
         public void test() {
             Mono.delay(Duration.ofSeconds(1))
                 .doOnNext((e) -> {
-                   getData().block();
+                    getData().block();
                 })
                 .subscribe();
         }
