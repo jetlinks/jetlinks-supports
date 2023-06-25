@@ -1,5 +1,6 @@
 package org.jetlinks.supports.protocol.validator;
 
+import com.google.common.util.concurrent.UncaughtExceptionHandlers;
 import io.netty.util.concurrent.FastThreadLocal;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -8,6 +9,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.io.InputStream;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -15,6 +17,7 @@ import java.util.Set;
 public class MethodDeniedClassVisitor extends ClassVisitor {
 
     private final Set<String> denied = new HashSet<>();
+    private final Set<String> ignoreClass = new HashSet<>();
 
     static final FastThreadLocal<String> clazzName = new FastThreadLocal<>();
 
@@ -31,14 +34,22 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
         GLOBAL.addDenied(Mono.class, "block");
         GLOBAL.addDenied(Mono.class, "blockOptional");
         GLOBAL.addDenied(Mono.class, "toFuture");
+        GLOBAL.addDenied(UncaughtExceptionHandlers.class, "systemExit");
 
         GLOBAL.addDenied("reactor.core.publisher.MonoProcessor.block");
         GLOBAL.addDenied("reactor.core.publisher.MonoProcessor.blockOptional");
+        GLOBAL.addDenied("cn.hutool.core.util.RuntimeUtil.*");
 
         GLOBAL.addDenied(System.class, "exit");
         GLOBAL.addDenied(Runtime.class, "exit");
         GLOBAL.addDenied(Runtime.class, "exec");
         GLOBAL.addDenied(Runtime.class, "halt");
+
+        //这些包下不检查
+        GLOBAL.addIgnore("com.google");
+        GLOBAL.addIgnore("org.apache");
+        GLOBAL.addIgnore("cn.hutool");
+
     }
 
     public static MethodDeniedClassVisitor global() {
@@ -48,6 +59,11 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
 
     @SneakyThrows
     public void validate(String className, InputStream classStream) {
+        for (String aClass : ignoreClass) {
+            if (className.startsWith(aClass)) {
+                return;
+            }
+        }
         clazzName.set(className);
         try {
             ClassReader classReader = new ClassReader(classStream);
@@ -55,6 +71,10 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
         } finally {
             clazzName.set(null);
         }
+    }
+
+    public void addIgnore(String... classOrPackageName) {
+        ignoreClass.addAll(Arrays.asList(classOrPackageName));
     }
 
     public void addDefaultDenied() {
