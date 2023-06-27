@@ -290,9 +290,10 @@ public class ClusterSendToDeviceMessageHandler {
             }
             context.alreadyReply = true;
             return doReply(context.device, message)
-                    .contextWrite(TraceHolder.readToContext(Context.empty(), context.message.getHeaders()));
+                    .contextWrite(ctx-> TraceHolder.readToContext(ctx, context.message.getHeaders()));
         }
-        return doReply((DeviceOperator) null, message);
+        return doReply((DeviceOperator) null, message)
+                .contextWrite(ctx-> TraceHolder.readToContext(ctx, message.getHeaders()));
 
     }
 
