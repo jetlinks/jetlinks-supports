@@ -43,7 +43,12 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
         return replyProcessor
                 .computeIfAbsent(id, ignore -> Sinks.many().multicast().onBackpressureBuffer())
                 .asFlux()
-                .timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)))
+                .as(flux -> {
+                    if (timeout.isZero() || timeout.isNegative()) {
+                        return flux;
+                    }
+                    return flux.timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)));
+                })
                 .doFinally(signal -> {
                     AbstractDeviceOperationBroker.log
                             .trace("reply device message {} {} take {}ms",

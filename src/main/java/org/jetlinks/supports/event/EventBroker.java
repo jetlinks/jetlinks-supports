@@ -8,6 +8,7 @@ import reactor.core.publisher.Flux;
  * @author zhouhao
  * @since 1.1.1
  */
+@Deprecated
 public interface EventBroker {
 
     /**

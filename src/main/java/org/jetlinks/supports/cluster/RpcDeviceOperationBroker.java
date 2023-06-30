@@ -87,6 +87,15 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     }
 
     @Override
+    public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
+        return super
+                .handleReply(deviceId, messageId, timeout)
+                .doOnCancel(()->{
+                    //取消
+                });
+    }
+
+    @Override
     public Mono<Integer> send(String deviceGatewayServerId, Publisher<? extends Message> message) {
         //发给同一个服务节点
         if (rpcManager.currentServerId().equals(deviceGatewayServerId)) {
