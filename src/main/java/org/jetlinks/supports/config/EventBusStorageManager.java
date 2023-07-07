@@ -1,7 +1,5 @@
 package org.jetlinks.supports.config;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
@@ -13,6 +11,7 @@ import org.jetlinks.core.event.Subscription;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
+import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
@@ -33,25 +32,9 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
     private final EventBus eventBus;
     private final Function<String, LocalCacheClusterConfigStorage> storageBuilder;
 
-    @Deprecated
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus) {
 
-        this(clusterManager, eventBus, () -> CacheBuilder.newBuilder().build());
-    }
-
-    @Deprecated
-    public EventBusStorageManager(ClusterManager clusterManager,
-                                  EventBus eventBus,
-                                  Supplier<Cache<String, Object>> supplier) {
-        this(clusterManager, eventBus, supplier, true);
-    }
-
-    @Deprecated
-    public EventBusStorageManager(ClusterManager clusterManager,
-                                  EventBus eventBus,
-                                  Supplier<Cache<String, Object>> supplier,
-                                  boolean cacheEmpty) {
         this(clusterManager, eventBus, -1);
     }
 
@@ -71,6 +54,23 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                         this.cache.remove(id);
                     });
         };
+    }
+
+    @SuppressWarnings("all")
+    public EventBusStorageManager(ClusterManager clusterManager,
+                                  EventBus eventBus,
+                                  Supplier<ConcurrentMap<String, Object>> cacheSupplier) {
+        this.eventBus = eventBus;
+        this.cache = (ConcurrentMap) cacheSupplier.get();
+        storageBuilder = id -> new LocalCacheClusterConfigStorage(
+                id,
+                eventBus,
+                clusterManager.createCache(id),
+                -1,
+                () -> {
+                    this.cache.remove(id);
+                },
+                (Map) cacheSupplier.get());
     }
 
     private Disposable subscribeCluster() {

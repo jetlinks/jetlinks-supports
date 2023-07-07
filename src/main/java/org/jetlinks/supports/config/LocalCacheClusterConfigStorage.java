@@ -1,7 +1,6 @@
 package org.jetlinks.supports.config;
 
 import com.google.common.collect.Maps;
-import lombok.AllArgsConstructor;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
@@ -20,7 +19,6 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import static org.jetlinks.supports.config.EventBusStorageManager.NOTIFY_TOPIC;
 
-@AllArgsConstructor
 public class LocalCacheClusterConfigStorage implements ConfigStorage {
     @SuppressWarnings("all")
     private static final AtomicReferenceFieldUpdater<Cache, Mono> CACHE_REF = AtomicReferenceFieldUpdater
@@ -32,16 +30,37 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private static final AtomicReferenceFieldUpdater<Cache, Disposable> CACHE_LOADER = AtomicReferenceFieldUpdater
             .newUpdater(Cache.class, Disposable.class, "loader");
 
-    private final Map<String, Cache> caches = new NonBlockingHashMap<>();
+    private final Map<String, Cache> caches;
     private final String id;
     private final EventBus eventBus;
 
     private final ClusterCache<String, Object> clusterCache;
 
-    private long expires;
+    private final long expires;
     private final Runnable doOnClear;
 
     public static final Value NULL = Value.simple(null);
+
+    public LocalCacheClusterConfigStorage(String id,
+                                          EventBus eventBus,
+                                          ClusterCache<String, Object> clusterCache,
+                                          long expires,
+                                          Runnable doOnClear,
+                                          Map<String, Cache> cacheContainer) {
+        this.id = id;
+        this.eventBus = eventBus;
+        this.clusterCache = clusterCache;
+        this.expires = expires;
+        this.doOnClear = doOnClear;
+        this.caches = cacheContainer;
+    }
+
+    public LocalCacheClusterConfigStorage(String id, EventBus eventBus,
+                                          ClusterCache<String, Object> clusterCache,
+                                          long expires,
+                                          Runnable doOnClear) {
+        this(id, eventBus, clusterCache, expires, doOnClear, new NonBlockingHashMap<>());
+    }
 
     public class Cache {
         final String key;
