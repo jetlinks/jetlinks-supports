@@ -10,6 +10,7 @@ import org.h2.mvstore.MVStore;
 import org.jctools.maps.NonBlockingHashMap;
 
 import java.io.*;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Map;
@@ -91,7 +92,7 @@ public class MVStoreTimeBaseFileStore<T extends Serializable> implements TimeBas
 
     @Override
     public void dispose() {
-        store.compactMoveChunks();
+        store.compactFile((int)Duration.ofSeconds(30).toMillis());
         store.close();
     }
 
@@ -99,7 +100,7 @@ public class MVStoreTimeBaseFileStore<T extends Serializable> implements TimeBas
     public void clear() {
         store.getMapNames().forEach(store::removeMap);
         store.commit();
-        store.compactMoveChunks();
+        store.compactFile((int)Duration.ofSeconds(30).toMillis());
     }
 
     protected MVMap<String, Refs> getOrCreateCache(String key) {

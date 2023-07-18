@@ -15,6 +15,7 @@ import javax.annotation.Nonnull;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
@@ -105,7 +106,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
             return;
         }
         store.commit();
-        store.compactMoveChunks();
+        store.compactFile((int)Duration.ofSeconds(30).toMillis());
     }
 
     @Override
@@ -137,7 +138,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.compactMoveChunks();
+        store.compactFile((int)Duration.ofSeconds(30).toMillis());
         store.sync();
         store.close();
     }
