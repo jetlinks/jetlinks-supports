@@ -10,7 +10,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 @Slf4j
@@ -104,7 +103,7 @@ public class MVStoreUtils {
                 MVStore recover = open0(c -> customizer
                         .apply(c)
                         .recoveryMode());
-                recover.compactMoveChunks();
+                recover.compactFile(30_000);
                 recover.close(30_000);
                 log.warn("recovery mvstore:{} complete", file);
                 return open0(customizer);

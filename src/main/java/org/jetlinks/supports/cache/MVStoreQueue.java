@@ -9,6 +9,7 @@ import org.h2.mvstore.type.DataType;
 import org.jetlinks.core.cache.FileQueue;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.config.ConfigKey;
+import org.jetlinks.supports.utils.MVStoreUtils;
 import org.springframework.util.Assert;
 
 import javax.annotation.Nonnull;
@@ -54,17 +55,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         this.name = name;
         this.storageFile = filePath.resolve(name);
         this.options = options;
-        try {
-            open();
-        } catch (Throwable err) {
-            File back = filePath.resolve(name + "_" + System.currentTimeMillis() + ".crash").toFile();
-            if (this.storageFile.toFile().renameTo(back)) {
-                open();
-                log.warn("open queue file error,rename to {}", back, err);
-            } else {
-                throw err;
-            }
-        }
+        open();
     }
 
     protected void open() {
@@ -75,16 +66,14 @@ class MVStoreQueue<T> implements FileQueue<T> {
         } catch (Throwable ignore) {
 
         }
-        String path = storageFile.toUri().getScheme().equals("jimfs") ?
-                storageFile.toUri().toString() : storageFile.toString();
 
-        MVStore.Builder builder = new MVStore.Builder()
-                .fileName(path)
-                .cacheSize(16)
-                .autoCommitBufferSize(32 * 1024)
-                .compress();
-
-        store = builder.open();
+        store = MVStoreUtils.open(
+                storageFile.toFile(),
+                name,
+                builder -> builder
+                        .cacheSize(16)
+                        .autoCommitBufferSize(32 * 1024)
+                        .compress());
         Object type = options.get("valueType");
 
         MVMap.Builder<Long, T> mapBuilder = new MVMap.Builder<>();
@@ -106,7 +95,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
             return;
         }
         store.commit();
-        store.compactFile((int)Duration.ofSeconds(30).toMillis());
+        store.compactFile((int) Duration.ofSeconds(30).toMillis());
     }
 
     @Override
