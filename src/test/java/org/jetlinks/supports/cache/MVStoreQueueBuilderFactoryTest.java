@@ -91,6 +91,12 @@ public class MVStoreQueueBuilderFactoryTest {
         strings.flush();
         assertEquals(strings.size(), numberOf);
 
+        Flux.fromIterable(strings)
+                .distinct()
+                .as(StepVerifier::create)
+                .expectNextCount(numberOf)
+                .verifyComplete();
+
         Duration pollTime = Flux
                 .range(0, numberOf)
                 .map(i -> strings.poll())

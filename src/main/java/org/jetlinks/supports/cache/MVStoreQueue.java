@@ -127,7 +127,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.compactFile((int)Duration.ofSeconds(30).toMillis());
+        store.compactFile((int) Duration.ofSeconds(30).toMillis());
         store.sync();
         store.close();
     }
@@ -170,7 +170,9 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
             @Override
             public T next() {
-                return cursor.getValue();
+                T next = cursor.getValue();
+                cursor.next();
+                return next;
             }
 
             @Override
