@@ -19,6 +19,8 @@ import io.scalecube.services.transport.api.ServiceMessageDataDecoder;
 import io.scalecube.services.transport.api.ServiceTransport;
 import lombok.AllArgsConstructor;
 import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jctools.maps.NonBlockingHashSet;
@@ -36,16 +38,21 @@ import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.util.retry.Retry;
 
+import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.Type;
 import java.net.InetAddress;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -67,6 +74,24 @@ public class ScalecubeRpcManager implements RpcManager {
     private ExtendedCluster cluster;
 
     private ServiceCall serviceCall;
+
+    private static final Retry DEFAULT_RETRY = Retry
+        .backoff(12, Duration.ofMillis(100))
+        .filter(err -> hasException(err,
+                                    TimeoutException.class,
+                                    SocketException.class,
+                                    SocketTimeoutException.class,
+                                    io.netty.handler.timeout.TimeoutException.class,
+                                    IOException.class))
+        .doBeforeRetry(retrySignal -> {
+            if (retrySignal.totalRetriesInARow() > 3) {
+                log.info("rpc retrying {}", retrySignal.totalRetriesInARow(), retrySignal.failure());
+            }
+        });
+
+    @Setter
+    @Getter
+    private Retry retry = DEFAULT_RETRY;
 
     private Supplier<ServiceTransport> transportSupplier;
 
@@ -194,11 +219,11 @@ public class ScalecubeRpcManager implements RpcManager {
         });
 
         return initTransport(this.transportSupplier.get())
-                .start()
-                .doOnNext(trans -> this.transport = trans)
-                .flatMap(trans -> trans.serverTransport(methodRegistry).bind())
-                .doOnNext(trans -> this.serverTransport = trans)
-                .then(Mono.fromRunnable(this::start0));
+            .start()
+            .doOnNext(trans -> this.transport = trans)
+            .flatMap(trans -> trans.serverTransport(methodRegistry).bind())
+            .doOnNext(trans -> this.serverTransport = trans)
+            .then(Mono.fromRunnable(this::start0));
     }
 
     private ServiceTransport initTransport(ServiceTransport transport) {
@@ -207,9 +232,11 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private void start0() {
         this.serviceCall = new ServiceCall()
-                .transport(this.transport.clientTransport());
+            .transport(this.transport.clientTransport());
         syncRegistration();
-        disposable.add(Flux.interval(Duration.ofSeconds(60))
+        disposable.add(Flux
+                           .interval(Duration.ofSeconds(60))
+                           .onBackpressureDrop()
                            .concatMap(ignore -> doSyncRegistration().onErrorResume(err -> Mono.empty()))
                            .subscribe());
     }
@@ -225,16 +252,16 @@ public class ScalecubeRpcManager implements RpcManager {
         localRegistrations.clear();
         disposable.dispose();
         return Flux
-                .concatDelayError(
-                        doSyncRegistration().onErrorResume(err -> Mono.empty()),
-                        serverTransport.stop(),
-                        transport.stop()
-                )
-                .doOnComplete(() -> {
-                    serverTransport = null;
-                    transport = null;
-                })
-                .then();
+            .concatDelayError(
+                doSyncRegistration().onErrorResume(err -> Mono.empty()),
+                serverTransport.stop(),
+                transport.stop()
+            )
+            .doOnComplete(() -> {
+                serverTransport = null;
+                transport = null;
+            })
+            .then();
     }
 
     private Address resolveAddress() {
@@ -264,34 +291,34 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private ServiceEndpoint createEndpoint() {
         return ServiceEndpoint
-                .builder()
-                .id(id)
-                .address(resolveAddress())
-                .contentTypes(DataCodec.getAllContentTypes())
-                .serviceRegistrations(localRegistrations)
-                .build();
+            .builder()
+            .id(id)
+            .address(resolveAddress())
+            .contentTypes(DataCodec.getAllContentTypes())
+            .serviceRegistrations(localRegistrations)
+            .build();
     }
 
     private synchronized void syncRegistration(Member member) {
         cluster
-                .send(member, Message
-                        .withData(createEndpoint())
-                        .header(SPREAD_FROM_HEADER, cluster.member().id())
-                        .qualifier(SPREAD_ENDPOINT_QUALIFIER)
-                        .build())
-                .subscribe();
+            .send(member, Message
+                .withData(createEndpoint())
+                .header(SPREAD_FROM_HEADER, cluster.member().id())
+                .qualifier(SPREAD_ENDPOINT_QUALIFIER)
+                .build())
+            .subscribe();
     }
 
     private Mono<Void> doSyncRegistration() {
         ServiceEndpoint endpoint = createEndpoint();
         log.debug("Synchronization registration : {}", endpoint);
         return cluster
-                .spreadGossip(Message
-                                      .withData(endpoint)
-                                      .header(SPREAD_FROM_HEADER, cluster.member().id())
-                                      .qualifier(SPREAD_ENDPOINT_QUALIFIER)
-                                      .build())
-                .then();
+            .spreadGossip(Message
+                              .withData(endpoint)
+                              .header(SPREAD_FROM_HEADER, cluster.member().id())
+                              .qualifier(SPREAD_ENDPOINT_QUALIFIER)
+                              .build())
+            .then();
     }
 
     private synchronized void syncRegistration() {
@@ -302,41 +329,41 @@ public class ScalecubeRpcManager implements RpcManager {
             syncJob.dispose();
         }
         syncJob = Mono
-                .delay(Duration.ofMillis(200))
-                .flatMap(ignore -> doSyncRegistration())
-                .subscribe();
+            .delay(Duration.ofMillis(200))
+            .flatMap(ignore -> doSyncRegistration())
+            .subscribe();
     }
 
     @Override
     public <T> Disposable registerService(String service, T rpcService) {
         ServiceInfo serviceInfo = ServiceInfo
-                .fromServiceInstance(rpcService)
-                .errorMapper(DefaultErrorMapper.INSTANCE)
-                .dataDecoder((msg, type) -> {
-                    if (type.isAssignableFrom(ByteBuf.class) && msg.hasData(ByteBuf.class)) {
-                        return ServiceMessage
-                                .from(msg)
-                                .data(msg.data())
-                                .build();
-                    }
-                    return ServiceMessageDataDecoder.INSTANCE.apply(msg, type);
-                })
-                .tag(SERVICE_ID_TAG, service)
-                .build();
+            .fromServiceInstance(rpcService)
+            .errorMapper(DefaultErrorMapper.INSTANCE)
+            .dataDecoder((msg, type) -> {
+                if (type.isAssignableFrom(ByteBuf.class) && msg.hasData(ByteBuf.class)) {
+                    return ServiceMessage
+                        .from(msg)
+                        .data(msg.data())
+                        .build();
+                }
+                return ServiceMessageDataDecoder.INSTANCE.apply(msg, type);
+            })
+            .tag(SERVICE_ID_TAG, service)
+            .build();
 
         methodRegistry.registerService(serviceInfo);
 
         List<ServiceRegistration> registrations = ServiceScanner
-                .scanServiceInfo(serviceInfo)
-                .stream()
-                .map(ref -> {
-                    Map<String, String> tags = new HashMap<>(ref.tags());
-                    tags.put(SERVICE_ID_TAG, service);
-                    tags.put(SERVICE_NAME_TAG, ref.namespace());
-                    tags.put(REGISTER_TIME_TAG, String.valueOf(System.currentTimeMillis()));
-                    return new ServiceRegistration(createMethodQualifier(service, ref.namespace()), tags, ref.methods());
-                })
-                .collect(Collectors.toList());
+            .scanServiceInfo(serviceInfo)
+            .stream()
+            .map(ref -> {
+                Map<String, String> tags = new HashMap<>(ref.tags());
+                tags.put(SERVICE_ID_TAG, service);
+                tags.put(SERVICE_NAME_TAG, ref.namespace());
+                tags.put(REGISTER_TIME_TAG, String.valueOf(System.currentTimeMillis()));
+                return new ServiceRegistration(createMethodQualifier(service, ref.namespace()), tags, ref.methods());
+            })
+            .collect(Collectors.toList());
 
         localRegistrations.addAll(registrations);
         syncRegistration();
@@ -356,8 +383,8 @@ public class ScalecubeRpcManager implements RpcManager {
     @Override
     public <I> Flux<RpcService<I>> getServices(Class<I> service) {
         return Flux
-                .fromIterable(serverServiceRef.entrySet())
-                .flatMapIterable(e -> e.getValue().getApiCalls(service));
+            .fromIterable(serverServiceRef.entrySet())
+            .flatMapIterable(e -> e.getValue().getApiCalls(service));
     }
 
     @Override
@@ -379,8 +406,8 @@ public class ScalecubeRpcManager implements RpcManager {
     @Override
     public <I> Flux<RpcService<I>> getServices(String id, Class<I> service) {
         return Flux
-                .fromIterable(serverServiceRef.entrySet())
-                .flatMapIterable(e -> e.getValue().getApiCalls(id, service));
+            .fromIterable(serverServiceRef.entrySet())
+            .flatMapIterable(e -> e.getValue().getApiCalls(id, service));
     }
 
     @Override
@@ -401,8 +428,8 @@ public class ScalecubeRpcManager implements RpcManager {
                 return null;
             }
             return node
-                    .getApiCall(serviceId, service)
-                    .service();
+                .getApiCall(serviceId, service)
+                .service();
         });
     }
 
@@ -410,8 +437,8 @@ public class ScalecubeRpcManager implements RpcManager {
     public <I> Flux<ServiceEvent> listen(Class<I> service) {
         String name = Reflect.serviceName(service);
         return listener
-                .computeIfAbsent(name, ignore -> Sinks.many().multicast().onBackpressureBuffer())
-                .asFlux();
+            .computeIfAbsent(name, ignore -> Sinks.many().multicast().onBackpressureBuffer())
+            .asFlux();
     }
 
 
@@ -452,6 +479,35 @@ public class ScalecubeRpcManager implements RpcManager {
     static String createMethodQualifier(String serviceId, String qualifier) {
         return Qualifier.asString(serviceId, qualifier);
     }
+
+
+    @SafeVarargs
+    @SuppressWarnings("all")
+    private static boolean hasException(Throwable e, Class<? extends Throwable>... target) {
+        Throwable cause = e;
+        while (cause != null) {
+            for (Class<? extends Throwable> aClass : target) {
+                if (aClass.isInstance(cause)) {
+                    return true;
+                }
+                for (Throwable throwable : cause.getSuppressed()) {
+                    if (throwable == e) {
+                        continue;
+                    }
+                    boolean hasError = hasException(throwable, target);
+                    if (hasError) {
+                        return true;
+                    }
+                }
+            }
+            if (cause == cause.getCause()) {
+                break;
+            }
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
 
     class ClusterNode {
         private String id;
@@ -505,29 +561,29 @@ public class ScalecubeRpcManager implements RpcManager {
 
         private boolean populateServiceReferences(String qualifier, ServiceReference serviceReference) {
             String id = serviceReference
-                    .tags()
-                    .getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
+                .tags()
+                .getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
 
             return serviceReferencesByQualifier
-                    .computeIfAbsent(qualifier, key -> new NonBlockingHashSet<>())
-                    .add(new ServiceReferenceInfo(id, serviceReference));
+                .computeIfAbsent(qualifier, key -> new NonBlockingHashSet<>())
+                .add(new ServiceReferenceInfo(id, serviceReference));
         }
 
         private <I> RpcServiceCall<I> createApiCall(String serviceId, Class<I> clazz) {
             String name = Reflect.serviceName(clazz);
 
             ServiceCall call = serviceCall
-                    .router((serviceRegistry, request) -> {
-                        Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
-                        if (refs == null) {
-                            return Optional.empty();
-                        }
-                        for (ServiceReferenceInfo ref : refs) {
-                            return Optional.of(ref.reference);
-                        }
+                .router((serviceRegistry, request) -> {
+                    Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
+                    if (refs == null) {
                         return Optional.empty();
-                    })
-                    .serviceRegistry(NoneServiceRegistry.INSTANCE);
+                    }
+                    for (ServiceReferenceInfo ref : refs) {
+                        return Optional.of(ref.reference);
+                    }
+                    return Optional.empty();
+                })
+                .serviceRegistry(NoneServiceRegistry.INSTANCE);
 
             return new RpcServiceCall<>(this.id, serviceId, name, api(call, serviceId, clazz));
         }
@@ -557,8 +613,8 @@ public class ScalecubeRpcManager implements RpcManager {
         @SuppressWarnings("all")
         private <I> RpcServiceCall<I> getApiCall(String id, Class<I> clazz, ServiceRegistration registration) {
             return (RpcServiceCall<I>) serviceInstances
-                    .computeIfAbsent(clazz, type -> new NonBlockingHashMap<>())
-                    .computeIfAbsent(id, _id -> createApiCall(_id, clazz));
+                .computeIfAbsent(clazz, type -> new NonBlockingHashMap<>())
+                .computeIfAbsent(id, _id -> createApiCall(_id, clazz));
         }
 
         @SuppressWarnings("all")
@@ -572,20 +628,25 @@ public class ScalecubeRpcManager implements RpcManager {
 
             if (request instanceof ServiceMessage) {
                 builder = ServiceMessage
-                        .from((ServiceMessage) request)
-                        .qualifier(methodInfo.qualifier());
+                    .from((ServiceMessage) request)
+                    .qualifier(methodInfo.qualifier());
             } else {
                 builder = ServiceMessage
-                        .builder()
-                        .qualifier(methodInfo.qualifier())
-                        .data(request)
-                        .dataFormatIfAbsent(contentType);
+                    .builder()
+                    .qualifier(methodInfo.qualifier())
+                    .data(request)
+                    .dataFormatIfAbsent(contentType);
             }
 
             return TraceHolder
-                    .writeContextTo(builder, (ServiceMessage.Builder::header))
-                    .map(ServiceMessage.Builder::build);
+                .writeContextTo(builder, (ServiceMessage.Builder::header))
+                .map(ServiceMessage.Builder::build);
 
+        }
+
+        private Retry getRetry(Method method) {
+            // TODO: 2023/10/12 自定义retry
+            return retry;
         }
 
         @SuppressWarnings("all")
@@ -595,87 +656,91 @@ public class ScalecubeRpcManager implements RpcManager {
             for (Map.Entry<Method, MethodInfo> entry : genericReturnTypes.entrySet()) {
                 MethodInfo old = entry.getValue();
                 entry.setValue(
-                        new MethodInfo(
-                                Qualifier.asString(id, old.serviceName()),
-                                old.methodName(),
-                                old.parameterizedReturnType(),
-                                old.isReturnTypeServiceMessage(),
-                                old.communicationMode(),
-                                old.parameterCount(),
-                                old.requestType(),
-                                old.isRequestTypeServiceMessage(),
-                                old.isSecured()
-                        )
+                    new MethodInfo(
+                        Qualifier.asString(id, old.serviceName()),
+                        old.methodName(),
+                        old.parameterizedReturnType(),
+                        old.isReturnTypeServiceMessage(),
+                        old.communicationMode(),
+                        old.parameterCount(),
+                        old.requestType(),
+                        old.isRequestTypeServiceMessage(),
+                        old.isSecured()
+                    )
                 );
             }
 
             // noinspection unchecked,Convert2Lambda
             return (T)
-                    Proxy.newProxyInstance(
-                            getClass().getClassLoader(),
-                            new Class[]{serviceInterface},
-                            new InvocationHandler() {
-                                @Override
-                                public Object invoke(Object proxy, Method method, Object[] params) {
-                                    Optional<Object> check =
-                                            toStringOrEqualsOrHashCode(method.getName(), serviceInterface, params);
-                                    if (check.isPresent()) {
-                                        return check.get(); // toString, hashCode was invoked.
-                                    }
-                                    final MethodInfo methodInfo = genericReturnTypes.get(method);
-                                    final Type returnType = methodInfo.parameterizedReturnType();
-                                    final boolean isServiceMessage = methodInfo.isReturnTypeServiceMessage();
+                Proxy.newProxyInstance(
+                    getClass().getClassLoader(),
+                    new Class[]{serviceInterface},
+                    new InvocationHandler() {
+                        @Override
+                        public Object invoke(Object proxy, Method method, Object[] params) {
+                            Optional<Object> check =
+                                toStringOrEqualsOrHashCode(method.getName(), serviceInterface, params);
+                            if (check.isPresent()) {
+                                return check.get(); // toString, hashCode was invoked.
+                            }
+                            final MethodInfo methodInfo = genericReturnTypes.get(method);
+                            final Type returnType = methodInfo.parameterizedReturnType();
+                            final boolean isServiceMessage = methodInfo.isReturnTypeServiceMessage();
 
-                                    Object request = methodInfo.requestType() == Void.TYPE ? null : params[0];
+                            Object request = methodInfo.requestType() == Void.TYPE ? null : params[0];
 
-                                    switch (methodInfo.communicationMode()) {
-                                        case FIRE_AND_FORGET:
-                                            return toServiceMessage(methodInfo, request)
-                                                    .flatMap(serviceCall::oneWay);
+                            switch (methodInfo.communicationMode()) {
+                                case FIRE_AND_FORGET:
+                                    return toServiceMessage(methodInfo, request)
+                                        .flatMap(serviceCall::oneWay)
+                                        .retryWhen(getRetry(method));
 
-                                        case REQUEST_RESPONSE:
-                                            return toServiceMessage(methodInfo, request)
-                                                    .flatMap(msg -> serviceCall.requestOne(msg, returnType))
-                                                    .transform(asMono(isServiceMessage));
+                                case REQUEST_RESPONSE:
+                                    return toServiceMessage(methodInfo, request)
+                                        .flatMap(msg -> serviceCall.requestOne(msg, returnType))
+                                        .transform(asMono(isServiceMessage))
+                                        .retryWhen(getRetry(method));
 
-                                        case REQUEST_STREAM:
+                                case REQUEST_STREAM:
 
-                                            return toServiceMessage(methodInfo, request)
-                                                    .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
-                                                    .transform(asFlux(isServiceMessage));
+                                    return toServiceMessage(methodInfo, request)
+                                        .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
+                                        .transform(asFlux(isServiceMessage))
+                                        .retryWhen(getRetry(method));
 
-                                        case REQUEST_CHANNEL:
-                                            // this is REQUEST_CHANNEL so it means params[0] must
-                                            // be a publisher - its safe to cast.
-                                            //noinspection rawtypes
-                                            return serviceCall
-                                                    .requestBidirectional(
-                                                            Flux.from((Publisher) request)
-                                                                .flatMap(data -> toServiceMessage(methodInfo, data)),
-                                                            returnType)
-                                                    .transform(asFlux(isServiceMessage));
+                                case REQUEST_CHANNEL:
+                                    // this is REQUEST_CHANNEL so it means params[0] must
+                                    // be a publisher - its safe to cast.
+                                    //noinspection rawtypes
+                                    return serviceCall
+                                        .requestBidirectional(
+                                            Flux.from((Publisher) request)
+                                                .flatMap(data -> toServiceMessage(methodInfo, data)),
+                                            returnType)
+                                        .transform(asFlux(isServiceMessage))
+                                        .retryWhen(getRetry(method));
 
-                                        default:
-                                            throw new IllegalArgumentException(
-                                                    "Communication mode is not supported: " + method);
-                                    }
-                                }
-                            });
+                                default:
+                                    throw new IllegalArgumentException(
+                                        "Communication mode is not supported: " + method);
+                            }
+                        }
+                    });
         }
 
 
         private Function<Flux<ServiceMessage>, Flux<Object>> asFlux(boolean isReturnTypeServiceMessage) {
             return flux ->
-                    isReturnTypeServiceMessage ? flux.cast(Object.class) : flux.map(ServiceMessage::data);
+                isReturnTypeServiceMessage ? flux.cast(Object.class) : flux.map(ServiceMessage::data);
         }
 
         private Function<Mono<ServiceMessage>, Mono<Object>> asMono(boolean isReturnTypeServiceMessage) {
             return mono ->
-                    isReturnTypeServiceMessage ? mono.cast(Object.class) : mono.map(ServiceMessage::data);
+                isReturnTypeServiceMessage ? mono.cast(Object.class) : mono.map(ServiceMessage::data);
         }
 
         private Optional<Object> toStringOrEqualsOrHashCode(
-                String method, Class<?> serviceInterface, Object... args) {
+            String method, Class<?> serviceInterface, Object... args) {
 
             switch (method) {
                 case "toString":
