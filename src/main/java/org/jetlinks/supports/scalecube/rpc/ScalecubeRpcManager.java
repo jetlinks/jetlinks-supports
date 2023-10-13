@@ -2,6 +2,8 @@ package org.jetlinks.supports.scalecube.rpc;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.util.internal.ThreadLocalRandom;
+import io.rsocket.RSocketErrorException;
+import io.rsocket.exceptions.ApplicationErrorException;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
@@ -38,7 +40,9 @@ import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.util.context.Context;
 import reactor.util.retry.Retry;
+import reactor.util.retry.RetryBackoffSpec;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
@@ -75,17 +79,25 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private ServiceCall serviceCall;
 
-    private static final Retry DEFAULT_RETRY = Retry
+    private static final RetryBackoffSpec DEFAULT_RETRY = Retry
         .backoff(12, Duration.ofMillis(100))
         .filter(err -> hasException(err,
                                     TimeoutException.class,
                                     SocketException.class,
                                     SocketTimeoutException.class,
                                     io.netty.handler.timeout.TimeoutException.class,
-                                    IOException.class))
+                                    IOException.class,
+                                    RSocketErrorException.class))
         .doBeforeRetry(retrySignal -> {
             if (retrySignal.totalRetriesInARow() > 3) {
-                log.info("rpc retrying {}", retrySignal.totalRetriesInARow(), retrySignal.failure());
+                log.warn("rpc retries {} : [{}]",
+                         retrySignal
+                             .retryContextView()
+                             .<Method>getOrEmpty(Method.class)
+                             .map(m -> m.getDeclaringClass().getSimpleName() + "." + m.getName())
+                             .orElse("unknown"),
+                         retrySignal.totalRetriesInARow(),
+                         retrySignal.failure());
             }
         });
 
@@ -228,6 +240,14 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private ServiceTransport initTransport(ServiceTransport transport) {
         return transport;
+    }
+
+    @Override
+    public Flux<RpcService<?>> getServices() {
+        return Flux
+            .fromIterable(serverServiceRef.values())
+            .flatMapIterable(node -> node.serviceInstances.values())
+            .flatMapIterable(Map::values);
     }
 
     private void start0() {
@@ -522,7 +542,7 @@ public class ScalecubeRpcManager implements RpcManager {
         private final Map<Class<?>, Map<String, RpcServiceCall<?>>> serviceInstances = new NonBlockingHashMap<>();
 
 
-        public void register(ServiceEndpoint endpoint) {
+        public synchronized void register(ServiceEndpoint endpoint) {
             List<String> readyToRemove = new ArrayList<>(serviceReferencesByQualifier.keySet());
 
             Set<ServiceRegistration> added = new TreeSet<>(Comparator.comparing(ServiceRegistration::namespace));
@@ -646,6 +666,9 @@ public class ScalecubeRpcManager implements RpcManager {
 
         private Retry getRetry(Method method) {
             // TODO: 2023/10/12 自定义retry
+            if (retry instanceof RetryBackoffSpec) {
+                return ((RetryBackoffSpec) retry).withRetryContext(Context.of(Method.class, method));
+            }
             return retry;
         }
 
