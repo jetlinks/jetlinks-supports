@@ -94,7 +94,7 @@ public class ScalecubeRpcManager implements RpcManager {
                          retrySignal
                              .retryContextView()
                              .<Method>getOrEmpty(Method.class)
-                             .map(m -> m.getDeclaringClass().getSimpleName() + "." + m.getName())
+                             .map(m -> m.getDeclaringClass().getName() + "." + m.getName())
                              .orElse("unknown"),
                          retrySignal.totalRetriesInARow(),
                          retrySignal.failure());
@@ -326,7 +326,10 @@ public class ScalecubeRpcManager implements RpcManager {
                 .header(SPREAD_FROM_HEADER, cluster.member().id())
                 .qualifier(SPREAD_ENDPOINT_QUALIFIER)
                 .build())
-            .subscribe();
+            .retryWhen(Retry.backoff(12, Duration.ofMillis(200)))
+            .subscribe(ignore -> {
+                       },
+                       error -> log.error("Synchronization registration [{}] error", member, error));
     }
 
     private Mono<Void> doSyncRegistration() {
@@ -338,6 +341,7 @@ public class ScalecubeRpcManager implements RpcManager {
                               .header(SPREAD_FROM_HEADER, cluster.member().id())
                               .qualifier(SPREAD_ENDPOINT_QUALIFIER)
                               .build())
+            .doOnError(err -> log.error("Synchronization registration error", err))
             .then();
     }
 
