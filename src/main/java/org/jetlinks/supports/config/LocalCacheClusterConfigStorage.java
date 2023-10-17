@@ -203,9 +203,9 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (sink != null) {
                 Value value = this.cached != null ? this.cached : null;
                 if (value == null || value.get() == null) {
-                    sink.tryEmitEmpty();
+                    sink.emitEmpty(Reactors.emitFailureHandler());
                 } else {
-                    sink.tryEmitValue(value);
+                    sink.emitValue(value,Reactors.emitFailureHandler());
                 }
             }
         }
@@ -280,7 +280,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .doOnNext(map -> {
                     needLoadKeys.removeAll(map.keySet());
                     //还有配置没加载出来,说明这些配置不存在，则全部设置为null
-                    if (needLoadKeys.size() > 0) {
+                    if (!needLoadKeys.isEmpty()) {
                         for (String needLoadKey : needLoadKeys) {
                             Cache cache = this.getOrCreateCache(needLoadKey);
                             int version = versions.getOrDefault(needLoadKey, cache.version);
@@ -307,7 +307,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return clusterCache
                 .putAll(values)
                 .then(notify(CacheNotify.expires(id, values.keySet())))
-                .thenReturn(true);
+                .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
@@ -323,7 +323,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return clusterCache
                 .put(key, value)
                 .then(notifyRemoveKey(key))
-                .thenReturn(true);
+                .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
@@ -331,7 +331,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return clusterCache
                 .remove(key)
                 .then(notifyRemoveKey(key))
-                .thenReturn(true);
+                .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
@@ -347,7 +347,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return clusterCache
                 .remove(key)
                 .then(notify(CacheNotify.expires(id, key)))
-                .thenReturn(true);
+                .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
@@ -355,7 +355,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return clusterCache
                 .clear()
                 .then(notify(CacheNotify.clear(id)))
-                .thenReturn(true);
+                .then(Reactors.ALWAYS_TRUE);
     }
 
     void clearLocalCache(CacheNotify notify) {

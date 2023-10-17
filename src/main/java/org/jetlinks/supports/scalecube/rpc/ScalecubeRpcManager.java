@@ -40,6 +40,7 @@ import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.context.Context;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
@@ -56,6 +57,7 @@ import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -223,6 +225,13 @@ public class ScalecubeRpcManager implements RpcManager {
             public void onMembershipEvent(MembershipEvent event) {
                 if (event.isLeaving() || event.isRemoved()) {
                     memberLeave(event.member());
+                    Schedulers
+                        .parallel()
+                        .schedule(() -> {
+                            if (cluster.member(event.member().id()).isPresent()) {
+                                syncRegistration(event.member());
+                            }
+                        }, 5, TimeUnit.SECONDS);
                 }
                 if (event.isAdded() || event.isUpdated()) {
                     syncRegistration(event.member());

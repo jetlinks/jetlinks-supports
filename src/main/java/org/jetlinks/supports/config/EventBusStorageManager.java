@@ -2,21 +2,17 @@ package org.jetlinks.supports.config;
 
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.config.ConfigStorageManager;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
+import org.jetlinks.core.trace.MonoTracer;
 import reactor.core.Disposable;
-import reactor.core.Disposables;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
-import java.util.Collections;
 import java.util.Map;
-import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
@@ -47,7 +43,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus,
                                   long ttl) {
-        this.cache = new NonBlockingHashMap<>();
+        this.cache = new ConcurrentHashMap<>();
         this.eventBus = eventBus;
         storageBuilder = id -> {
             return new LocalCacheClusterConfigStorage(
@@ -88,21 +84,26 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                     .justBroker()
                     .build(),
                 (topicPayload -> {
-                    try {
-                        CacheNotify cacheNotify = topicPayload.decode(CacheNotify.class);
-                        LocalCacheClusterConfigStorage storage = cache.get(cacheNotify.getName());
-                        if (storage != null) {
-                            log.trace("clear local cache :{}", cacheNotify);
-                            storage.clearLocalCache(cacheNotify);
-                        } else {
-                            log.trace("ignore clear local cache :{}", cacheNotify);
-                        }
-                    } catch (Throwable error) {
-                        log.warn("clear local cache error", error);
-                    }
-                    return Mono.empty();
+                    CacheNotify notify = topicPayload.decode(CacheNotify.class);
+                    return Mono
+                        .<Void>fromRunnable(() -> handleNotify(notify))
+                        .as(MonoTracer.create("/_sys/storage-manager/notify/" + notify.getName()));
                 })
             );
+    }
+
+    private void handleNotify(CacheNotify cacheNotify) {
+        try {
+            LocalCacheClusterConfigStorage storage = cache.get(cacheNotify.getName());
+            if (storage != null) {
+                log.trace("clear local cache :{}", cacheNotify);
+                storage.clearLocalCache(cacheNotify);
+            } else {
+                log.trace("ignore clear local cache :{}", cacheNotify);
+            }
+        } catch (Throwable error) {
+            log.warn("clear local cache error", error);
+        }
     }
 
     public void refreshAll() {
@@ -121,13 +122,13 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
     @Override
     @SneakyThrows
     public Mono<ConfigStorage> getStorage(String id) {
-        if (disposable == null) {
-            synchronized (this) {
-                Disposable disp = subscribeCluster();
-                if (!CLUSTER_SUBSCRIBER.compareAndSet(this, null, disp)) {
-                    disp.dispose();
+        if (CLUSTER_SUBSCRIBER.get(this) == null) {
+            CLUSTER_SUBSCRIBER.accumulateAndGet(this, null, (pre, nil) -> {
+                if (pre == null) {
+                    return subscribeCluster();
                 }
-            }
+                return pre;
+            });
         }
         return Mono.fromSupplier(() -> cache.computeIfAbsent(id, storageBuilder));
     }
