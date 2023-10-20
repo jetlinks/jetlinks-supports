@@ -41,6 +41,7 @@ import java.util.function.Predicate;
  * @see EventBroker
  * @since 1.1.1
  */
+@Deprecated
 public class BrokerEventBus implements EventBus {
 
     private final Topic<SubscriptionInfo> root = Topic.createRoot();

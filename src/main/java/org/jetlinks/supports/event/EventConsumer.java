@@ -12,6 +12,7 @@ import reactor.core.publisher.Mono;
  * @author zhouhao
  * @since 1.1.1
  */
+@Deprecated
 public interface EventConsumer extends EventConnection {
 
     Flux<Subscription> handleSubscribe();
