@@ -8,6 +8,7 @@ import reactor.core.publisher.Mono;
 /**
  * 事件生产者
  */
+@Deprecated
 public interface EventProducer extends EventConnection {
 
     /**
