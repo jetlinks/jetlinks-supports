@@ -94,7 +94,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.commit();
+       // store.commit();
         store.compactFile((int) Duration.ofSeconds(30).toMillis());
     }
 
