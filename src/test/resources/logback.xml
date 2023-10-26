@@ -7,6 +7,8 @@
     <logger name="io.lettuce" level="warn"/>
     <logger name="org.springframework" level="warn"/>
     <logger name="io.rsocket.FrameLogger" level="warn"/>
+    　<logger name="org.jetlinks.core.utils" level="warn"/>
+    　<logger name="org.jetlinks.core.codec.Codecs" level="warn"/>
     　
     <logger name="io.scalecube" level="warn"/>
     　
