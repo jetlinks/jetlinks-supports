@@ -5,6 +5,7 @@ import org.hswebframework.web.dict.EnumDict;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.PropertyMetadata;
 import org.jetlinks.core.metadata.types.*;
+import org.reactivestreams.Publisher;
 import org.springframework.core.ResolvableType;
 import org.springframework.util.ReflectionUtils;
 import reactor.util.function.Tuples;
@@ -49,6 +50,9 @@ public class DeviceMetadataParser {
         Class<?> clazz = type.toClass();
         if (clazz == Object.class) {
             return null;
+        }
+        if (Publisher.class.isAssignableFrom(clazz)) {
+            clazz = type.getGeneric(0).toClass();
         }
         if (List.class.isAssignableFrom(clazz)) {
             ArrayType arrayType = new ArrayType();
@@ -105,15 +109,15 @@ public class DeviceMetadataParser {
         }
 
         ObjectType objectType = new ObjectType();
-
-        ReflectionUtils.doWithFields(type.toClass(), field -> {
+        Class<?> fClass = clazz;
+        ReflectionUtils.doWithFields(fClass, field -> {
             if (owner != null && !distinct.add(Tuples.of(owner, field))) {
-                objectType.addPropertyMetadata(withField0(type.toClass(), field, ResolvableType.forClass(Map.class)));
+                objectType.addPropertyMetadata(withField0(fClass, field, ResolvableType.forClass(Map.class)));
                 return;
             }
             Schema schema = field.getAnnotation(Schema.class);
             if (schema != null && !schema.hidden()) {
-                objectType.addPropertyMetadata(withField0(type.toClass(), field, ResolvableType.forField(field, type)));
+                objectType.addPropertyMetadata(withField0(fClass, field, ResolvableType.forField(field, fClass)));
             }
         });
         return objectType;

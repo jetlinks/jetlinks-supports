@@ -51,7 +51,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     public JetLinksDeviceFunctionMetadata() {
     }
 
-    public JetLinksDeviceFunctionMetadata(String id, String name,List<PropertyMetadata> inputs,DataType output) {
+    public JetLinksDeviceFunctionMetadata(String id, String name, List<PropertyMetadata> inputs, DataType output) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(name, "name cannot be null");
         Objects.requireNonNull(inputs, "inputs cannot be null");
@@ -69,7 +69,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         this.id = another.getId();
         this.name = another.getName();
         this.description = another.getDescription();
-        this.expands = another.getExpands()==null?null:new HashMap<>(another.getExpands());
+        this.expands = another.getExpands() == null ? null : new HashMap<>(another.getExpands());
         this.another = another;
         this.async = another.isAsync();
     }
@@ -80,10 +80,10 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
             inputs = Optional.ofNullable(jsonObject.getJSONArray("inputs"))
                              .map(Collection::stream)
                              .map(stream -> stream
-                                     .map(JSONObject.class::cast)
-                                     .map(JetLinksPropertyMetadata::new)
-                                     .map(PropertyMetadata.class::cast)
-                                     .collect(Collectors.toList()))
+                                 .map(JSONObject.class::cast)
+                                 .map(JetLinksPropertyMetadata::new)
+                                 .map(PropertyMetadata.class::cast)
+                                 .collect(Collectors.toList()))
                              .orElse(Collections.emptyList());
         }
         if (inputs == null && another != null) {
@@ -99,12 +99,12 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     public DataType getOutput() {
         if (output == null && jsonObject != null) {
             output = Optional
-                    .ofNullable(jsonObject.getJSONObject("output"))
-                    .flatMap(conf -> Optional
-                            .ofNullable(DataTypes.lookup(conf.getString("type")))
-                            .map(Supplier::get)
-                            .map(type -> JetLinksDataTypeCodecs.decode(type, conf)))
-                    .orElseGet(UnknownType::new);
+                .ofNullable(jsonObject.getJSONObject("output"))
+                .flatMap(conf -> Optional
+                    .ofNullable(DataTypes.lookup(conf.getString("type")))
+                    .map(Supplier::get)
+                    .map(type -> JetLinksDataTypeCodecs.decode(type, conf)))
+                .orElseGet(UnknownType::new);
         }
         if (output == null && another != null) {
             output = another.getOutput();
@@ -117,11 +117,13 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         // /*获取系统信息*/ getSysInfo(Type name,)
 
         return String.join("", new String[]{
-                "/* ", getName(), " */",
-                getId(),
-                "(",
-                String.join(",", getInputs().stream().map(PropertyMetadata::toString).toArray(String[]::new))
-                , ")"
+            "/* ", getName(), " */ ",
+            output == null ? "void" : output.toString(),
+            " ",
+            getId(),
+            "(",
+            String.join(",", getInputs().stream().map(PropertyMetadata::toString).toArray(String[]::new))
+            , ")"
         });
     }
 
@@ -177,7 +179,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
                     if (MergeOption.has(MergeOption.ignoreExists, option)) {
                         return v;
                     }
-                    return v.merge(input,option);
+                    return v.merge(input, option);
                 });
             }
         }
