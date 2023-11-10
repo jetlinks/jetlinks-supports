@@ -24,28 +24,47 @@ import org.springframework.web.bind.annotation.RequestBody;
 
 import javax.annotation.Nonnull;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
+/**
+ * 使用java类来实现命令
+ *
+ * @author zhouhao
+ * @since 1.2.2
+ */
 public class JavaBeanCommandSupport extends AbstractCommandSupport {
+
+    private static final Predicate<Method> defaultFilter
+        = method -> !Modifier.isStatic(method.getModifiers())
+        && Modifier.isPublic(method.getModifiers())
+        && method.getDeclaringClass() != Object.class;
 
     private final Object target;
 
     public JavaBeanCommandSupport(Object target, Collection<String> filter) {
-        this.target = target;
-        init(filter);
+        this(target, m -> filter.contains(m.getName()));
     }
 
-    private void init(Collection<String> filter) {
+    public JavaBeanCommandSupport(Object target, Predicate<Method> filter) {
+        this.target = target;
+        init(defaultFilter.and(filter));
+    }
+
+
+    private void init(Predicate<Method> filter) {
         ReflectionUtils
             .doWithMethods(
                 ClassUtils.getUserClass(target),
                 method -> {
-                    if (filter.contains(method.getName())) {
+                    if (filter.test(method)) {
                         register(method);
                     }
                 });
@@ -70,15 +89,18 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
     }
 
-    @Override
-    protected <R> R executeUndefinedCommand(@Nonnull Command<R> command) {
-        return super.executeUndefinedCommand(command);
+    public List<CommandHandler<Command<?>, ?>> getHandlers() {
+        return handlers
+            .values()
+            .stream()
+            .distinct()
+            .collect(Collectors.toList());
     }
 
     private void register(Method method) {
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
 
-        String name = method.getName();
+        String name = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
 
         ResolvableType[] argTypes = new ResolvableType[method.getParameterCount()];
         String[] argNames = new String[method.getParameterCount()];
@@ -158,7 +180,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         metadata.setId(name);
         metadata.setOutput(output);
         metadata.setInputs(inputs);
-        metadata.setName(name);
+        metadata.setName(schema != null && StringUtils.hasText(schema.title()) ? schema.title() : name);
         metadata.setDescription(schema == null ? name : schema.description());
 
         Function<Map<String, Object>, Object> finalInvoker = invoker;
