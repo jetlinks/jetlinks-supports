@@ -73,6 +73,19 @@ public class InternalEventBus implements EventBus {
             });
     }
 
+    @Override
+    public <T> Flux<T> subscribe(Subscription subscription, Class<T> type) {
+        return this
+            .subscribe(subscription)
+            .mapNotNull(payload -> {
+                try {
+                    return payload.decode(type);
+                } catch (Throwable e) {
+                    log.error("decode message [{}] error", payload.getTopic(), e);
+                }
+                return null;
+            });
+    }
 
     public Disposable subscribe(Subscription subscription,
                                 Function<TopicPayload, Mono<Void>> handler) {
