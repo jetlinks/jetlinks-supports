@@ -9,6 +9,7 @@ import org.h2.mvstore.type.DataType;
 import org.jetlinks.core.cache.FileQueue;
 import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.config.ConfigKey;
+import org.jetlinks.core.utils.ConverterUtils;
 import org.jetlinks.supports.utils.MVStoreUtils;
 import org.springframework.util.Assert;
 
@@ -31,7 +32,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     @SuppressWarnings("all")
     private final static AtomicLongFieldUpdater<MVStoreQueue> INDEX =
-            AtomicLongFieldUpdater.newUpdater(MVStoreQueue.class, "index");
+        AtomicLongFieldUpdater.newUpdater(MVStoreQueue.class, "index");
 
     private MVStore store;
     private MVMap<Long, T> mvMap;
@@ -58,6 +59,17 @@ class MVStoreQueue<T> implements FileQueue<T> {
         open();
     }
 
+    MVStoreQueue(MVMap<Long, T> mvMap) {
+        this.storageFile = null;
+        this.name = mvMap.getName();
+        this.options = null;
+        this.mvMap = mvMap;
+        if (!mvMap.isEmpty()) {
+            INDEX.set(this, mvMap.lastKey());
+        }
+    }
+
+
     protected void open() {
         try {
             if (store != null && !store.isClosed()) {
@@ -68,12 +80,12 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
 
         store = MVStoreUtils.open(
-                storageFile.toFile(),
-                name,
-                builder -> builder
-                        .cacheSize(16)
-                        .autoCommitBufferSize(32 * 1024)
-                        .compress());
+            storageFile.toFile(),
+            name,
+            builder -> builder
+                .cacheSize(16)
+                .autoCommitBufferSize(32 * 1024)
+                .compress());
         Object type = options.get("valueType");
 
         MVMap.Builder<Long, T> mapBuilder = new MVMap.Builder<>();
@@ -94,7 +106,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-       // store.commit();
+        // store.commit();
         store.compactFile((int) Duration.ofSeconds(30).toMillis());
     }
 
@@ -124,6 +136,9 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public synchronized void close() {
+        if (store == null) {
+            return;
+        }
         if (store.isClosed()) {
             return;
         }
@@ -133,7 +148,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
     }
 
     private void checkClose() {
-        if (store.isClosed()) {
+        if (store != null && store.isClosed()) {
             throw new IllegalStateException("file queue " + name + " is closed");
         }
     }
@@ -212,10 +227,10 @@ class MVStoreQueue<T> implements FileQueue<T> {
     }
 
     private void doAdd(T value) {
-        T val = value;
+        T old;
         do {
-            val = mvMap.putIfAbsent(INDEX.incrementAndGet(this), val);
-        } while (val != null);
+            old = mvMap.putIfAbsent(INDEX.incrementAndGet(this), value);
+        } while (old != null);
     }
 
     @Override
@@ -362,7 +377,13 @@ class MVStoreQueue<T> implements FileQueue<T> {
             Assert.hasText(name, "name must not be empty");
             Assert.notNull(path, "path must not be null");
             Assert.notNull(path, "codec must not be null");
+            int concurrency = ConverterUtils
+                .convert(options.getOrDefault("concurrency", 1), Integer.class);
+            if (concurrency > 1) {
+                return new ConcurrencyMVStoreQueue<>(path, name, options, ConverterUtils.convert(options.get("concurrency"), Integer.class));
+            }
             return new MVStoreQueue<>(path, name, options);
+
         }
     }
 }
