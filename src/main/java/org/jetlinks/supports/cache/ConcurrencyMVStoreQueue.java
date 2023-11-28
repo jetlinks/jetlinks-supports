@@ -212,12 +212,12 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
     @Override
     public T remove() {
         for (MVStoreQueue<T> queue : queues) {
-            T temp = queue.remove();
+            T temp = queue.poll();
             if (temp != null) {
                 return temp;
             }
         }
-        return null;
+        throw new NoSuchElementException("No such element in file " + store.getFileStore().getFileName());
     }
 
     @Override
@@ -233,7 +233,7 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
                 }
             }
         }
-        return null;
+        return poll;
     }
 
     @Override
@@ -249,7 +249,7 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
                 }
             }
         }
-        return null;
+        return poll;
     }
 
     @Override
@@ -265,6 +265,6 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
                 }
             }
         }
-        return null;
+        return poll;
     }
 }
