@@ -37,16 +37,16 @@ public class ClusterDeviceSessionManagerTest {
     @SneakyThrows
     public void init() {
         ExtendedClusterImpl cluster1 = new ExtendedClusterImpl(
-                ClusterConfig.defaultConfig()
-                             .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+            ClusterConfig.defaultConfig()
+                         .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
         );
         cluster1.startAwait();
 
 
         ExtendedClusterImpl cluster2 = new ExtendedClusterImpl(
-                ClusterConfig.defaultConfig()
-                             .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
-                             .membership(ship -> ship.seedMembers(cluster1.address()))
+            ClusterConfig.defaultConfig()
+                         .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+                         .membership(ship -> ship.seedMembers(cluster1.address()))
         );
         cluster2.startAwait();
 
@@ -85,6 +85,7 @@ public class ClusterDeviceSessionManagerTest {
             public boolean isAlive() {
                 return true;
             }
+
             @Override
             public Mono<Boolean> isAliveAsync() {
                 return Reactors.ALWAYS_TRUE;
@@ -92,20 +93,20 @@ public class ClusterDeviceSessionManagerTest {
         };
         AtomicInteger eventCount = new AtomicInteger();
         Disposables.composite(
-                manager1.listenEvent(event -> {
-                    if (event.isClusterExists()) {
-                        return Mono.empty();
-                    }
-                    eventCount.incrementAndGet();
+            manager1.listenEvent(event -> {
+                if (event.isClusterExists()) {
                     return Mono.empty();
-                }),
-                manager2.listenEvent(event -> {
-                    if (event.isClusterExists()) {
-                        return Mono.empty();
-                    }
-                    eventCount.incrementAndGet();
+                }
+                eventCount.incrementAndGet();
+                return Mono.empty();
+            }),
+            manager2.listenEvent(event -> {
+                if (event.isClusterExists()) {
                     return Mono.empty();
-                })
+                }
+                eventCount.incrementAndGet();
+                return Mono.empty();
+            })
         );
 
         manager1.compute(session.getDeviceId(), mono -> Mono.just(session))
@@ -133,6 +134,37 @@ public class ClusterDeviceSessionManagerTest {
     }
 
     @Test
+    public void testRegisterRecursive() {
+        LostDeviceSession session = new LostDeviceSession("test", device, DefaultTransport.MQTT) {
+            @Override
+            public boolean isAlive() {
+                return true;
+            }
+
+            @Override
+            public Mono<Boolean> isAliveAsync() {
+                return Reactors.ALWAYS_TRUE;
+            }
+        };
+
+        manager1.compute(session.getDeviceId(), mono -> {
+                    return Mono
+                        .delay(Duration.ofSeconds(1))
+                        .then(Mono.defer(() -> manager1
+                            .getSession(session.getDeviceId())))
+                        .thenReturn(session);
+                })
+                .block();
+
+        manager1
+            .getSession(session.getDeviceId())
+            .as(StepVerifier::create)
+            .expectNext(session)
+            .verifyComplete();
+
+    }
+
+    @Test
     public void testRegister() {
         LostDeviceSession session = new LostDeviceSession("test", device, DefaultTransport.MQTT) {
             @Override
@@ -155,7 +187,7 @@ public class ClusterDeviceSessionManagerTest {
 
         Duration time = Flux.range(0, 20000)
                             .flatMap(i -> manager2
-                                    .isAlive(session.getDeviceId()))
+                                .isAlive(session.getDeviceId()))
                             .as(StepVerifier::create)
                             .expectNextCount(20000)
                             .verifyComplete();
