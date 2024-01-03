@@ -35,6 +35,7 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 @Slf4j
+@Deprecated
 public class ScalecubeEventBusBroker implements EventBroker, Disposable {
 
     private static final String SUB_QUALIFIER = "/jeb/_sub";
