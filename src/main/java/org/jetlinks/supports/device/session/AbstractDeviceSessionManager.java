@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
@@ -11,6 +12,7 @@ import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
+import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -42,7 +44,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     private static final AtomicLongFieldUpdater<AbstractDeviceSessionManager>
         CLOSE_WIP = AtomicLongFieldUpdater.newUpdater(AbstractDeviceSessionManager.class, "closeWip");
 
-    protected final Map<String, DeviceSessionRef> localSessions = new ConcurrentHashMap<>(2048);
+    protected final Map<String, DeviceSessionRef> localSessions = new NonBlockingHashMap<>(2048);
 
     private final List<Function<DeviceSessionEvent, Mono<Void>>> sessionEventHandlers = new CopyOnWriteArrayList<>();
 
@@ -125,7 +127,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     @Override
     public Mono<DeviceSession> getSession(String deviceId,
                                           boolean unregisterWhenNotAlive) {
-        if (StringUtils.isEmpty(deviceId)) {
+        if (ObjectUtils.isEmpty(deviceId)) {
             return Mono.empty();
         }
         DeviceSessionRef ref = localSessions.get(deviceId);
@@ -177,8 +179,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             return this.removeLocalSession(deviceId);
         } else {
             return Flux
-                .merge(this.removeLocalSession(deviceId),
-                       this.removeRemoteSession(deviceId))
+                .concat(this.removeLocalSession(deviceId),
+                        this.removeRemoteSession(deviceId))
                 .reduce(Math::addExact);
         }
     }
@@ -719,9 +721,11 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
         public Mono<DeviceSession> ref() {
             return Mono.deferContextual(ctx -> {
+                //避免递归调用
                 if (ctx.getOrEmpty(DeviceSessionRef.class).orElse(null) == this) {
-                    //避免递归调用
-                    log.warn("recursive call get device session [{}]", deviceId);
+                    if (loaded == null) {
+                        log.warn("recursive call get device session [{}]", deviceId);
+                    }
                     return Mono.justOrEmpty(loaded);
                 }
                 tryLoad(ctx);

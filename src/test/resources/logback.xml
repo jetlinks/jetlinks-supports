@@ -19,8 +19,7 @@
     <!--    <logger name="ipc" level="trace"/>-->
 
     <!--    　<logger name="org.jetlinks.supports.cluster" level="trace"/>-->
-    　
-    <logger name="org.jetlinks.supports.scalecube.event.ScalecubeEventBusBroker" level="debug"/>
+    　  <logger name="org.jetlinks.supports.device.session.AbstractDeviceSessionManager" level="trace"/>
 
     <logger name="org.jetlinks.supports.scalecube.ExtendedClusterImpl" level="debug"/>
 

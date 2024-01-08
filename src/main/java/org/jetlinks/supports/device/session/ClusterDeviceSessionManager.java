@@ -9,6 +9,7 @@ import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.ServiceEvent;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
+import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -223,7 +224,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
     @Override
     protected final Mono<Boolean> initSessionConnection(DeviceSession session) {
-        if (services.size() == 0) {
+        if (services.isEmpty()) {
             return Reactors.ALWAYS_FALSE;
         }
         return getServices()
@@ -234,17 +235,17 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
     @Override
     protected final Mono<Long> removeRemoteSession(String deviceId) {
-        if (services.size() == 0) {
+        if (services.isEmpty()) {
             return Reactors.ALWAYS_ZERO_LONG;
         }
         return getServices()
-                .flatMap(service -> service.remove(deviceId))
+                .concatMap(service -> service.remove(deviceId))
                 .reduce(Math::addExact);
     }
 
     @Override
     protected final Mono<Long> getRemoteTotalSessions() {
-        if (services.size() == 0) {
+        if (services.isEmpty()) {
             return Reactors.ALWAYS_ZERO_LONG;
         }
         return this
@@ -255,7 +256,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
     @Override
     protected final Mono<Boolean> remoteSessionIsAlive(String deviceId) {
-        if (services.size() == 0) {
+        if (services.isEmpty()) {
             return Reactors.ALWAYS_FALSE;
         }
         return getServices()
@@ -266,7 +267,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
     @Override
     protected Mono<Boolean> checkRemoteSessionIsAlive(String deviceId) {
-        if (services.size() == 0) {
+        if (services.isEmpty()) {
             return Reactors.ALWAYS_FALSE;
         }
         return getServices()
@@ -277,7 +278,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
     @Override
     protected Flux<DeviceSessionInfo> remoteSessions(String serverId) {
-        if (StringUtils.isEmpty(serverId)) {
+        if (ObjectUtils.isEmpty(serverId)) {
             return getServices()
                     .flatMap(Service::sessions);
         }
