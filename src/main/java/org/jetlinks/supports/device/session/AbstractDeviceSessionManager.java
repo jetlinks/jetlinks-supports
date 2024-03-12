@@ -356,6 +356,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     private Mono<Void> closeSession0(DeviceSession session) {
+        long now = System.currentTimeMillis();
         try {
             session.close();
         } catch (Throwable ignore) {
@@ -374,18 +375,22 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 boolean sessionExists = alive || localSessions.containsKey(session.getDeviceId());
                 if (sessionExists) {
                     log.info("device [{}] session [{}] closed,but session still exists!", session.getDeviceId(), session);
-                    return fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.unregister, session, true));
+                    return fireEvent(DeviceSessionEvent.of(now,DeviceSessionEvent.Type.unregister, session, true));
                 } else {
                     log.info("device [{}] session [{}] closed", session.getDeviceId(), session);
                     return session
                         .getOperator()
                         .offline()
                         .then(
-                            fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.unregister, session, false))
+                            fireEvent(DeviceSessionEvent.of(now,DeviceSessionEvent.Type.unregister, session, false))
                         );
                 }
             })
             .doAfterTerminate(() -> CLOSE_WIP.decrementAndGet(this));
+    }
+
+    protected long getCloseWip(){
+        return CLOSE_WIP.get(this);
     }
 
     protected final Mono<Void> closeSession(DeviceSession session) {
