@@ -1,6 +1,7 @@
 package org.jetlinks.supports.protocol.management;
 
-import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.ProtocolSupport;
 import org.jetlinks.core.cluster.ClusterCache;
@@ -13,13 +14,14 @@ import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-@AllArgsConstructor
+@RequiredArgsConstructor
 @Slf4j
 public class DefaultProtocolSupportManager extends StaticProtocolSupports implements ProtocolSupportManager {
     public static final String topic = "/_sys/protocol/changed";
@@ -31,14 +33,10 @@ public class DefaultProtocolSupportManager extends StaticProtocolSupports implem
 
     private final Disposable.Composite disposable = Disposables.composite();
 
-    public void init() {
+    @Setter
+    private Duration loadTimeout = Duration.ofSeconds(30);
 
-        loadAll()
-            .filter(de -> de.getState() == 1)
-            .flatMap(def -> this
-                .init(def)
-                .onErrorResume(err -> Mono.empty()))
-            .subscribe();
+    public void init() {
 
         //通过事件总线来传递协议变更事件
         disposable.add(
@@ -52,7 +50,19 @@ public class DefaultProtocolSupportManager extends StaticProtocolSupports implem
                     .build(),
                 payload -> init(payload.decode(ProtocolSupportDefinition.class)))
         );
+
+        try {
+            loadAll()
+                .filter(de -> de.getState() == 1)
+                .flatMap(def -> this
+                    .init(def)
+                    .onErrorResume(err -> Mono.empty()))
+                .blockLast(loadTimeout);
+        } catch (Throwable error) {
+            log.warn("load protocol error", error);
+        }
     }
+
 
     public void shutdown() {
         disposable.dispose();
@@ -98,6 +108,7 @@ public class DefaultProtocolSupportManager extends StaticProtocolSupports implem
     public Mono<Void> init(ProtocolSupportDefinition definition) {
         return Mono
             .defer(() -> {
+                String operation = definition.getState() != 1 ? "uninstall" : "install";
                 try {
                     if (definition.getState() != 1) {
                         String protocol = configProtocolIdMapping.get(definition.getId());
@@ -107,7 +118,6 @@ public class DefaultProtocolSupportManager extends StaticProtocolSupports implem
                             return Mono.empty();
                         }
                     }
-                    String operation = definition.getState() != 1 ? "uninstall" : "install";
                     Consumer<ProtocolSupport> consumer = definition.getState() != 1 ? this::unRegister : this::register;
 
                     log.debug("{} protocol:{}", operation, definition);
@@ -122,15 +132,21 @@ public class DefaultProtocolSupportManager extends StaticProtocolSupports implem
                         })
                         .onErrorResume((e) -> {
                             log.error("{} protocol[{}] error", operation, definition.getId(), e);
+                            loadError(definition, e);
                             return Mono.empty();
                         })
                         .then();
                 } catch (Throwable err) {
-                    log.error("init protocol error", err);
+                    log.error("{} protocol error", operation, err);
+                    loadError(definition, err);
                 }
                 return Mono.empty();
             })
             .as(MonoTracer.create("/protocol/" + definition.getId() + "/init"));
+    }
+
+    protected void loadError(ProtocolSupportDefinition def, Throwable err) {
+
     }
 
     protected ProtocolSupport afterLoaded(ProtocolSupportDefinition def,
