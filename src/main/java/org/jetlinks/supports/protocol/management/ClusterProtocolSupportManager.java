@@ -8,6 +8,11 @@ import reactor.core.publisher.Mono;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+/**
+ * @deprecated {@link DefaultProtocolSupportManager}
+ * @see DefaultProtocolSupportManager
+ */
+@Deprecated
 public class ClusterProtocolSupportManager implements ProtocolSupportManager {
 
     private ClusterManager clusterManager;

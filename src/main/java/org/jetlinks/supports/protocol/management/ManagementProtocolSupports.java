@@ -13,11 +13,12 @@ import java.util.function.Consumer;
 /**
  * 动态管理协议包支持. 实现集群时协议包动态管理.
  *
- * @author zhouhao
- * @since 1.0
+ * @see DefaultProtocolSupportManager
+ * @deprecated {@link DefaultProtocolSupportManager}
  */
 @Slf4j
 @Setter
+@Deprecated
 public class ManagementProtocolSupports extends StaticProtocolSupports {
 
     private ProtocolSupportManager manager;
