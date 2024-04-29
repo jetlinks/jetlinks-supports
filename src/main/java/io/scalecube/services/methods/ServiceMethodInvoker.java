@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.context.Context;
+import reactor.util.context.ContextView;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -49,13 +50,13 @@ public final class ServiceMethodInvoker {
      * @param principalMapper principal mapper (optional)
      */
     public ServiceMethodInvoker(
-            Method method,
-            Object service,
-            MethodInfo methodInfo,
-            ServiceProviderErrorMapper errorMapper,
-            ServiceMessageDataDecoder dataDecoder,
-            Authenticator<Object> authenticator,
-            PrincipalMapper<Object, Object> principalMapper) {
+        Method method,
+        Object service,
+        MethodInfo methodInfo,
+        ServiceProviderErrorMapper errorMapper,
+        ServiceMessageDataDecoder dataDecoder,
+        Authenticator<Object> authenticator,
+        PrincipalMapper<Object, Object> principalMapper) {
         this.method = Objects.requireNonNull(method, "method");
         this.service = Objects.requireNonNull(service, "service");
         this.methodInfo = Objects.requireNonNull(methodInfo, "methodInfo");
@@ -72,11 +73,11 @@ public final class ServiceMethodInvoker {
      * @return mono of service message
      */
     public Mono<ServiceMessage> invokeOne(ServiceMessage message) {
-        return Mono.deferContextual(context -> authenticate(message, (Context) context))
+        return Mono.deferContextual(context -> authenticate(message, context))
                    .flatMap(authData -> deferWithContextOne(message, authData))
                    .map(response -> toResponse(response, message.qualifier(), message.dataFormat()))
                    .onErrorResume(
-                           throwable -> Mono.just(errorMapper.toMessage(message.qualifier(), throwable)));
+                       throwable -> Mono.just(errorMapper.toMessage(message.qualifier(), throwable)));
     }
 
     /**
@@ -86,11 +87,11 @@ public final class ServiceMethodInvoker {
      * @return flux of service messages
      */
     public Flux<ServiceMessage> invokeMany(ServiceMessage message) {
-        return Mono.deferContextual(context -> authenticate(message, (Context) context))
+        return Mono.deferContextual(context -> authenticate(message, context))
                    .flatMapMany(authData -> deferWithContextMany(message, authData))
                    .map(response -> toResponse(response, message.qualifier(), message.dataFormat()))
                    .onErrorResume(
-                           throwable -> Flux.just(errorMapper.toMessage(message.qualifier(), throwable)));
+                       throwable -> Flux.just(errorMapper.toMessage(message.qualifier(), throwable)));
     }
 
     /**
@@ -100,52 +101,74 @@ public final class ServiceMethodInvoker {
      * @return flux of service messages
      */
     public Flux<ServiceMessage> invokeBidirectional(Publisher<ServiceMessage> publisher) {
-        return Flux.from(publisher)
-                   .switchOnFirst(
-                           (first, messages) ->
-                                   Mono.deferContextual(context -> authenticate(first.get(), (Context) context))
-                                       .flatMapMany(authData -> deferWithContextBidirectional(messages, authData))
-                                       .map(
-                                               response ->
-                                                       toResponse(response, first.get().qualifier(), first
-                                                               .get()
-                                                               .dataFormat()))
-                                       .onErrorResume(
-                                               throwable ->
-                                                       Flux.just(errorMapper.toMessage(first
-                                                                                               .get()
-                                                                                               .qualifier(), throwable))));
+
+        return Flux
+            .deferContextual(ctx -> Flux
+                .from(publisher)
+                .switchOnFirst((s, flux) -> {
+                    ServiceMessage first;
+                    if (s.hasValue() && (first = s.get()) != null) {
+                        return this
+                            // auth
+                            .authenticate(first, ctx)
+                            //invoke
+                            .flatMapMany(authData -> flux
+                                .map(this::toRequest)
+                                .transform(this::invoke)
+                                .contextWrite(context -> enhanceContext(authData, context)))
+                            //trace
+                            .contextWrite(TraceHolder.readToContext(s.getContextView(), first.headers()))
+                            //response
+                            .map(response -> toResponse(response, first.qualifier(), first.dataFormat()))
+                            //error
+                            .onErrorResume(throwable -> Flux.just(errorMapper.toMessage(first.qualifier(), throwable)));
+                    }
+                    return flux.then(Mono.empty());
+                }));
+//        return Flux.from(publisher)
+//                   .switchOnFirst(
+//                       (first, messages) ->
+//                           Mono.deferContextual(context -> authenticate(first.get(), context))
+//                               .flatMapMany(authData -> deferWithContextBidirectional(messages, authData))
+//                               .map(
+//                                   response ->
+//                                       toResponse(response,
+//                                                  first.get().qualifier(),
+//                                                  first.get().dataFormat()))
+//                               .onErrorResume(
+//                                   throwable ->
+//                                       Flux.just(errorMapper.toMessage(first.get().qualifier(), throwable))));
     }
 
     private Mono<?> deferWithContextOne(ServiceMessage message, Object authData) {
-        return Mono.deferContextual(context -> Mono.from(invoke(toRequest(message))))
+        return Mono.from(invoke(toRequest(message)))
                    .contextWrite(context -> TraceHolder
-                           .readToContext(
-                                   enhanceContext(authData, context),
-                                   message.headers()));
+                       .readToContext(
+                           enhanceContext(authData, context),
+                           message.headers()));
     }
 
     private Flux<?> deferWithContextMany(ServiceMessage message, Object authData) {
-        return Flux.deferContextual(context -> Flux.from(invoke(toRequest(message))))
+        return Flux.from(invoke(toRequest(message)))
                    .contextWrite(context -> TraceHolder
-                           .readToContext(
-                                   enhanceContext(authData, context),
-                                   message.headers()));
+                       .readToContext(
+                           enhanceContext(authData, context),
+                           message.headers()));
     }
 
     private Flux<?> deferWithContextBidirectional(Flux<ServiceMessage> messages, Object authData) {
-        return Flux.deferContextual(context -> messages
-                           .switchOnFirst((s, flux) -> {
-                               ServiceMessage msg = s.get();
-                               if (msg == null) {
-                                   return flux;
-                               }
-                               return flux
-                                       .map(this::toRequest)
-                                       .transform(this::invoke)
-                                       .contextWrite(TraceHolder.readToContext(s.getContextView(), msg.headers()));
-                           }))
-                   .contextWrite(context -> enhanceContext(authData, context));
+        return messages
+            .switchOnFirst((s, flux) -> {
+                ServiceMessage msg;
+                if (s.hasValue() && (msg = s.get()) != null) {
+                    return flux
+                        .map(this::toRequest)
+                        .transform(this::invoke)
+                        .contextWrite(TraceHolder.readToContext(s.getContextView(), msg.headers()));
+                }
+                return flux;
+            })
+            .contextWrite(context -> enhanceContext(authData, context));
     }
 
     private Publisher<?> invoke(Object request) {
@@ -177,7 +200,7 @@ public final class ServiceMethodInvoker {
         return arguments;
     }
 
-    private Mono<Object> authenticate(ServiceMessage message, Context context) {
+    private Mono<Object> authenticate(ServiceMessage message, ContextView context) {
         if (!methodInfo.isSecured()) {
             return Mono.just(NULL_AUTH_CONTEXT);
         }
@@ -192,9 +215,9 @@ public final class ServiceMethodInvoker {
         }
 
         return authenticator
-                .apply(message.headers())
-                .switchIfEmpty(Mono.just(NULL_AUTH_CONTEXT))
-                .onErrorMap(this::toUnauthorizedException);
+            .apply(message.headers())
+            .switchIfEmpty(Mono.just(NULL_AUTH_CONTEXT))
+            .onErrorMap(this::toUnauthorizedException);
     }
 
     private UnauthorizedException toUnauthorizedException(Throwable th) {
@@ -220,15 +243,15 @@ public final class ServiceMethodInvoker {
         ServiceMessage request = dataDecoder.apply(message, methodInfo.requestType());
 
         if (!methodInfo.isRequestTypeVoid()
-                && !methodInfo.isRequestTypeServiceMessage()
-                && !request.hasData(methodInfo.requestType())) {
+            && !methodInfo.isRequestTypeServiceMessage()
+            && !request.hasData(methodInfo.requestType())) {
 
             Optional<?> dataOptional = Optional.ofNullable(request.data());
             Class<?> clazz = dataOptional.map(Object::getClass).orElse(null);
             throw new BadRequestException(
-                    String.format(
-                            "Expected service request data of type: %s, but received: %s",
-                            methodInfo.requestType(), clazz));
+                String.format(
+                    "Expected service request data of type: %s, but received: %s",
+                    methodInfo.requestType(), clazz));
         }
 
         return methodInfo.isRequestTypeServiceMessage() ? request : request.data();
@@ -260,13 +283,13 @@ public final class ServiceMethodInvoker {
     @Override
     public String toString() {
         return new StringJoiner(", ", ServiceMethodInvoker.class.getSimpleName() + "[", "]")
-                .add("method=" + method)
-                .add("service=" + service)
-                .add("methodInfo=" + methodInfo)
-                .add("errorMapper=" + errorMapper)
-                .add("dataDecoder=" + dataDecoder)
-                .add("authenticator=" + authenticator)
-                .add("principalMapper=" + principalMapper)
-                .toString();
+            .add("method=" + method)
+            .add("service=" + service)
+            .add("methodInfo=" + methodInfo)
+            .add("errorMapper=" + errorMapper)
+            .add("dataDecoder=" + dataDecoder)
+            .add("authenticator=" + authenticator)
+            .add("principalMapper=" + principalMapper)
+            .toString();
     }
 }

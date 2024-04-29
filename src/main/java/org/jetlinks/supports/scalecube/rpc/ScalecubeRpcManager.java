@@ -82,7 +82,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private ServiceCall serviceCall;
 
-    private Scheduler requestScheduler =Schedulers.parallel();
+    private Scheduler requestScheduler = Schedulers.parallel();
 
     private static final RetryBackoffSpec DEFAULT_RETRY = Retry
         .backoff(12, Duration.ofMillis(100))
@@ -658,7 +658,7 @@ public class ScalecubeRpcManager implements RpcManager {
             return getApiCall(id, clazz, null);
         }
 
-        private Mono<ServiceMessage> toServiceMessage(MethodInfo methodInfo, Object request) {
+        private ServiceMessage.Builder toServiceMessageBuilder(MethodInfo methodInfo, Object request) {
 
             ServiceMessage.Builder builder;
 
@@ -673,6 +673,13 @@ public class ScalecubeRpcManager implements RpcManager {
                     .data(request)
                     .dataFormatIfAbsent(contentType);
             }
+
+            return builder;
+        }
+
+        private Mono<ServiceMessage> toServiceMessage(MethodInfo methodInfo, Object request) {
+
+            ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, request);
 
             return TraceHolder
                 .writeContextTo(builder, (ServiceMessage.Builder::header))
@@ -756,8 +763,21 @@ public class ScalecubeRpcManager implements RpcManager {
                                     //noinspection rawtypes
                                     return serviceCall
                                         .requestBidirectional(
-                                            Flux.from((Publisher) request)
-                                                .flatMap(data -> toServiceMessage(methodInfo, data)),
+                                            Flux.deferContextual(ctx -> {
+                                                return Flux
+                                                    .from((Publisher<?>) request)
+                                                    .index((o, data) -> {
+                                                        if (o == 0) {
+                                                            return TraceHolder
+                                                                .writeContextTo(
+                                                                    ctx,
+                                                                    toServiceMessageBuilder(methodInfo, data),
+                                                                    ServiceMessage.Builder::header)
+                                                                .build();
+                                                        }
+                                                        return toServiceMessageBuilder(methodInfo, data).build();
+                                                    });
+                                            }),
                                             returnType)
                                         .subscribeOn(requestScheduler)
                                         .transform(asFlux(isServiceMessage))
