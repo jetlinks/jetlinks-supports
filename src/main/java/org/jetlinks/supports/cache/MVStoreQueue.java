@@ -92,8 +92,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (type instanceof DataType) {
             mapBuilder.valueType(((DataType<T>) type));
         }
-
-        mvMap = store.openMap("queue", mapBuilder);
+        mvMap = MVStoreUtils.openMap(store,"queue",mapBuilder);
         if (!mvMap.isEmpty()) {
             INDEX.set(this, mvMap.lastKey());
         }

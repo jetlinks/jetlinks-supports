@@ -3,7 +3,10 @@ package org.jetlinks.supports.utils;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.h2.mvstore.DataUtils;
+import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
+import org.h2.mvstore.MVStoreException;
 
 import java.io.File;
 import java.time.LocalDateTime;
@@ -27,6 +30,17 @@ public class MVStoreUtils {
         return new MVStoreOpeningImpl(file, operationName, customizer).open();
     }
 
+    public static <K, V> MVMap<K, V> openMap(MVStore store,
+                                             String name,
+                                             MVMap.MapBuilder<MVMap<K, V>, K, V> builder) {
+        try {
+            return store.openMap(name, builder);
+        } catch (Throwable error) {
+            store.removeMap(name);
+            log.warn("Open file queue error [{}],Maybe the file is broken ?", name, error);
+            return store.openMap(name, builder);
+        }
+    }
 
     public interface MVStoreOpening {
         File getFile();
@@ -70,16 +84,22 @@ public class MVStoreUtils {
 
         public MVStore open() {
             if (!file.getParentFile().exists()) {
-                file.getParentFile().mkdirs();
+                boolean ignore = file.getParentFile().mkdirs();
             }
             try {
                 MVStore store = open0(customizer);
+                //尝试打开map
+                for (String mapName : store.getMapNames()) {
+                    MVMap<?, ?> map = store.openMap(mapName);
+                    //test read
+                    map.lastKey();
+                }
                 fireEvent(Action.success);
                 return store;
             } catch (Throwable e) {
                 this.error = null;
                 if (file.exists()) {
-                    return tryRecovery(customizer);
+                    return tryRecovery(customizer, e);
                 }
                 throw e;
             }
@@ -89,20 +109,20 @@ public class MVStoreUtils {
         @SuppressWarnings("all")
         private File backup() {
             File backup = new File(file.getParentFile(), file.getName() + ".backup." + LocalDateTime
-                    .now()
-                    .format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss")));
+                .now()
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss")));
 
             file.renameTo(backup);
 
             return backup;
         }
 
-        private MVStore tryRecovery(Function<MVStore.Builder, MVStore.Builder> customizer) {
+        private MVStore tryRecovery(Function<MVStore.Builder, MVStore.Builder> customizer, Throwable reason) {
             try {
                 log.warn("try recovery mvstore:{}", file);
                 MVStore recover = open0(c -> customizer
-                        .apply(c)
-                        .recoveryMode());
+                    .apply(c)
+                    .recoveryMode());
                 recover.compactFile(30_000);
                 recover.close(30_000);
                 log.warn("recovery mvstore:{} complete", file);
@@ -118,7 +138,7 @@ public class MVStoreUtils {
                     this.error = err;
                     fireEvent(Action.backupFail);
                 }
-                file.delete();
+                boolean ignore = file.delete();
                 return open0(customizer);
             }
 
@@ -127,12 +147,12 @@ public class MVStoreUtils {
 
         private MVStore open0(Function<MVStore.Builder, MVStore.Builder> customizer) {
             MVStore.Builder builder = new MVStore.Builder()
-                    .fileName(file.getAbsolutePath())
-                    //64MB
-                    .autoCommitBufferSize(64 * 1024)
-                    .compress()
-                    .keysPerPage(1024)
-                    .cacheSize(64);
+                .fileName(file.getAbsolutePath())
+                //64MB
+                .autoCommitBufferSize(64 * 1024)
+                .compress()
+                .keysPerPage(1024)
+                .cacheSize(64);
             builder = customizer.apply(builder);
             return builder.open();
         }

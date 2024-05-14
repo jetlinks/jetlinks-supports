@@ -66,7 +66,7 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
         }
         queues = new ArrayList<>(concurrency);
         for (int i = 0; i < concurrency; i++) {
-            queues.add(new MVStoreQueue<>(store.openMap(i == 0 ? "queue" : "queue_" + i, mapBuilder)));
+            queues.add(new MVStoreQueue<>(MVStoreUtils.openMap(store, i == 0 ? "queue" : "queue_" + i, mapBuilder)));
         }
         QUEUE_HOLDER = new FastThreadLocal<Integer>() {
             @Override
