@@ -57,6 +57,7 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
             builder -> builder
                 .cacheSize(64)
                 .autoCommitBufferSize(64 * 1024)
+                .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e)))
         );
         Object type = options.get("valueType");
 

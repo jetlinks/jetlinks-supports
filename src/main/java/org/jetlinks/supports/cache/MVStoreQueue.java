@@ -85,6 +85,9 @@ class MVStoreQueue<T> implements FileQueue<T> {
             builder -> builder
                 .cacheSize(16)
                 .autoCommitBufferSize(32 * 1024)
+                .backgroundExceptionHandler(((t, e) -> {
+                    log.warn("{} UncaughtException",name, e);
+                }))
                 .compress());
         Object type = options.get("valueType");
 
@@ -92,7 +95,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (type instanceof DataType) {
             mapBuilder.valueType(((DataType<T>) type));
         }
-        mvMap = MVStoreUtils.openMap(store,"queue",mapBuilder);
+        mvMap = MVStoreUtils.openMap(store, "queue", mapBuilder);
         if (!mvMap.isEmpty()) {
             INDEX.set(this, mvMap.lastKey());
         }
@@ -141,9 +144,9 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.compactFile((int) Duration.ofSeconds(30).toMillis());
-        store.sync();
-        store.close();
+//        store.compactFile((int) Duration.ofSeconds(30).toMillis());
+//        store.sync();
+        store.closeImmediately();
     }
 
     private void checkClose() {
