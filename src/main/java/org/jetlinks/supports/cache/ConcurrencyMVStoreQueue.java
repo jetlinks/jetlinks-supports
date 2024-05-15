@@ -84,8 +84,6 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.compactFile((int) Duration.ofSeconds(30).toMillis());
-        store.sync();
         store.close();
     }
 
