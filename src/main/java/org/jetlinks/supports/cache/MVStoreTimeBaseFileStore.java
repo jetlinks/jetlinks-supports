@@ -93,7 +93,7 @@ public class MVStoreTimeBaseFileStore<T extends Serializable> implements TimeBas
     @Override
     public void dispose() {
         store.compactFile((int)Duration.ofSeconds(30).toMillis());
-        store.close();
+        store.close(-1);
     }
 
     @Override

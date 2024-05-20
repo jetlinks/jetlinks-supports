@@ -73,7 +73,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
     protected void open() {
         try {
             if (store != null && !store.isClosed()) {
-                store.close();
+                store.close(-1);
             }
         } catch (Throwable ignore) {
 
