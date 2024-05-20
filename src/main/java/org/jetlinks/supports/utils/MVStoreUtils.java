@@ -34,7 +34,10 @@ public class MVStoreUtils {
             return store.openMap(name, builder);
         } catch (Throwable error) {
             store.removeMap(name);
-            log.warn("Open file queue error [{}],Maybe the file is broken ?", name, error);
+            log.warn("Open MVStore Map[{}] error,Maybe the file [{}] is broken?",
+                     name,
+                     store.getFileStore().getFileName(),
+                     error);
             return store.openMap(name, builder);
         }
     }
