@@ -144,7 +144,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.close();
+        store.close(-1);
     }
 
     private void checkClose() {

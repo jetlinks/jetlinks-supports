@@ -3,10 +3,7 @@ package org.jetlinks.supports.utils;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.h2.mvstore.DataUtils;
-import org.h2.mvstore.MVMap;
-import org.h2.mvstore.MVStore;
-import org.h2.mvstore.MVStoreException;
+import org.h2.mvstore.*;
 
 import java.io.File;
 import java.time.LocalDateTime;
@@ -89,11 +86,6 @@ public class MVStoreUtils {
             try {
                 MVStore store = open0(customizer);
                 //尝试打开map
-                for (String mapName : store.getMapNames()) {
-                    MVMap<?, ?> map = store.openMap(mapName);
-                    //test read
-                    map.lastKey();
-                }
                 fireEvent(Action.success);
                 return store;
             } catch (Throwable e) {
@@ -120,11 +112,8 @@ public class MVStoreUtils {
         private MVStore tryRecovery(Function<MVStore.Builder, MVStore.Builder> customizer, Throwable reason) {
             try {
                 log.warn("try recovery mvstore:{}", file);
-                MVStore recover = open0(c -> customizer
-                    .apply(c)
-                    .recoveryMode());
-                recover.compactFile(30_000);
-                recover.close(30_000);
+                MVStoreTool.compactCleanUp(file.getAbsolutePath());
+                MVStoreTool.compact(file.getAbsolutePath(), false);
                 log.warn("recovery mvstore:{} complete", file);
                 return open0(customizer);
             } catch (Throwable err) {
