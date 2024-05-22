@@ -104,7 +104,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         }
         log.debug("register cluster [{}] feature:{}", member.alias() == null ? member.id() : member.alias(), features);
         for (String feature : features) {
-            Set<String> members = featureMembers.computeIfAbsent(feature, (k) -> new ConcurrentHashMap<String, String>().keySet(k));
+            Set<String> members = featureMembers.computeIfAbsent(feature, (k) -> ConcurrentHashMap.newKeySet());
             members.add(member.id());
             if (StringUtils.hasText(member.alias())) {
                 members.add(member.alias());
@@ -321,6 +321,11 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     @Override
     public void shutdown() {
         real.shutdown();
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
