@@ -117,7 +117,7 @@ public class ScalecubeRpcManager implements RpcManager {
     private final Map<String, Sinks.Many<ServiceEvent>> listener = new NonBlockingHashMap<>();
     private final List<ServiceRegistration> localRegistrations = new CopyOnWriteArrayList<>();
 
-    private final ServiceMethodRegistry methodRegistry = new RpcServiceMethodRegistry();
+    private final RpcServiceMethodRegistry methodRegistry = new RpcServiceMethodRegistry();
 
     private ServiceTransport transport;
 
@@ -372,6 +372,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @Override
     public <T> Disposable registerService(String service, T rpcService) {
+        Disposable.Composite _dispose = Disposables.composite();
         ServiceInfo serviceInfo = ServiceInfo
             .fromServiceInstance(rpcService)
             .errorMapper(DefaultErrorMapper.INSTANCE)
@@ -387,7 +388,7 @@ public class ScalecubeRpcManager implements RpcManager {
             .tag(SERVICE_ID_TAG, service)
             .build();
 
-        methodRegistry.registerService(serviceInfo);
+        _dispose.add(methodRegistry.registerService0(serviceInfo)) ;
 
         List<ServiceRegistration> registrations = ServiceScanner
             .scanServiceInfo(serviceInfo)
@@ -405,10 +406,12 @@ public class ScalecubeRpcManager implements RpcManager {
         syncRegistration();
         log.debug("register rpc service {}", serviceInfo);
 
-        return () -> {
+        _dispose.add(() -> {
             localRegistrations.removeAll(registrations);
             syncRegistration();
-        };
+        });
+
+        return _dispose;
     }
 
     @Override
