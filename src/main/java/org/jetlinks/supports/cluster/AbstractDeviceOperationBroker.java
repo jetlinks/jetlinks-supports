@@ -41,24 +41,25 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
         long startWith = System.currentTimeMillis();
         String id = getAwaitReplyKey(deviceId, messageId);
         return replyProcessor
-                .computeIfAbsent(id, ignore -> Sinks.many().multicast().onBackpressureBuffer())
-                .asFlux()
-                .as(flux -> {
-                    if (timeout.isZero() || timeout.isNegative()) {
-                        return flux;
-                    }
-                    return flux.timeout(timeout, Mono.error(() -> new DeviceOperationException(ErrorCode.TIME_OUT)));
-                })
-                .doFinally(signal -> {
+            .computeIfAbsent(id, ignore -> Sinks.many().multicast().onBackpressureBuffer())
+            .asFlux()
+            .as(flux -> {
+                if (timeout.isZero() || timeout.isNegative()) {
+                    return flux;
+                }
+                return flux.timeout(timeout, Mono.error(() -> new DeviceOperationException.NoStackTrace(ErrorCode.TIME_OUT)));
+            })
+            .doFinally(signal -> {
+                if (AbstractDeviceOperationBroker.log.isTraceEnabled()) {
                     AbstractDeviceOperationBroker.log
-                            .trace("reply device message {} {} take {}ms",
-                                   deviceId,
-                                   messageId,
-                                   System.currentTimeMillis() - startWith);
-
-                    replyProcessor.remove(id);
-                    fragmentCounter.remove(id);
-                });
+                        .trace("reply device message {} {} take {}ms",
+                               deviceId,
+                               messageId,
+                               System.currentTimeMillis() - startWith);
+                }
+                replyProcessor.remove(id);
+                fragmentCounter.remove(id);
+            });
     }
 
     @Override
@@ -84,7 +85,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
-        if (StringUtils.isEmpty(message.getMessageId())) {
+        if (!StringUtils.hasText(message.getMessageId())) {
             log.warn("reply message messageId is empty: {}", message);
             return Reactors.ALWAYS_FALSE;
         }
@@ -97,18 +98,18 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
             }
         }
         return Mono
-                .defer(() -> {
-                    String msgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(message.getMessageId());
-                    if (message.getHeader(Headers.async).orElse(false)
-                            || replyProcessor.containsKey(getAwaitReplyKey(message.getDeviceId(), msgId))) {
-                        handleReply(message);
-                        return Reactors.ALWAYS_TRUE;
-                    }
-                    return this
-                            .doReply(message)
-                            .thenReturn(true);
-                })
-                .then(then);
+            .defer(() -> {
+                String msgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(message.getMessageId());
+                if (message.getHeader(Headers.async).orElse(false)
+                    || replyProcessor.containsKey(getAwaitReplyKey(message.getDeviceId(), msgId))) {
+                    handleReply(message);
+                    return Reactors.ALWAYS_TRUE;
+                }
+                return this
+                    .doReply(message)
+                    .thenReturn(true);
+            })
+            .then(then);
     }
 
     protected void handleReply(DeviceMessageReply message) {
@@ -119,7 +120,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                 log.trace("handle fragment device[{}] message {}", message.getDeviceId(), message);
                 partMsgId = getAwaitReplyKey(message.getDeviceId(), partMsgId);
                 Sinks.Many<DeviceMessageReply> processor = replyProcessor
-                        .getOrDefault(partMsgId, replyProcessor.get(messageId));
+                    .getOrDefault(partMsgId, replyProcessor.get(messageId));
 
                 if (processor == null || processor.currentSubscriberCount() == 0) {
                     replyProcessor.remove(partMsgId);

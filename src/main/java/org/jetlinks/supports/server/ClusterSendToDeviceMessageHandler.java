@@ -61,23 +61,23 @@ public class ClusterSendToDeviceMessageHandler {
 
     private void init() {
         handler
-                .handleSendToDeviceMessage(sessionManager.getCurrentServerId())
-                .onBackpressureDrop(msg -> {
+            .handleSendToDeviceMessage(sessionManager.getCurrentServerId())
+            .onBackpressureDrop(msg -> {
 
-                    @SuppressWarnings("all")
-                    Disposable disposable = this
-                            .doReply((DeviceOperator) null, createReply(msg).error(ErrorCode.SYSTEM_BUSY))
-                            .subscribe();
+                @SuppressWarnings("all")
+                Disposable disposable = this
+                    .doReply((DeviceOperator) null, createReply(msg).error(ErrorCode.SYSTEM_BUSY))
+                    .subscribe();
 
-                })
-                .flatMap(msg -> this
-                                 .handleMessage(msg)
-                                 .onErrorResume(err -> {
-                                     log.error("handle send to device message error {}", msg, err);
-                                     return Mono.empty();
-                                 }),
-                         concurrency)
-                .subscribe();
+            })
+            .flatMap(msg -> this
+                         .handleMessage(msg)
+                         .onErrorResume(err -> {
+                             log.error("handle send to device message error {}", msg, err);
+                             return Mono.empty();
+                         }),
+                     concurrency)
+            .subscribe();
     }
 
     private DeviceMessageReply createReply(Message message) {
@@ -86,8 +86,8 @@ public class ClusterSendToDeviceMessageHandler {
             reply = ((RepayableDeviceMessage<?>) message).newReply();
         } else {
             reply = new CommonDeviceMessageReply<>()
-                    .deviceId(((DeviceMessage) message).getDeviceId())
-                    .messageId(message.getMessageId());
+                .deviceId(((DeviceMessage) message).getDeviceId())
+                .messageId(message.getMessageId());
         }
         return TraceHolder.copyContext(message.getHeaders(), reply, Message::addHeaderIfAbsent);
     }
@@ -103,15 +103,15 @@ public class ClusterSendToDeviceMessageHandler {
             return Mono.empty();
         }
         return sessionManager
-                .getSession(message.getDeviceId())
-                //会话存在则直接发送给会话
-                .map(session -> sendTo(session, message))
-                //处理会话不存在的消息
-                .defaultIfEmpty(Mono.defer(() -> sendToUnknownSession(message)))
-                .flatMap(Function.identity())
-                .contextWrite(ctx -> TraceHolder
-                        .readToContext(ctx, message.getHeaders())
-                        .put(DeviceMessage.class, message));
+            .getSession(message.getDeviceId())
+            //会话存在则直接发送给会话
+            .map(session -> sendTo(session, message))
+            //处理会话不存在的消息
+            .defaultIfEmpty(Mono.defer(() -> sendToUnknownSession(message)))
+            .flatMap(Function.identity())
+            .contextWrite(ctx -> TraceHolder
+                .readToContext(ctx, message.getHeaders())
+                .put(DeviceMessage.class, message));
     }
 
     @SuppressWarnings("all")
@@ -129,10 +129,10 @@ public class ClusterSendToDeviceMessageHandler {
         if (session.isWrapFrom(LostDeviceSession.class)) {
             if (message instanceof DisconnectDeviceMessage) {
                 return sessionManager
-                        .remove(session.getDeviceId(), false)
-                        .then(
-                                doReply(device, ((DisconnectDeviceMessage) message).newReply().success())
-                        );
+                    .remove(session.getDeviceId(), false)
+                    .then(
+                        doReply(device, ((DisconnectDeviceMessage) message).newReply().success())
+                    );
             }
             return retryResume(device, message);
         }
@@ -140,26 +140,35 @@ public class ClusterSendToDeviceMessageHandler {
         CodecContext context = new CodecContext(device, message, DeviceSession.trace(session));
 
         return device
-                .getProtocol()
-                .flatMap(protocol -> protocol.getMessageCodec(context.session.getTransport()))
-                .flatMapMany(codec -> codec.encode(context))
-                .as(create(DeviceTracer.SpanName.encode(device.getDeviceId()),
-                           (span, msg) -> span.setAttribute(DeviceTracer.SpanKey.message, msg.toString())))
-                //发送给会话
-                .map(msg -> context.session.send(msg).then())
-                //协议包返回了empty,可能是不支持这类消息
-                .defaultIfEmpty(Mono.defer(() -> handleUnsupportedMessage(context)))
-                .flatMap(Function.identity())
-                .onErrorResume(err -> {
-                    if (!(err instanceof DeviceOperationException)) {
-                        log.error("handle send to device message error {}", context.message, err);
-                    }
-                    if (!context.alreadyReply) {
-                        return doReply(context, createReply(context.message).error(err));
+            .getProtocol()
+            .flatMap(protocol -> protocol.getMessageCodec(context.session.getTransport()))
+            .flatMapMany(codec -> codec.encode(context))
+            .as(create(DeviceTracer.SpanName.encode(device.getDeviceId()),
+                       (span, msg) -> span.setAttribute(DeviceTracer.SpanKey.message, msg.toString())))
+            //发送给会话
+            .map(msg -> context
+                .session
+                .send(msg)
+                .flatMap(success -> {
+                    //返回false,表示不支持此类消息发送.
+                    if (!success) {
+                        return handleUnsupportedMessage(context);
                     }
                     return Mono.empty();
-                })
-                .then(Mono.defer(() -> handleMessageSent(context)));
+                }))
+            //协议包返回了empty,可能是不支持这类消息
+            .defaultIfEmpty(Mono.defer(() -> handleUnsupportedMessage(context)))
+            .flatMap(Function.identity())
+            .onErrorResume(err -> {
+                if (!(err instanceof DeviceOperationException)) {
+                    log.error("handle send to device message error {}", context.message, err);
+                }
+                if (!context.alreadyReply) {
+                    return doReply(context, createReply(context.message).error(err));
+                }
+                return Mono.empty();
+            })
+            .then(Mono.defer(() -> handleMessageSent(context)));
 
     }
 
@@ -170,11 +179,11 @@ public class ClusterSendToDeviceMessageHandler {
         //异步请求,直接回复已发送
         if (context.message.getHeader(Headers.async).orElse(false)) {
             return this
-                    .doReply(context, createReply(context.message)
-                            .message(ErrorCode.REQUEST_HANDLING.getText())
-                            .code(ErrorCode.REQUEST_HANDLING.name())
-                            .success())
-                    .then();
+                .doReply(context, createReply(context.message)
+                    .message(ErrorCode.REQUEST_HANDLING.getText())
+                    .code(ErrorCode.REQUEST_HANDLING.name())
+                    .success())
+                .then();
         }
         return Mono.empty();
     }
@@ -184,8 +193,8 @@ public class ClusterSendToDeviceMessageHandler {
             //断开连接
             if (context.message instanceof DisconnectDeviceMessage) {
                 return sessionManager
-                        .remove(context.device.getDeviceId(), false)
-                        .then(this.doReply(context, this.createReply(context.message).success()));
+                    .remove(context.device.getDeviceId(), false)
+                    .then(this.doReply(context, this.createReply(context.message).success()));
             }
 
             //子设备消息
@@ -195,15 +204,15 @@ public class ClusterSendToDeviceMessageHandler {
                 //断开子设备连接
                 if (childMsg instanceof DisconnectDeviceMessage) {
                     return sessionManager
-                            .remove(((DisconnectDeviceMessage) childMsg).getDeviceId(), false)
-                            .then(this.doReply(context, this.createReply(context.message).success()));
+                        .remove(((DisconnectDeviceMessage) childMsg).getDeviceId(), false)
+                        .then(this.doReply(context, this.createReply(context.message).success()));
                 }
                 //获取子设备状态
                 if (childMsg instanceof DeviceStateCheckMessage) {
                     return this.doReply(context, this.createReply(context.message).success());
                 }
             }
-
+            //不支持
             return this.doReply(context, this.createReply(context.message).error(ErrorCode.UNSUPPORTED_MESSAGE));
         }
 
@@ -213,32 +222,32 @@ public class ClusterSendToDeviceMessageHandler {
 
     private Mono<Void> sendToUnknownSession(DeviceMessage message) {
         return registry
-                .getDevice(message.getDeviceId())
-                .flatMap(device -> device
-                        .getSelfConfig(DeviceConfigKey.parentGatewayId)
-                        .flatMap(registry::getDevice)
-                        //发给上级网关设备
-                        .map(parentDevice -> this.sendToParentSession(device, parentDevice, message))
-                        .defaultIfEmpty(Mono.defer(() -> sendToNoSession(device, message))))
-                .flatMap(Function.identity());
+            .getDevice(message.getDeviceId())
+            .flatMap(device -> device
+                .getSelfConfig(DeviceConfigKey.parentGatewayId)
+                .flatMap(registry::getDevice)
+                //发给上级网关设备
+                .map(parentDevice -> this.sendToParentSession(device, parentDevice, message))
+                .defaultIfEmpty(Mono.defer(() -> sendToNoSession(device, message))))
+            .flatMap(Function.identity());
     }
 
     private Mono<Void> sendToNoSession(DeviceOperator device, DeviceMessage message) {
         log.warn("device session state failed,try resume. {}", message);
         return sessionManager
-                //检查整个集群的会话
-                .checkAlive(message.getDeviceId(), false)
-                .flatMap(exists -> {
-                    if (exists) {
-                        //会话依旧存在则尝试恢复发送
-                        return retryResume(device, message);
-                    }
-                    boolean resume = message.getHeader(resumeSession).orElse(false);
+            //检查整个集群的会话
+            .checkAlive(message.getDeviceId(), false)
+            .flatMap(exists -> {
+                if (exists) {
+                    //会话依旧存在则尝试恢复发送
+                    return retryResume(device, message);
+                }
+                boolean resume = message.getHeader(resumeSession).orElse(false);
 
-                    return doReply(device, createReply(message)
-                            .addHeader("reason", "session_not_exists")
-                            .error(resume ? ErrorCode.CONNECTION_LOST : ErrorCode.CLIENT_OFFLINE));
-                });
+                return doReply(device, createReply(message)
+                    .addHeader("reason", "session_not_exists")
+                    .error(resume ? ErrorCode.CONNECTION_LOST : ErrorCode.CLIENT_OFFLINE));
+            });
     }
 
     private Mono<Void> retryResume(DeviceOperator device, DeviceMessage message) {
@@ -250,14 +259,14 @@ public class ClusterSendToDeviceMessageHandler {
         //尝试发送给其他节点
         if (handler instanceof DeviceOperationBroker) {
             return device
-                    .getSelfConfig(DeviceConfigKey.connectionServerId)
-                    .flatMap(serverId -> ((DeviceOperationBroker) handler).send(serverId, Mono.just(message)))
-                    .flatMap(i -> {
-                        if (i > 0) {
-                            return Mono.empty();
-                        }
-                        return doReply(device, createReply(message).error(ErrorCode.CONNECTION_LOST));
-                    });
+                .getSelfConfig(DeviceConfigKey.connectionServerId)
+                .flatMap(serverId -> ((DeviceOperationBroker) handler).send(serverId, Mono.just(message)))
+                .flatMap(i -> {
+                    if (i > 0) {
+                        return Mono.empty();
+                    }
+                    return doReply(device, createReply(message).error(ErrorCode.CONNECTION_LOST));
+                });
         }
         return doReply(device, createReply(message).error(ErrorCode.CONNECTION_LOST));
     }
@@ -278,22 +287,22 @@ public class ClusterSendToDeviceMessageHandler {
 
     Mono<Void> doReply(DeviceOperator device, DeviceMessage message) {
         return decodedClientMessageHandler
-                .handleMessage(device, message)
-                .then();
+            .handleMessage(device, message)
+            .then();
     }
 
     Mono<Void> doReply(CodecContext context, DeviceMessage message) {
         if (context != null) {
             if (context.message.getHeader(Headers.sendAndForget).orElse(false)
-                    || context.alreadyReply) {
+                || context.alreadyReply) {
                 return Mono.empty();
             }
             context.alreadyReply = true;
             return doReply(context.device, message)
-                    .contextWrite(ctx-> TraceHolder.readToContext(ctx, context.message.getHeaders()));
+                .contextWrite(ctx -> TraceHolder.readToContext(ctx, context.message.getHeaders()));
         }
         return doReply((DeviceOperator) null, message)
-                .contextWrite(ctx-> TraceHolder.readToContext(ctx, message.getHeaders()));
+            .contextWrite(ctx -> TraceHolder.readToContext(ctx, message.getHeaders()));
 
     }
 
@@ -342,9 +351,9 @@ public class ClusterSendToDeviceMessageHandler {
         public Mono<Void> reply(@Nonnull Publisher<? extends DeviceMessage> replyMessage) {
             alreadyReply = true;
             return Flux
-                    .from(replyMessage)
-                    .flatMap(msg -> decodedClientMessageHandler.handleMessage(device, msg))
-                    .then();
+                .from(replyMessage)
+                .flatMap(msg -> decodedClientMessageHandler.handleMessage(device, msg))
+                .then();
         }
 
         @Override
@@ -355,8 +364,8 @@ public class ClusterSendToDeviceMessageHandler {
         @Override
         public Mono<Void> disconnect() {
             return sessionManager
-                    .remove(device.getDeviceId(), true)
-                    .then();
+                .remove(device.getDeviceId(), true)
+                .then();
         }
 
         @Nonnull

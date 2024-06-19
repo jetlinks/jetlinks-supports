@@ -1,9 +1,9 @@
 package org.jetlinks.supports.scalecube.rpc;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
 import io.rsocket.RSocketErrorException;
-import io.rsocket.exceptions.ApplicationErrorException;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
@@ -57,9 +57,11 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -228,15 +230,27 @@ public class ScalecubeRpcManager implements RpcManager {
             public void onMembershipEvent(MembershipEvent event) {
                 if (event.isLeaving() || event.isRemoved()) {
                     memberLeave(event.member());
-                    Schedulers
-                        .parallel()
-                        .schedule(() -> {
-                            if (cluster.member(event.member().id()).isPresent()) {
-                                syncRegistration(event.member());
-                            }
-                        }, 5, TimeUnit.SECONDS);
+                    //尝试延迟重新同步一次
+                    if (event.isLeaving()) {
+                        Schedulers
+                            .parallel()
+                            .schedule(() -> {
+                                if (cluster.member(event.member().id()).isPresent()) {
+                                    syncRegistration(event.member());
+                                }
+                            }, 10, TimeUnit.SECONDS);
+                    } else {
+                        Disposable _old = syncMembers.remove(event.member());
+                        if (_old != null) {
+                            _old.dispose();
+                        }
+                    }
                 }
                 if (event.isAdded() || event.isUpdated()) {
+                    Disposable _old = syncMembers.remove(event.member());
+                    if (_old != null) {
+                        _old.dispose();
+                    }
                     syncRegistration(event.member());
                 }
             }
@@ -259,7 +273,7 @@ public class ScalecubeRpcManager implements RpcManager {
         return Flux
             .fromIterable(serverServiceRef.values())
             .flatMapIterable(node -> node.serviceInstances.values())
-            .flatMapIterable(Map::values);
+            .flatMapIterable(ServiceInstances::getAllCalls);
     }
 
     private void start0() {
@@ -331,17 +345,37 @@ public class ScalecubeRpcManager implements RpcManager {
             .build();
     }
 
+    private final Map<Member, Disposable> syncMembers = new ConcurrentHashMap<>();
+
     private synchronized void syncRegistration(Member member) {
-        cluster
-            .send(member, Message
-                .withData(createEndpoint())
-                .header(SPREAD_FROM_HEADER, cluster.member().id())
-                .qualifier(SPREAD_ENDPOINT_QUALIFIER)
-                .build())
-            .retryWhen(Retry.backoff(12, Duration.ofMillis(200)))
-            .subscribe(ignore -> {
-                       },
-                       error -> log.error("Synchronization registration [{}] error", member, error));
+        if (syncMembers.containsKey(member)) {
+            return;
+        }
+        Disposable.Composite _dispose = Disposables.composite();
+        _dispose.add(
+            cluster
+                .send(member, Message
+                    .withData(createEndpoint())
+                    .header(SPREAD_FROM_HEADER, cluster.member().id())
+                    .qualifier(SPREAD_ENDPOINT_QUALIFIER)
+                    .build())
+                .retryWhen(Retry
+                               .fixedDelay(30, Duration.ofSeconds(1))
+                               .filter(err -> err.getMessage() == null
+                                   || err.getMessage().contains("Connection refused")
+                                   || cluster.member(member.id()).isPresent()))
+                .doFinally(ignore -> syncMembers.remove(member, _dispose))
+                .subscribe(ignore -> {
+                           },
+                           error -> {
+                               if (cluster.member(member.id()).isPresent()) {
+                                   log.error("Synchronization registration [{}] error", member, error);
+                               }
+                           })
+        );
+
+        syncMembers.put(member, _dispose);
+
     }
 
     private Mono<Void> doSyncRegistration() {
@@ -388,7 +422,7 @@ public class ScalecubeRpcManager implements RpcManager {
             .tag(SERVICE_ID_TAG, service)
             .build();
 
-        _dispose.add(methodRegistry.registerService0(serviceInfo)) ;
+        _dispose.add(methodRegistry.registerService0(serviceInfo));
 
         List<ServiceRegistration> registrations = ServiceScanner
             .scanServiceInfo(serviceInfo)
@@ -426,20 +460,32 @@ public class ScalecubeRpcManager implements RpcManager {
             .flatMapIterable(e -> e.getValue().getApiCalls(service));
     }
 
+    private static final FastThreadLocal<List<RpcServiceCall<?>>> SHARED =
+        new FastThreadLocal<List<RpcServiceCall<?>>>() {
+            @Override
+            protected List<RpcServiceCall<?>> initialValue() {
+                return new ArrayList<>(2);
+            }
+        };
+
     @Override
     public <I> Mono<RpcService<I>> selectService(Class<I> service) {
-        List<RpcServiceCall<I>> calls = new ArrayList<>(serverServiceRef.size());
-
-        for (Map.Entry<String, ClusterNode> entry : serverServiceRef.entrySet()) {
-            calls.addAll(entry.getValue().getApiCalls(service));
+        @SuppressWarnings("all")
+        List<RpcServiceCall<I>> calls = (List) SHARED.get();
+        try {
+            for (Map.Entry<String, ClusterNode> entry : serverServiceRef.entrySet()) {
+                entry.getValue().getApiCalls(null, service, calls);
+            }
+            if (calls.isEmpty()) {
+                return Mono.empty();
+            }
+            if (calls.size() == 1) {
+                return Mono.just(calls.get(0));
+            }
+            return Mono.just(calls.get(ThreadLocalRandom.current().nextInt(calls.size())));
+        } finally {
+            calls.clear();
         }
-        if (calls.isEmpty()) {
-            return Mono.empty();
-        }
-        if (calls.size() == 1) {
-            return Mono.just(calls.get(0));
-        }
-        return Mono.just(calls.get(ThreadLocalRandom.current().nextInt(calls.size())));
     }
 
     @Override
@@ -486,6 +532,7 @@ public class ScalecubeRpcManager implements RpcManager {
         ClusterNode ref = serverServiceRef.remove(id);
         if (null != ref) {
             fireEvent(ref.services, id, ServiceEvent.Type.removed);
+            ref.dispose();
         }
         log.debug("remove service endpoint [{}] ", member);
     }
@@ -548,17 +595,18 @@ public class ScalecubeRpcManager implements RpcManager {
     }
 
 
-    class ClusterNode {
+    class ClusterNode implements Disposable {
         private String id;
 
         private Member member;
 
         private Address rpcAddress;
 
+        //private final Sinks.One<Void> close = Sinks.one();
         private final Map<String, Set<ServiceReferenceInfo>> serviceReferencesByQualifier = new NonBlockingHashMap<>();
 
         private final List<ServiceRegistration> services = new CopyOnWriteArrayList<>();
-        private final Map<Class<?>, Map<String, RpcServiceCall<?>>> serviceInstances = new NonBlockingHashMap<>();
+        private final Map<Class<?>, ServiceInstances> serviceInstances = new NonBlockingHashMap<>();
 
 
         public synchronized void register(ServiceEndpoint endpoint) {
@@ -631,9 +679,16 @@ public class ScalecubeRpcManager implements RpcManager {
             return getApiCalls(null, clazz);
         }
 
-        private <I> List<RpcServiceCall<I>> getApiCalls(String id, Class<I> clazz) {
-            String sName = Reflect.serviceName(clazz);
-            List<RpcServiceCall<I>> registrations = new ArrayList<>(1);
+        private String getServiceName(Class<?> clazz) {
+            ServiceInstances instances = serviceInstances.get(clazz);
+            if (instances != null) {
+                return instances.name;
+            }
+            return Reflect.serviceName(clazz);
+        }
+
+        private <I> List<RpcServiceCall<I>> getApiCalls(String id, Class<I> clazz, List<RpcServiceCall<I>> registrations) {
+            String sName = getServiceName(clazz);
             for (ServiceRegistration service : services) {
                 String name = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
                 String sid = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
@@ -643,17 +698,20 @@ public class ScalecubeRpcManager implements RpcManager {
                 if (id != null && !Objects.equals(sid, id)) {
                     continue;
                 }
-
                 registrations.add(getApiCall(sid, clazz, service));
             }
             return registrations;
         }
 
+        private <I> List<RpcServiceCall<I>> getApiCalls(String id, Class<I> clazz) {
+            return getApiCalls(id, clazz, new ArrayList<>(2));
+        }
+
         @SuppressWarnings("all")
         private <I> RpcServiceCall<I> getApiCall(String id, Class<I> clazz, ServiceRegistration registration) {
             return (RpcServiceCall<I>) serviceInstances
-                .computeIfAbsent(clazz, type -> new NonBlockingHashMap<>())
-                .computeIfAbsent(id, _id -> createApiCall(_id, clazz));
+                .computeIfAbsent(clazz, ServiceInstances::new)
+                .computeIfAbsent(id, this::createApiCall);
         }
 
         @SuppressWarnings("all")
@@ -796,13 +854,17 @@ public class ScalecubeRpcManager implements RpcManager {
 
 
         private Function<Flux<ServiceMessage>, Flux<Object>> asFlux(boolean isReturnTypeServiceMessage) {
-            return flux ->
-                isReturnTypeServiceMessage ? flux.cast(Object.class) : flux.map(ServiceMessage::data);
+            if (isReturnTypeServiceMessage) {
+                return flux -> flux.cast(Object.class);
+            }
+            return flux -> flux.map(ServiceMessage::data);
         }
 
         private Function<Mono<ServiceMessage>, Mono<Object>> asMono(boolean isReturnTypeServiceMessage) {
-            return mono ->
-                isReturnTypeServiceMessage ? mono.cast(Object.class) : mono.map(ServiceMessage::data);
+            if (isReturnTypeServiceMessage) {
+                return mono -> mono.cast(Object.class);
+            }
+            return mono -> mono.map(ServiceMessage::data);
         }
 
         private Optional<Object> toStringOrEqualsOrHashCode(
@@ -819,6 +881,43 @@ public class ScalecubeRpcManager implements RpcManager {
                 default:
                     return Optional.empty();
             }
+        }
+
+        @Override
+        public void dispose() {
+//            close.emitError(
+//                new ServiceUnavailableException("cluster node [" + member.alias() + "] is down"),
+//                Reactors.emitFailureHandler());
+        }
+    }
+
+    static class ServiceInstances {
+        private final Map<String, RpcServiceCall<?>> calls = new NonBlockingHashMap<>();
+
+        @Getter
+        private final String name;
+        private final Class<?> type;
+
+        ServiceInstances(Class<?> type) {
+            this.type = type;
+            this.name = Reflect.serviceName(type);
+        }
+
+        public RpcServiceCall<?> computeIfAbsent(String id,
+                                                 BiFunction<String, Class<?>, RpcServiceCall<?>> supplier) {
+            RpcServiceCall<?> fastPath = calls.get(id);
+            if (fastPath != null) {
+                return fastPath;
+            }
+            return calls.computeIfAbsent(id, (_id)-> supplier.apply(_id, type));
+        }
+
+        public RpcServiceCall<?> get(String callId) {
+            return calls.get(callId);
+        }
+
+        private Collection<RpcServiceCall<?>> getAllCalls() {
+            return calls.values();
         }
     }
 
