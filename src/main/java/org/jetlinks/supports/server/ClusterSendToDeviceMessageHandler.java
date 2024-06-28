@@ -352,7 +352,19 @@ public class ClusterSendToDeviceMessageHandler {
             alreadyReply = true;
             return Flux
                 .from(replyMessage)
-                .flatMap(msg -> decodedClientMessageHandler.handleMessage(device, msg))
+                //正常处理
+                .map(msg -> decodedClientMessageHandler.handleMessage(device, msg).then())
+                //空流
+                .defaultIfEmpty(Mono.defer(() -> {
+                    alreadyReply = false;
+                    return Mono.empty();
+                }))
+                //回复流错误
+                .onErrorResume(err -> {
+                    alreadyReply = false;
+                    return Mono.error(err);
+                })
+                .concatMap(Function.identity())
                 .then();
         }
 
