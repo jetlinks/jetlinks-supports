@@ -39,10 +39,10 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
 
     final DeviceSessionManager sessionManager;
 
-    private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
+    private final Map<AwaitKey, RepayableDeviceMessage<?>> awaits = CacheBuilder
             .newBuilder()
             .expireAfterWrite(Duration.ofMinutes(5))
-            .<String, RepayableDeviceMessage<?>>removalListener(notify -> {
+            .<AwaitKey, RepayableDeviceMessage<?>>removalListener(notify -> {
                 if (notify.getCause() == EXPIRED) {
                     try {
                         ClusterDeviceOperationBroker.log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());
@@ -148,7 +148,7 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
         return sendToDevice.asFlux();
     }
 
-    private Mono<Void> handleSendToDevice(Message message) {  
+    private Mono<Void> handleSendToDevice(Message message) {
         addAwaitReplyKey(message);
         if (sendToDevice.currentSubscriberCount() == 0) {
             log.warn("no handler for message {}", message);
@@ -161,12 +161,12 @@ public class ClusterDeviceOperationBroker extends AbstractDeviceOperationBroker 
         }
         return Mono.empty();
     }
-    
+
    private void addAwaitReplyKey(Message message){
        if (message instanceof RepayableDeviceMessage && !message
                 .getHeader(Headers.sendAndForget)
-                .orElse(false)) {  
-           RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);      
+                .orElse(false)) {
+           RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
            awaits.put(getAwaitReplyKey(msg), msg);
         }
     }

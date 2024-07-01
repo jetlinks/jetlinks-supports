@@ -1,5 +1,8 @@
 package org.jetlinks.supports.cluster;
 
+import lombok.AllArgsConstructor;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.cache.Caches;
@@ -28,7 +31,7 @@ import java.util.function.Function;
 @Slf4j
 public abstract class AbstractDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
 
-    private final Map<String, Sinks.Many<DeviceMessageReply>> replyProcessor = Caches.newCache();
+    private final Map<AwaitKey, Sinks.Many<DeviceMessageReply>> replyProcessor = Caches.newCache();
 
     @Override
     public abstract Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId, Collection<String> deviceIdList);
@@ -39,7 +42,7 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
     @Override
     public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
         long startWith = System.currentTimeMillis();
-        String id = getAwaitReplyKey(deviceId, messageId);
+        AwaitKey id = getAwaitReplyKey(deviceId, messageId);
         return replyProcessor
             .computeIfAbsent(id, ignore -> Sinks.many().multicast().onBackpressureBuffer())
             .asFlux()
@@ -73,14 +76,14 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     protected abstract Mono<Void> doReply(DeviceMessageReply reply);
 
-    private final Map<String, AtomicInteger> fragmentCounter = new ConcurrentHashMap<>();
+    private final Map<AwaitKey, AtomicInteger> fragmentCounter = new ConcurrentHashMap<>();
 
-    protected String getAwaitReplyKey(DeviceMessage message) {
+    protected AwaitKey getAwaitReplyKey(DeviceMessage message) {
         return getAwaitReplyKey(message.getDeviceId(), message.getMessageId());
     }
 
-    protected String getAwaitReplyKey(String deviceId, String messageId) {
-        return deviceId + ":" + messageId;
+    protected AwaitKey getAwaitReplyKey(String deviceId, String messageId) {
+        return new AwaitKey(deviceId,messageId);
     }
 
     @Override
@@ -114,20 +117,20 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     protected void handleReply(DeviceMessageReply message) {
         try {
-            String messageId = getAwaitReplyKey(message);
+            AwaitKey key = getAwaitReplyKey(message);
             String partMsgId = message.getHeader(Headers.fragmentBodyMessageId).orElse(null);
             if (partMsgId != null) {
                 log.trace("handle fragment device[{}] message {}", message.getDeviceId(), message);
-                partMsgId = getAwaitReplyKey(message.getDeviceId(), partMsgId);
+                AwaitKey _partMsgId = getAwaitReplyKey(message.getDeviceId(), partMsgId);
                 Sinks.Many<DeviceMessageReply> processor = replyProcessor
-                    .getOrDefault(partMsgId, replyProcessor.get(messageId));
+                    .getOrDefault(_partMsgId, replyProcessor.get(key));
 
                 if (processor == null || processor.currentSubscriberCount() == 0) {
-                    replyProcessor.remove(partMsgId);
+                    replyProcessor.remove(_partMsgId);
                     return;
                 }
                 int partTotal = message.getHeader(Headers.fragmentNumber).orElse(1);
-                AtomicInteger counter = fragmentCounter.computeIfAbsent(partMsgId, r -> new AtomicInteger(partTotal));
+                AtomicInteger counter = fragmentCounter.computeIfAbsent(_partMsgId, r -> new AtomicInteger(partTotal));
 
                 try {
                     processor.emitNext(message, Reactors.emitFailureHandler());
@@ -136,20 +139,20 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                         try {
                             processor.tryEmitComplete();
                         } finally {
-                            replyProcessor.remove(partMsgId);
-                            fragmentCounter.remove(partMsgId);
+                            replyProcessor.remove(_partMsgId);
+                            fragmentCounter.remove(_partMsgId);
                         }
                     }
                 }
                 return;
             }
-            Sinks.Many<DeviceMessageReply> processor = replyProcessor.get(messageId);
 
+            Sinks.Many<DeviceMessageReply> processor = replyProcessor.get(key);
             if (processor != null) {
                 processor.emitNext(message, Reactors.emitFailureHandler());
                 processor.emitComplete(Reactors.emitFailureHandler());
             } else {
-                replyProcessor.remove(messageId);
+                replyProcessor.remove(key);
             }
         } catch (Throwable e) {
             replyFailureHandler.handle(e, message);
@@ -157,6 +160,12 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
     }
 
     @Setter
-    private ReplyFailureHandler replyFailureHandler = (error, message) -> AbstractDeviceOperationBroker.log.warn("unhandled reply message:{}", message, error);
+    private ReplyFailureHandler replyFailureHandler = (error, message) -> AbstractDeviceOperationBroker.log.info("unhandled reply message:{}", message, error);
 
+    @AllArgsConstructor
+    @EqualsAndHashCode(cacheStrategy = EqualsAndHashCode.CacheStrategy.LAZY)
+    protected static class AwaitKey{
+        private String deviceId;
+        private String messageId;
+    }
 }

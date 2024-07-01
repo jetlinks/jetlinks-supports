@@ -46,10 +46,10 @@ public class EventBusDeviceOperationBroker extends AbstractDeviceOperationBroker
 
     private Function<Publisher<String>, Flux<DeviceStateInfo>> localStateChecker;
 
-    private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
+    private final Map<AwaitKey, RepayableDeviceMessage<?>> awaits = CacheBuilder
             .newBuilder()
             .expireAfterWrite(Duration.ofMinutes(5))
-            .<String, RepayableDeviceMessage<?>>removalListener(notify -> {
+            .<AwaitKey, RepayableDeviceMessage<?>>removalListener(notify -> {
                 if (notify.getCause() == EXPIRED) {
                     try {
                         EventBusDeviceOperationBroker.log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());

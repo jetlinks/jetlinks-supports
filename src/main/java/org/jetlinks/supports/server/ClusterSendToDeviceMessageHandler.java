@@ -61,23 +61,26 @@ public class ClusterSendToDeviceMessageHandler {
 
     private void init() {
         handler
-            .handleSendToDeviceMessage(sessionManager.getCurrentServerId())
-            .onBackpressureDrop(msg -> {
+            .handleSendToDeviceMessage(
+                sessionManager.getCurrentServerId(),
+                this::handleMessage);
 
-                @SuppressWarnings("all")
-                Disposable disposable = this
-                    .doReply((DeviceOperator) null, createReply(msg).error(ErrorCode.SYSTEM_BUSY))
-                    .subscribe();
-
-            })
-            .flatMap(msg -> this
-                         .handleMessage(msg)
-                         .onErrorResume(err -> {
-                             log.error("handle send to device message error {}", msg, err);
-                             return Mono.empty();
-                         }),
-                     concurrency)
-            .subscribe();
+//            .onBackpressureDrop(msg -> {
+//
+//                @SuppressWarnings("all")
+//                Disposable disposable = this
+//                    .doReply((DeviceOperator) null, createReply(msg).error(ErrorCode.SYSTEM_BUSY))
+//                    .subscribe();
+//
+//            })
+//            .flatMap(msg -> this
+//                         .handleMessage(msg)
+//                         .onErrorResume(err -> {
+//                             log.error("handle send to device message error {}", msg, err);
+//                             return Mono.empty();
+//                         }),
+//                     concurrency)
+//            .subscribe();
     }
 
     private DeviceMessageReply createReply(Message message) {
@@ -109,9 +112,7 @@ public class ClusterSendToDeviceMessageHandler {
             //处理会话不存在的消息
             .defaultIfEmpty(Mono.defer(() -> sendToUnknownSession(message)))
             .flatMap(Function.identity())
-            .contextWrite(ctx -> TraceHolder
-                .readToContext(ctx, message.getHeaders())
-                .put(DeviceMessage.class, message));
+            .contextWrite(ctx -> ctx.put(DeviceMessage.class, message));
     }
 
     @SuppressWarnings("all")
@@ -233,17 +234,17 @@ public class ClusterSendToDeviceMessageHandler {
     }
 
     private Mono<Void> sendToNoSession(DeviceOperator device, DeviceMessage message) {
-        log.warn("device session state failed,try resume. {}", message);
         return sessionManager
             //检查整个集群的会话
             .checkAlive(message.getDeviceId(), false)
             .flatMap(exists -> {
                 if (exists) {
+                    log.warn("device session state failed,try resume. {}", message);
                     //会话依旧存在则尝试恢复发送
                     return retryResume(device, message);
                 }
+                //会话不存在,说明已经离线了
                 boolean resume = message.getHeader(resumeSession).orElse(false);
-
                 return doReply(device, createReply(message)
                     .addHeader("reason", "session_not_exists")
                     .error(resume ? ErrorCode.CONNECTION_LOST : ErrorCode.CLIENT_OFFLINE));

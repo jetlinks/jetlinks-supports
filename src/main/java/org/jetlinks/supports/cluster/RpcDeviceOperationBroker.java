@@ -6,6 +6,7 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
 import io.scalecube.services.annotations.ServiceMethod;
+import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.DeviceState;
@@ -32,7 +33,9 @@ import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.time.Duration;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
 import static com.google.common.cache.RemovalCause.EXPIRED;
@@ -44,24 +47,26 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     private final DeviceSessionManager sessionManager;
 
     private final Sinks.Many<Message> sendToDevice = Sinks
-            .unsafe()
-            .many()
-            .unicast()
-            .onBackpressureBuffer(Queues.<Message>unboundedMultiproducer().get());
+        .unsafe()
+        .many()
+        .unicast()
+        .onBackpressureBuffer(Queues.<Message>unboundedMultiproducer().get());
 
-    private final Map<String, RepayableDeviceMessage<?>> awaits = CacheBuilder
-            .newBuilder()
-            .expireAfterWrite(Duration.ofMinutes(5))
-            .<String, RepayableDeviceMessage<?>>removalListener(notify -> {
-                if (notify.getCause() == EXPIRED) {
-                    try {
-                        RpcDeviceOperationBroker.log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());
-                    } catch (Throwable ignore) {
-                    }
+    private final Map<AwaitKey, RepayableDeviceMessage<?>> awaits = CacheBuilder
+        .newBuilder()
+        .expireAfterWrite(Duration.ofMinutes(5))
+        .<AwaitKey, RepayableDeviceMessage<?>>removalListener(notify -> {
+            if (notify.getCause() == EXPIRED) {
+                try {
+                    RpcDeviceOperationBroker.log.debug("discard await reply message[{}] message,{}", notify.getKey(), notify.getValue());
+                } catch (Throwable ignore) {
                 }
-            })
-            .build()
-            .asMap();
+            }
+        })
+        .build()
+        .asMap();
+
+    private final List<Function<Message, Mono<Void>>> handler = new CopyOnWriteArrayList<>();
 
     public RpcDeviceOperationBroker(RpcManager rpcManager, DeviceSessionManager sessionManager) {
         this.rpcManager = rpcManager;
@@ -73,11 +78,11 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     public Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId,
                                                 Collection<String> deviceIdList) {
         return Flux
-                .fromIterable(deviceIdList)
-                .flatMap(id -> sessionManager
-                        .checkAlive(id, false)
-                        .map(alive -> new DeviceStateInfo(id, alive ? DeviceState.online : DeviceState.offline))
-                );
+            .fromIterable(deviceIdList)
+            .flatMap(id -> sessionManager
+                .checkAlive(id, false)
+                .map(alive -> new DeviceStateInfo(id, alive ? DeviceState.online : DeviceState.offline))
+            );
     }
 
     @Override
@@ -88,11 +93,7 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
 
     @Override
     public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
-        return super
-                .handleReply(deviceId, messageId, timeout)
-                .doOnCancel(()->{
-                    //取消
-                });
+        return super.handleReply(deviceId, messageId, timeout);
     }
 
     @Override
@@ -100,33 +101,40 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         //发给同一个服务节点
         if (rpcManager.currentServerId().equals(deviceGatewayServerId)) {
             return Flux
-                    .from(message)
-                    .flatMap(this::handleSendToDevice)
-                    .then(Reactors.ALWAYS_ONE);
+                .from(message)
+                .flatMap(this::handleSendToDevice)
+                .then(Reactors.ALWAYS_ONE);
         }
 
         return Flux
-                .from(message)
-                .flatMap(msg -> {
-                    msg.addHeader(Headers.sendFrom, rpcManager.currentServerId());
-                    addAwaitReplyKey(msg);
-                    return rpcManager
-                            .getService(deviceGatewayServerId, Service.class)
-                            .flatMap(service -> service.send(encode(msg)).thenReturn(1))
-                            .defaultIfEmpty(0);
-                })
-                .reduce(0, Integer::sum);
+            .from(message)
+            .flatMap(msg -> {
+                msg.addHeader(Headers.sendFrom, rpcManager.currentServerId());
+                //  addAwaitReplyKey(msg);
+                return rpcManager
+                    .getService(deviceGatewayServerId, Service.class)
+                    .flatMap(service -> service
+                        .send(encode(msg))
+                        .then(Reactors.ALWAYS_ONE))
+                    .switchIfEmpty(Reactors.ALWAYS_ZERO);
+            })
+            .reduce(0, Integer::sum);
     }
 
-    private Mono<Void> handleSendToDevice(Message message) {   
-        addAwaitReplyKey(message);
+    private Mono<Void> handleSendToDevice(Message message) {
         return doSendToDevice(message);
     }
-    
-      private void addAwaitReplyKey(Message message){
+
+    @Override
+    public Disposable handleSendToDeviceMessage(String serverId, Function<Message, Mono<Void>> handler) {
+        this.handler.add(handler);
+        return () -> this.handler.remove(handler);
+    }
+
+    private void addAwaitReplyKey(Message message) {
         if (message instanceof RepayableDeviceMessage && !message
-                .getHeader(Headers.sendAndForget)
-                .orElse(false)) {
+            .getHeader(Headers.sendAndForget)
+            .orElse(false)) {
             RepayableDeviceMessage<?> msg = ((RepayableDeviceMessage<?>) message);
             awaits.put(getAwaitReplyKey(msg), msg);
         }
@@ -134,20 +142,35 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
 
     private Mono<Void> doSendToDevice(Message message) {
         return TraceHolder
-                .writeContextTo(message, Message::addHeader)
-                .flatMap(msg -> {
-                    if (sendToDevice.currentSubscriberCount() == 0) {
-                        log.warn("no handler for message {}", msg);
-                        return doReply(createReply(msg).error(ErrorCode.SYSTEM_ERROR));
-                    }
-
+            .writeContextTo(message, Message::addHeader)
+            .flatMap(msg -> {
+                if (sendToDevice.currentSubscriberCount() == 0 && handler.isEmpty()) {
+                    log.warn("no handler for message {}", msg);
+                    return doReply(createReply(msg).error(ErrorCode.SYSTEM_ERROR));
+                }
+                if (sendToDevice.currentSubscriberCount() != 0) {
                     try {
                         sendToDevice.emitNext(msg, Reactors.emitFailureHandler());
                     } catch (Throwable err) {
                         return doReply(createReply(msg).error(err));
                     }
-                    return Mono.empty();
-                });
+                }
+                return doSendToDevice(msg, handler)
+                    .onErrorResume(error -> reply(createReply(message).error(error)).then());
+            });
+    }
+
+
+    private Mono<Void> doSendToDevice(Message message, List<Function<Message, Mono<Void>>> handlers) {
+        if (handlers.size() == 1) {
+            return handlers
+                .get(0)
+                .apply(message);
+        }
+        return Flux
+            .fromIterable(handlers)
+            .concatMap(h -> h.apply(message))
+            .then();
     }
 
     private DeviceMessageReply createReply(Message message) {
@@ -156,11 +179,11 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         }
         if (message instanceof DeviceMessage) {
             return new CommonDeviceMessageReply<>()
-                    .deviceId(((DeviceMessage) message).getDeviceId())
-                    .messageId(message.getMessageId());
+                .deviceId(((DeviceMessage) message).getDeviceId())
+                .messageId(message.getMessageId());
         }
         return new CommonDeviceMessageReply<>()
-                .messageId(message.getMessageId());
+            .messageId(message.getMessageId());
     }
 
 
@@ -176,25 +199,25 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
 
     @Override
     protected Mono<Void> doReply(DeviceMessageReply reply) {
-        RepayableDeviceMessage<?> msg = awaits.remove(getAwaitReplyKey(reply));
+        RepayableDeviceMessage<?> request = awaits.remove(getAwaitReplyKey(reply));
         String serviceId = null;
 
-        if (null != msg) {
-            serviceId = msg.getHeader(Headers.sendFrom).orElse(null);
+        if (request != null) {
+            serviceId = request.getHeader(Headers.sendFrom).orElse(null);
         }
         Flux<Service> serviceFlux;
         if (serviceId != null) {
             serviceFlux = rpcManager
-                    .getService(serviceId, Service.class)
-                    .flux();
+                .getService(serviceId, Service.class)
+                .flux();
         } else {
             serviceFlux = rpcManager
-                    .getServices(Service.class)
-                    .map(RpcService::service);
+                .getServices(Service.class)
+                .map(RpcService::service);
         }
         return serviceFlux
-                .flatMap(service -> service.reply(encode(reply)))
-                .then();
+            .flatMap(service -> service.reply(encode(reply)))
+            .then();
     }
 
     @SneakyThrows
@@ -206,9 +229,7 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     protected ObjectOutput createOutput(ByteBuf output) {
         return new ObjectOutputStream(new ByteBufOutputStream(output));
     }
-
     static MessageType[] types = MessageType.values();
-
     @SneakyThrows
     private Message decode(ByteBuf buf) {
         try (ObjectInput input = createInput(buf)) {
@@ -232,8 +253,8 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
             } else {
                 SerializeUtils.writeObject(message, output);
             }
-            return buf;
         }
+        return buf;
     }
 
     @io.scalecube.services.annotations.Service
@@ -249,7 +270,9 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
 
         @Override
         public Mono<Void> send(ByteBuf payload) {
-            return doSendToDevice(decode(payload));
+            Message msg = decode(payload);
+            addAwaitReplyKey(msg);
+            return doSendToDevice(msg);
         }
 
         @Override
