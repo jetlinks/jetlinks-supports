@@ -2,6 +2,7 @@ package org.jetlinks.supports.cache;
 
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.h2.mvstore.AppendOnlyMultiFileStore;
 import org.h2.mvstore.Cursor;
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
@@ -85,9 +86,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
             builder -> builder
                 .cacheSize(16)
                 .autoCommitBufferSize(32 * 1024)
-                .backgroundExceptionHandler(((t, e) -> {
-                    log.warn("{} UncaughtException",name, e);
-                }))
+                .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e)))
                 .compress());
         Object type = options.get("valueType");
 
@@ -144,7 +143,11 @@ class MVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.close(-1);
+        if (size() < 100_0000) {
+            store.close(-1);
+        } else {
+            store.close(20_000);
+        }
     }
 
     private void checkClose() {
