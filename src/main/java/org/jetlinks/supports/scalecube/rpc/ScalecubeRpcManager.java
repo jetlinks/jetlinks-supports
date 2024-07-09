@@ -1,5 +1,6 @@
 package org.jetlinks.supports.scalecube.rpc;
 
+import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.concurrent.FastThreadLocal;
@@ -53,6 +54,8 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.Type;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -502,7 +505,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
             //按Key和服务ID进行hash排序,取第一个.
             calls.sort(
-                Comparator.comparingLong(call -> hash(call.serverNodeId, String.valueOf(routeKey)))
+                Comparator.comparingLong(call -> hash(call.serverNodeId, routeKey))
             );
 
             return Mono.just(calls.get(0));
@@ -513,12 +516,23 @@ public class ScalecubeRpcManager implements RpcManager {
     }
 
     @SuppressWarnings("all")
-    private static long hash(String server, String key) {
-        return Hashing
+    private static long hash(String server, Object key) {
+        Hasher hasher = Hashing
             .murmur3_128()
             .newHasher()
-            .putUnencodedChars(server)
-            .putUnencodedChars(key)
+            .putUnencodedChars(server);
+        if (key instanceof String) {
+            hasher.putUnencodedChars(((String) key));
+        } else if (key instanceof BigDecimal) {
+            hasher.putBytes(((BigDecimal) key).toBigInteger().toByteArray());
+        } else if (key instanceof BigInteger) {
+            hasher.putBytes(((BigInteger) key).toByteArray());
+        } else if (key instanceof Number) {
+            hasher.putDouble(((Number) key).doubleValue());
+        } else {
+            hasher.putInt(key.hashCode());
+        }
+        return hasher
             .hash()
             .asLong();
     }
