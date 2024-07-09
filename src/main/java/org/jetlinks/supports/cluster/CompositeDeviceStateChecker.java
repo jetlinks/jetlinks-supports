@@ -4,7 +4,7 @@ import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceStateChecker;
 import reactor.core.publisher.Mono;
 
-import javax.validation.constraints.NotNull;
+import javax.annotation.Nonnull;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -19,7 +19,7 @@ public class CompositeDeviceStateChecker implements DeviceStateChecker {
     }
 
     @Override
-    public @NotNull Mono<Byte> checkState(@NotNull DeviceOperator device) {
+    public @Nonnull Mono<Byte> checkState(@Nonnull DeviceOperator device) {
         if(checkerList.isEmpty()){
             return Mono.empty();
         }

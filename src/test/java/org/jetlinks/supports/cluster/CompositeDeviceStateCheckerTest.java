@@ -7,7 +7,7 @@ import org.junit.Test;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
-import javax.validation.constraints.NotNull;
+import javax.annotation.Nonnull;
 
 import static org.junit.Assert.*;
 
@@ -19,7 +19,7 @@ public class CompositeDeviceStateCheckerTest {
 
         stateChecker.addDeviceStateChecker(new DeviceStateChecker() {
             @Override
-            public @NotNull Mono<Byte> checkState(@NotNull DeviceOperator device) {
+            public @Nonnull Mono<Byte> checkState(@Nonnull DeviceOperator device) {
                 return Mono.empty();
             }
 
@@ -31,7 +31,7 @@ public class CompositeDeviceStateCheckerTest {
 
         stateChecker.addDeviceStateChecker(new DeviceStateChecker() {
             @Override
-            public @NotNull Mono<Byte> checkState(@NotNull DeviceOperator device) {
+            public @Nonnull Mono<Byte> checkState(@Nonnull DeviceOperator device) {
                 return Mono.just(DeviceState.online);
             }
 

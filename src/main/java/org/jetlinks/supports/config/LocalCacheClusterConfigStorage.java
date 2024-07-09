@@ -109,6 +109,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (isExpired()) {
                 return null;
             }
+            updateTime();
             return cached;
         }
 

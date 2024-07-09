@@ -27,7 +27,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
-import javax.validation.constraints.NotNull;
+import javax.annotation.Nonnull;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -68,8 +68,8 @@ public class BrokerEventBus implements EventBus {
      * @return 事件流
      */
     @Override
-    public <T> Flux<T> subscribe(@NotNull Subscription subscription,
-                                 @NotNull Decoder<T> decoder) {
+    public <T> Flux<T> subscribe(@Nonnull Subscription subscription,
+                                 @Nonnull Decoder<T> decoder) {
         return this
                 .subscribe(subscription)
                 .flatMap(payload -> {
