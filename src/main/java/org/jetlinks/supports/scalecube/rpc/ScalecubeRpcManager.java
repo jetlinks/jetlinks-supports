@@ -1,5 +1,6 @@
 package org.jetlinks.supports.scalecube.rpc;
 
+import com.google.common.hash.Hashing;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
@@ -26,6 +27,7 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jctools.maps.NonBlockingHashSet;
+import org.jetlinks.core.cluster.load.LoadBalancer;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
@@ -61,6 +63,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -470,22 +473,54 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @Override
     public <I> Mono<RpcService<I>> selectService(Class<I> service) {
+        return selectService(service, null);
+    }
+
+    @Override
+    public <I> Mono<RpcService<I>> selectService(Class<I> service, Object routeKey) {
         @SuppressWarnings("all")
         List<RpcServiceCall<I>> calls = (List) SHARED.get();
         try {
+            //查找所有的节点
             for (Map.Entry<String, ClusterNode> entry : serverServiceRef.entrySet()) {
                 entry.getValue().getApiCalls(null, service, calls);
             }
-            if (calls.isEmpty()) {
+
+            int size = calls.size();
+            //没有服务
+            if (size == 0) {
                 return Mono.empty();
             }
-            if (calls.size() == 1) {
+            //只有一个,直接返回.
+            if (size == 1) {
                 return Mono.just(calls.get(0));
             }
-            return Mono.just(calls.get(ThreadLocalRandom.current().nextInt(calls.size())));
+            //随机
+            if (routeKey == null) {
+                return Mono.just(calls.get(ThreadLocalRandom.current().nextInt(size)));
+            }
+
+            //按Key和服务ID进行hash排序,取第一个.
+            calls.sort(
+                Comparator.comparingLong(call -> hash(call.serverNodeId, String.valueOf(routeKey)))
+            );
+
+            return Mono.just(calls.get(0));
+
         } finally {
             calls.clear();
         }
+    }
+
+    @SuppressWarnings("all")
+    private static long hash(String server, String key) {
+        return Hashing
+            .murmur3_128()
+            .newHasher()
+            .putUnencodedChars(server)
+            .putUnencodedChars(key)
+            .hash()
+            .asLong();
     }
 
     @Override
@@ -909,7 +944,7 @@ public class ScalecubeRpcManager implements RpcManager {
             if (fastPath != null) {
                 return fastPath;
             }
-            return calls.computeIfAbsent(id, (_id)-> supplier.apply(_id, type));
+            return calls.computeIfAbsent(id, (_id) -> supplier.apply(_id, type));
         }
 
         public RpcServiceCall<?> get(String callId) {
