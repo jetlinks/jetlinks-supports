@@ -17,6 +17,7 @@ import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.LostDeviceSession;
 import org.jetlinks.core.trace.DeviceTracer;
+import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.trace.TraceHolder;
 import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
@@ -64,23 +65,6 @@ public class ClusterSendToDeviceMessageHandler {
             .handleSendToDeviceMessage(
                 sessionManager.getCurrentServerId(),
                 this::handleMessage);
-
-//            .onBackpressureDrop(msg -> {
-//
-//                @SuppressWarnings("all")
-//                Disposable disposable = this
-//                    .doReply((DeviceOperator) null, createReply(msg).error(ErrorCode.SYSTEM_BUSY))
-//                    .subscribe();
-//
-//            })
-//            .flatMap(msg -> this
-//                         .handleMessage(msg)
-//                         .onErrorResume(err -> {
-//                             log.error("handle send to device message error {}", msg, err);
-//                             return Mono.empty();
-//                         }),
-//                     concurrency)
-//            .subscribe();
     }
 
     private DeviceMessageReply createReply(Message message) {
@@ -140,32 +124,21 @@ public class ClusterSendToDeviceMessageHandler {
 
         CodecContext context = new CodecContext(device, message, DeviceSession.trace(session));
 
-        return device
-            .getProtocol()
-            .flatMap(protocol -> protocol.getMessageCodec(context.session.getTransport()))
-            .flatMapMany(codec -> codec.encode(context))
-            .as(create(DeviceTracer.SpanName.encode(device.getDeviceId()),
-                       (span, msg) -> span.setAttribute(DeviceTracer.SpanKey.message, msg.toString())))
-            //发送给会话
-            .map(msg -> context
-                .session
-                .send(msg)
-                .flatMap(success -> {
-                    //返回false,表示不支持此类消息发送.
-                    if (!success) {
-                        return handleUnsupportedMessage(context);
-                    }
-                    return Mono.empty();
-                }))
-            //协议包返回了empty,可能是不支持这类消息
-            .defaultIfEmpty(Mono.defer(() -> handleUnsupportedMessage(context)))
-            .flatMap(Function.identity())
+        return Mono
+            //交给会话处理
+            .defer(() -> session.send(context))
+            .filter(Boolean::booleanValue)
+            //返回false或者empty,可能是不支持这类消息
+            .switchIfEmpty(Mono.defer(() -> handleUnsupportedMessage(context).then(Mono.empty())))
+            //发送消息异常
             .onErrorResume(err -> {
                 if (!(err instanceof DeviceOperationException)) {
-                    log.error("handle send to device message error {}", context.message, err);
+                    log.warn("handle send to device message error {}", context.message, err);
                 }
                 if (!context.alreadyReply) {
-                    return doReply(context, createReply(context.message).error(err));
+                    return this
+                        .doReply(context, createReply(context.message).error(err))
+                        .then(Mono.empty());
                 }
                 return Mono.empty();
             })
