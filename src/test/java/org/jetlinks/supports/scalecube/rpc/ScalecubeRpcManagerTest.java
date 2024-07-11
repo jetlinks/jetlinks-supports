@@ -10,6 +10,7 @@ import io.scalecube.services.transport.rsocket.RSocketServiceTransport;
 import io.scalecube.transport.netty.tcp.TcpTransportFactory;
 import lombok.AllArgsConstructor;
 import lombok.SneakyThrows;
+import org.hswebframework.web.exception.BusinessException;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.jetlinks.supports.scalecube.ExtendedClusterImpl;
 import org.junit.After;
@@ -32,9 +33,9 @@ public class ScalecubeRpcManagerTest {
     @Before
     public void init() {
         ExtendedCluster cluster = new ExtendedClusterImpl(
-                ClusterConfig
-                        .defaultConfig()
-                        .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+            ClusterConfig
+                .defaultConfig()
+                .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
         ).startAwait();
         node1 = cluster.member();
 
@@ -46,10 +47,10 @@ public class ScalecubeRpcManagerTest {
 
         {
             ExtendedCluster cluster2 = new ExtendedClusterImpl(
-                    ClusterConfig
-                            .defaultConfig()
-                            .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
-                            .membership(conf -> conf.seedMembers(cluster.address()))
+                ClusterConfig
+                    .defaultConfig()
+                    .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+                    .membership(conf -> conf.seedMembers(cluster.address()))
             ).startAwait();
             manager2 = new ScalecubeRpcManager(cluster2, RSocketServiceTransport::new);
             manager2.startAwait();
@@ -58,10 +59,10 @@ public class ScalecubeRpcManagerTest {
 
         {
             ExtendedCluster cluster3 = new ExtendedClusterImpl(
-                    ClusterConfig
-                            .defaultConfig()
-                            .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
-                            .membership(conf -> conf.seedMembers(cluster.address()))
+                ClusterConfig
+                    .defaultConfig()
+                    .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+                    .membership(conf -> conf.seedMembers(cluster.address()))
             ).startAwait();
             node3 = cluster3.member();
             manager3 = new ScalecubeRpcManager(cluster3, RSocketServiceTransport::new);
@@ -107,6 +108,26 @@ public class ScalecubeRpcManagerTest {
 
     @Test
     @SneakyThrows
+    public void testError() {
+        manager1.registerService("e1", new ServiceImpl("1"));
+        manager2.registerService("e1", new ServiceImpl("3"));
+
+        Thread.sleep(2000);
+
+        manager3
+            .getServices("e1", Service.class)
+            .flatMap(service->service.service().error())
+            .as(StepVerifier::create)
+            .expectErrorMatches(err -> {
+                err.printStackTrace();
+                return "error".equals(err.getMessage());
+            })
+            .verify();
+
+    }
+
+    @Test
+    @SneakyThrows
     public void testCustomId() {
         manager1.registerService("s1", new ServiceImpl("1"));
         manager1.registerService("s2", new ServiceImpl("2"));
@@ -144,24 +165,24 @@ public class ScalecubeRpcManagerTest {
     public void testEvent() {
 
         manager3
-                .listen(Service.class)
-                .doOnSubscribe(s -> {
-                    Mono.delay(Duration.ofSeconds(1))
-                        .subscribe(ignore -> {
-                            Disposable disposable = manager1
-                                    .registerService("t1", new ServiceImpl("t1"));
-                            Mono.delay(Duration.ofSeconds(1))
-                                .subscribe(i -> {
-                                    disposable.dispose();
-                                });
-                        });
+            .listen(Service.class)
+            .doOnSubscribe(s -> {
+                Mono.delay(Duration.ofSeconds(1))
+                    .subscribe(ignore -> {
+                        Disposable disposable = manager1
+                            .registerService("t1", new ServiceImpl("t1"));
+                        Mono.delay(Duration.ofSeconds(1))
+                            .subscribe(i -> {
+                                disposable.dispose();
+                            });
+                    });
 
-                })
-                .take(2)
-                .timeout(Duration.ofSeconds(4))
-                .as(StepVerifier::create)
-                .expectNextCount(2)
-                .verifyComplete();
+            })
+            .take(2)
+            .timeout(Duration.ofSeconds(4))
+            .as(StepVerifier::create)
+            .expectNextCount(2)
+            .verifyComplete();
 
     }
 
@@ -169,24 +190,24 @@ public class ScalecubeRpcManagerTest {
     public void testRegisterTime() {
 
         manager3
-                .listen(Service.class)
-                .doOnSubscribe(s -> {
-                    Mono.delay(Duration.ofSeconds(1))
-                        .subscribe(ignore -> {
-                            Disposable disposable = manager1
-                                    .registerService("t1", new ServiceImpl("t1"));
-                            Mono.delay(Duration.ofSeconds(1))
-                                .subscribe(i -> {
-                                    disposable.dispose();
-                                });
-                        });
+            .listen(Service.class)
+            .doOnSubscribe(s -> {
+                Mono.delay(Duration.ofSeconds(1))
+                    .subscribe(ignore -> {
+                        Disposable disposable = manager1
+                            .registerService("t1", new ServiceImpl("t1"));
+                        Mono.delay(Duration.ofSeconds(1))
+                            .subscribe(i -> {
+                                disposable.dispose();
+                            });
+                    });
 
-                })
-                .take(2)
-                .timeout(Duration.ofSeconds(4))
-                .as(StepVerifier::create)
-                .expectNextCount(2)
-                .verifyComplete();
+            })
+            .take(2)
+            .timeout(Duration.ofSeconds(4))
+            .as(StepVerifier::create)
+            .expectNextCount(2)
+            .verifyComplete();
 
     }
 
@@ -208,7 +229,7 @@ public class ScalecubeRpcManagerTest {
                 .flatMapMany(service -> service.read0(Unpooled.wrappedBuffer("test".getBytes())))
                 .map(buf -> buf.toString(StandardCharsets.UTF_8))
                 .as(StepVerifier::create)
-                .expectNext("test","hel", "lo")
+                .expectNext("test", "hel", "lo")
                 .verifyComplete();
     }
 
@@ -224,12 +245,19 @@ public class ScalecubeRpcManagerTest {
         @ServiceMethod
         Flux<ByteBuf> read0(ByteBuf buf);
 
+        @ServiceMethod
+        Mono<String> error();
     }
 
     @AllArgsConstructor
     public static class ServiceImpl implements Service {
 
         private final String prefix;
+
+        @Override
+        public Mono<String> error() {
+            return Mono.error(new BusinessException("error"));
+        }
 
         @Override
         public Mono<String> upper(String value) {

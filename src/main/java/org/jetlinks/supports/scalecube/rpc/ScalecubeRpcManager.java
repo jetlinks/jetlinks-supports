@@ -415,7 +415,7 @@ public class ScalecubeRpcManager implements RpcManager {
         Disposable.Composite _dispose = Disposables.composite();
         ServiceInfo serviceInfo = ServiceInfo
             .fromServiceInstance(rpcService)
-            .errorMapper(DefaultErrorMapper.INSTANCE)
+            .errorMapper(DetailErrorMapper.INSTANCE)
             .dataDecoder((msg, type) -> {
                 if (type.isAssignableFrom(ByteBuf.class) && msg.hasData(ByteBuf.class)) {
                     return ServiceMessage
@@ -719,7 +719,8 @@ public class ScalecubeRpcManager implements RpcManager {
                     }
                     return Optional.empty();
                 })
-                .serviceRegistry(NoneServiceRegistry.INSTANCE);
+                .serviceRegistry(NoneServiceRegistry.INSTANCE)
+                .errorMapper(DetailErrorMapper.INSTANCE);
 
             return new RpcServiceCall<>(this.id, serviceId, name, api(call, serviceId, clazz));
         }
