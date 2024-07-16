@@ -5,7 +5,6 @@ import com.google.common.hash.Hashing;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
-import io.rsocket.RSocketErrorException;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
@@ -14,7 +13,6 @@ import io.scalecube.net.Address;
 import io.scalecube.services.*;
 import io.scalecube.services.api.Qualifier;
 import io.scalecube.services.api.ServiceMessage;
-import io.scalecube.services.exceptions.DefaultErrorMapper;
 import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodRegistry;
 import io.scalecube.services.transport.api.DataCodec;
@@ -28,7 +26,6 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jctools.maps.NonBlockingHashSet;
-import org.jetlinks.core.cluster.load.LoadBalancer;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
@@ -66,7 +63,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -79,6 +75,14 @@ public class ScalecubeRpcManager implements RpcManager {
     private static final String SPREAD_ENDPOINT_QUALIFIER = "rpc_edp";
 
     private static final String SPREAD_FROM_HEADER = "rpc_edp_f";
+
+    private static final FastThreadLocal<List<RpcServiceCall<?>>> SHARED =
+        new FastThreadLocal<List<RpcServiceCall<?>>>() {
+            @Override
+            protected List<RpcServiceCall<?>> initialValue() {
+                return new ArrayList<>(2);
+            }
+        };
 
     static final String DEFAULT_SERVICE_ID = "_default";
 
@@ -99,8 +103,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                     SocketException.class,
                                     SocketTimeoutException.class,
                                     io.netty.handler.timeout.TimeoutException.class,
-                                    IOException.class,
-                                    RSocketErrorException.class))
+                                    IOException.class))
         .doBeforeRetry(retrySignal -> {
             if (retrySignal.totalRetriesInARow() > 3) {
                 log.warn("rpc retries {} : [{}]",
@@ -461,18 +464,10 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @Override
     public <I> Flux<RpcService<I>> getServices(Class<I> service) {
-        return Flux
+        return Flux.defer(() -> Flux
             .fromIterable(serverServiceRef.entrySet())
-            .flatMapIterable(e -> e.getValue().getApiCalls(service));
+            .flatMapIterable(e -> e.getValue().getApiCalls(service)));
     }
-
-    private static final FastThreadLocal<List<RpcServiceCall<?>>> SHARED =
-        new FastThreadLocal<List<RpcServiceCall<?>>>() {
-            @Override
-            protected List<RpcServiceCall<?>> initialValue() {
-                return new ArrayList<>(2);
-            }
-        };
 
     @Override
     public <I> Mono<RpcService<I>> selectService(Class<I> service) {
@@ -481,6 +476,10 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @Override
     public <I> Mono<RpcService<I>> selectService(Class<I> service, Object routeKey) {
+        return Mono.defer(() -> selectService0(service, routeKey));
+    }
+
+    private <I> Mono<RpcService<I>> selectService0(Class<I> service, Object routeKey) {
         @SuppressWarnings("all")
         List<RpcServiceCall<I>> calls = (List) SHARED.get();
         try {
@@ -515,33 +514,11 @@ public class ScalecubeRpcManager implements RpcManager {
         }
     }
 
-    @SuppressWarnings("all")
-    private static long hash(String server, Object key) {
-        Hasher hasher = Hashing
-            .murmur3_128()
-            .newHasher()
-            .putUnencodedChars(server);
-        if (key instanceof String) {
-            hasher.putUnencodedChars(((String) key));
-        } else if (key instanceof BigDecimal) {
-            hasher.putBytes(((BigDecimal) key).toBigInteger().toByteArray());
-        } else if (key instanceof BigInteger) {
-            hasher.putBytes(((BigInteger) key).toByteArray());
-        } else if (key instanceof Number) {
-            hasher.putDouble(((Number) key).doubleValue());
-        } else {
-            hasher.putInt(key.hashCode());
-        }
-        return hasher
-            .hash()
-            .asLong();
-    }
-
     @Override
     public <I> Flux<RpcService<I>> getServices(String id, Class<I> service) {
-        return Flux
+        return Flux.defer(() -> Flux
             .fromIterable(serverServiceRef.entrySet())
-            .flatMapIterable(e -> e.getValue().getApiCalls(id, service));
+            .flatMapIterable(e -> e.getValue().getApiCalls(id, service)));
     }
 
     @Override
@@ -940,6 +917,30 @@ public class ScalecubeRpcManager implements RpcManager {
 //                Reactors.emitFailureHandler());
         }
     }
+
+
+    @SuppressWarnings("all")
+    private static long hash(String server, Object key) {
+        Hasher hasher = Hashing
+            .murmur3_128()
+            .newHasher()
+            .putUnencodedChars(server);
+        if (key instanceof String) {
+            hasher.putUnencodedChars(((String) key));
+        } else if (key instanceof BigDecimal) {
+            hasher.putBytes(((BigDecimal) key).toBigInteger().toByteArray());
+        } else if (key instanceof BigInteger) {
+            hasher.putBytes(((BigInteger) key).toByteArray());
+        } else if (key instanceof Number) {
+            hasher.putDouble(((Number) key).doubleValue());
+        } else {
+            hasher.putInt(key.hashCode());
+        }
+        return hasher
+            .hash()
+            .asLong();
+    }
+
 
     static class ServiceInstances {
         private final Map<String, RpcServiceCall<?>> calls = new NonBlockingHashMap<>();
