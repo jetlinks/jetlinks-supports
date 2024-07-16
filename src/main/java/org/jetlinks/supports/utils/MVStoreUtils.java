@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 @Slf4j
@@ -26,6 +27,14 @@ public class MVStoreUtils {
                                Function<MVStore.Builder, MVStore.Builder> customizer) {
         return new MVStoreOpeningImpl(file, operationName, customizer).open();
     }
+
+    public static <T> T open(File file,
+                             String operationName,
+                             Function<MVStore.Builder, MVStore.Builder> customizer,
+                             Function<MVStore, T> handler) {
+        return new MVStoreOpeningImpl(file, operationName, customizer).open(handler);
+    }
+
 
     public static <K, V> MVMap<K, V> openMap(MVStore store,
                                              String name,
@@ -83,22 +92,28 @@ public class MVStoreUtils {
         }
 
         public MVStore open() {
+            return open(Function.identity());
+        }
+
+        public <T> T open(Function<MVStore, T> handler) {
             if (!file.getParentFile().exists()) {
                 boolean ignore = file.getParentFile().mkdirs();
             }
+            T res;
             try {
                 MVStore store = open0(customizer);
-                //尝试打开map
+                //执行自定义操作,如果报错也尝试恢复文件.
+                res = handler.apply(store);
                 fireEvent(Action.success);
-                return store;
+                return res;
             } catch (Throwable e) {
                 this.error = null;
                 if (file.exists()) {
-                    return tryRecovery(customizer, e);
+                    return tryRecovery(customizer, e, handler);
+                } else {
+                    throw e;
                 }
-                throw e;
             }
-
         }
 
         @SuppressWarnings("all")
@@ -112,14 +127,17 @@ public class MVStoreUtils {
             return backup;
         }
 
-        private MVStore tryRecovery(Function<MVStore.Builder, MVStore.Builder> customizer, Throwable reason) {
+        private <T> T tryRecovery(Function<MVStore.Builder, MVStore.Builder> customizer,
+                                  Throwable reason,
+                                  Function<MVStore, T> handler) {
             try {
                 log.warn("try recovery mvstore:{}", file);
                 MVStoreTool.compactCleanUp(file.getAbsolutePath());
                 MVStoreTool.compact(file.getAbsolutePath(), false);
                 log.warn("recovery mvstore:{} complete", file);
-                return open0(customizer);
+                return handler.apply(open0(customizer));
             } catch (Throwable err) {
+                err.addSuppressed(reason);
                 this.error = err;
                 fireEvent(Action.recoverFail);
                 try {
@@ -127,11 +145,12 @@ public class MVStoreUtils {
                     backup = backup();
                     fireEvent(Action.backup);
                 } catch (Throwable error) {
+                    error.addSuppressed(err);
                     this.error = err;
                     fireEvent(Action.backupFail);
                 }
                 boolean ignore = file.delete();
-                return open0(customizer);
+                return handler.apply(open0(customizer));
             }
 
         }

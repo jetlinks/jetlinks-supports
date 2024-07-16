@@ -50,6 +50,7 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
                             Map<String, Object> options,
                             int concurrency) {
         Files.createDirectories(filePath);
+        queues = new ArrayList<>(concurrency);
 
         store = MVStoreUtils.open(
             filePath.resolve(name).toFile(),
@@ -57,18 +58,19 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
             builder -> builder
                 .cacheSize(64)
                 .autoCommitBufferSize(64 * 1024)
-                .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e)))
+                .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e))),
+            store -> {
+                Object type = options.get("valueType");
+                MVMap.Builder<Long, T> mapBuilder = new MVMap.Builder<>();
+                if (type instanceof DataType) {
+                    mapBuilder.valueType(((DataType<T>) type));
+                }
+                for (int i = 0; i < concurrency; i++) {
+                    queues.add(new MVStoreQueue<>(MVStoreUtils.openMap(store, i == 0 ? "queue" : "queue_" + i, mapBuilder)));
+                }
+                return store;
+            }
         );
-        Object type = options.get("valueType");
-
-        MVMap.Builder<Long, T> mapBuilder = new MVMap.Builder<>();
-        if (type instanceof DataType) {
-            mapBuilder.valueType(((DataType<T>) type));
-        }
-        queues = new ArrayList<>(concurrency);
-        for (int i = 0; i < concurrency; i++) {
-            queues.add(new MVStoreQueue<>(MVStoreUtils.openMap(store, i == 0 ? "queue" : "queue_" + i, mapBuilder)));
-        }
         QUEUE_HOLDER = new FastThreadLocal<Integer>() {
             @Override
             protected Integer initialValue() {
@@ -84,7 +86,11 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
         if (store.isClosed()) {
             return;
         }
-        store.close(-1);
+        if (size() >= 100_0000) {
+            store.close(20_000);
+        } else {
+            store.close(-1);
+        }
     }
 
     @Override

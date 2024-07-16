@@ -2,10 +2,7 @@ package org.jetlinks.supports.cache;
 
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.h2.mvstore.AppendOnlyMultiFileStore;
-import org.h2.mvstore.Cursor;
-import org.h2.mvstore.MVMap;
-import org.h2.mvstore.MVStore;
+import org.h2.mvstore.*;
 import org.h2.mvstore.type.DataType;
 import org.jetlinks.core.cache.FileQueue;
 import org.jetlinks.core.codec.Codec;
@@ -16,8 +13,11 @@ import org.springframework.util.Assert;
 
 import javax.annotation.Nonnull;
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
@@ -70,8 +70,11 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
     }
 
-
     protected void open() {
+        open(true);
+    }
+
+    protected void open(boolean retry) {
         try {
             if (store != null && !store.isClosed()) {
                 store.close(-1);
@@ -87,17 +90,19 @@ class MVStoreQueue<T> implements FileQueue<T> {
                 .cacheSize(16)
                 .autoCommitBufferSize(32 * 1024)
                 .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e)))
-                .compress());
-        Object type = options.get("valueType");
-
-        MVMap.Builder<Long, T> mapBuilder = new MVMap.Builder<>();
-        if (type instanceof DataType) {
-            mapBuilder.valueType(((DataType<T>) type));
-        }
-        mvMap = MVStoreUtils.openMap(store, "queue", mapBuilder);
-        if (!mvMap.isEmpty()) {
-            INDEX.set(this, mvMap.lastKey());
-        }
+                .compress(),
+            store -> {
+                Object type = options.get("valueType");
+                MVMap.Builder<Long, T> mapBuilder = new MVMap.Builder<>();
+                if (type instanceof DataType) {
+                    mapBuilder.valueType(((DataType<T>) type));
+                }
+                mvMap = MVStoreUtils.openMap(store, "queue", mapBuilder);
+                if (!mvMap.isEmpty()) {
+                    INDEX.set(this, mvMap.lastKey());
+                }
+                return store;
+            });
 
     }
 
