@@ -36,4 +36,8 @@ public class MethodInvokeDeniedException extends I18nSupportException {
         return name;
     }
 
+    @Override
+    public synchronized Throwable fillInStackTrace() {
+        return this;
+    }
 }
