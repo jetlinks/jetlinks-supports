@@ -375,21 +375,21 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 boolean sessionExists = alive || localSessions.containsKey(session.getDeviceId());
                 if (sessionExists) {
                     log.info("device [{}] session [{}] closed,but session still exists!", session.getDeviceId(), session);
-                    return fireEvent(DeviceSessionEvent.of(now,DeviceSessionEvent.Type.unregister, session, true));
+                    return fireEvent(DeviceSessionEvent.of(now, DeviceSessionEvent.Type.unregister, session, true));
                 } else {
                     log.info("device [{}] session [{}] closed", session.getDeviceId(), session);
                     return session
                         .getOperator()
                         .offline()
                         .then(
-                            fireEvent(DeviceSessionEvent.of(now,DeviceSessionEvent.Type.unregister, session, false))
+                            fireEvent(DeviceSessionEvent.of(now, DeviceSessionEvent.Type.unregister, session, false))
                         );
                 }
             })
             .doAfterTerminate(() -> CLOSE_WIP.decrementAndGet(this));
     }
 
-    protected long getCloseWip(){
+    protected long getCloseWip() {
         return CLOSE_WIP.get(this);
     }
 
@@ -473,7 +473,9 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     protected Mono<Long> removeFromCluster(String deviceId) {
         DeviceSessionRef ref = localSessions.remove(deviceId);
         if (ref != null) {
-            ref.disposable.dispose();
+            if (ref.disposable != null) {
+                ref.disposable.dispose();
+            }
             DeviceSession session = ref.loaded;
             if (ref.loaded != null) {
                 session.close();
