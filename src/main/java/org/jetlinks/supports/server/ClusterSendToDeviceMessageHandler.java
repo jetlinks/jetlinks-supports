@@ -16,9 +16,8 @@ import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.LostDeviceSession;
-import org.jetlinks.core.trace.DeviceTracer;
-import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.trace.TraceHolder;
+import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -30,8 +29,6 @@ import javax.annotation.Nullable;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
-
-import static org.jetlinks.core.trace.FluxTracer.create;
 
 @Slf4j
 public class ClusterSendToDeviceMessageHandler {
@@ -45,8 +42,6 @@ public class ClusterSendToDeviceMessageHandler {
     private final DeviceRegistry registry;
 
     private final DecodedClientMessageHandler decodedClientMessageHandler;
-
-    private final int concurrency = Integer.getInteger("jetlinks.device.message.send.concurrency", 10240);
 
     public ClusterSendToDeviceMessageHandler(DeviceSessionManager sessionManager,
                                              MessageHandler handler,
@@ -80,6 +75,19 @@ public class ClusterSendToDeviceMessageHandler {
     }
 
     private Mono<Void> handleMessage(Message msg) {
+        //异步发送
+        if (msg.getHeaderOrDefault(Headers.async)) {
+            return Mono.deferContextual(ctx -> {
+                @SuppressWarnings("all")
+                Disposable disposable = handleMessage0(msg)
+                    .subscribe(null, null, null, Context.of(ctx));
+                return Mono.empty();
+            });
+        }
+        return handleMessage0(msg);
+    }
+
+    private Mono<Void> handleMessage0(Message msg) {
         if (!(msg instanceof DeviceMessage)) {
             return Mono.empty();
         }
@@ -344,6 +352,15 @@ public class ClusterSendToDeviceMessageHandler {
 
         @Override
         public Mono<Boolean> sendToDevice(@Nonnull EncodedMessage message) {
+            //异步请求,只要发送则响应成功
+            if (this.message.getHeaderOrDefault(Headers.async)) {
+                return session
+                    .send(message)
+                    .flatMap(success -> success
+                        ? handleMessageSent(this).then(Reactors.ALWAYS_TRUE)
+                        //返回false,交给发送者处理.
+                        : Reactors.ALWAYS_FALSE);
+            }
             return session.send(message);
         }
 
@@ -368,6 +385,11 @@ public class ClusterSendToDeviceMessageHandler {
         @Override
         public Mono<Boolean> sessionIsAlive(String deviceId) {
             return sessionManager.isAlive(deviceId);
+        }
+
+        @Override
+        public ToDeviceMessageContext mutate(Message anotherMessage, DeviceOperator device) {
+            return new CodecContext(device, (DeviceMessage) anotherMessage, session);
         }
     }
 
