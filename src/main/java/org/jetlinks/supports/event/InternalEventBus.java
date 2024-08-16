@@ -351,19 +351,25 @@ public class InternalEventBus implements EventBus {
             this.handler = handler;
         }
 
-        @Override
-        public Mono<Void> apply(TopicPayload payload) {
+
+        public Mono<Void> apply0(TopicPayload payload) {
+            String topic = payload.getTopic();
             try {
                 return handler
                     .apply(payload)
                     .onErrorResume(err -> {
-                        log.warn("handle publish [{}] error", payload.getTopic(), err);
+                        log.warn("handle publish [{}] error", topic, err);
                         return Mono.empty();
                     });
             } catch (Throwable err) {
-                log.warn("handle publish [{}] error", payload.getTopic(), err);
+                log.warn("handle publish [{}] error", topic, err);
                 return Mono.empty();
             }
+        }
+
+        @Override
+        public Mono<Void> apply(TopicPayload payload) {
+            return Mono.defer(() -> apply0(payload));
         }
 
         @Override
