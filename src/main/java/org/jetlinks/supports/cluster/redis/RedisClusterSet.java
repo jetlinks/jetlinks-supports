@@ -53,6 +53,6 @@ public class RedisClusterSet<V> implements ClusterSet<V> {
     @Override
     public Flux<V> values() {
         return set.members(redisKey)
-                .map(v -> (V) v);
+                .mapNotNull(v -> (V) v);
     }
 }
