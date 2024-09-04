@@ -360,8 +360,8 @@ public class ScalecubeRpcManager implements RpcManager {
         if (syncMembers.containsKey(member)) {
             return;
         }
-        Disposable.Composite _dispose = Disposables.composite();
-        _dispose.add(
+        Disposable.Swap _dispose = Disposables.swap();
+        _dispose.update(
             cluster
                 .send(member, Message
                     .withData(createEndpoint())
