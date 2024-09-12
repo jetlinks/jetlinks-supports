@@ -30,6 +30,7 @@ import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
 import org.jetlinks.core.trace.TraceHolder;
+import org.jetlinks.core.utils.HashUtils;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.reactivestreams.Publisher;
@@ -122,7 +123,7 @@ public class ScalecubeRpcManager implements RpcManager {
     private Retry retry = DEFAULT_RETRY;
 
     private Supplier<ServiceTransport> transportSupplier;
-
+    private final Map<String,Object> localServices = new ConcurrentHashMap<>();
     private final Map<String, ClusterNode> serverServiceRef = new NonBlockingHashMap<>();
 
     private final Map<String, Sinks.Many<ServiceEvent>> listener = new NonBlockingHashMap<>();
@@ -921,24 +922,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @SuppressWarnings("all")
     private static long hash(String server, Object key) {
-        Hasher hasher = Hashing
-            .murmur3_128()
-            .newHasher()
-            .putUnencodedChars(server);
-        if (key instanceof String) {
-            hasher.putUnencodedChars(((String) key));
-        } else if (key instanceof BigDecimal) {
-            hasher.putBytes(((BigDecimal) key).toBigInteger().toByteArray());
-        } else if (key instanceof BigInteger) {
-            hasher.putBytes(((BigInteger) key).toByteArray());
-        } else if (key instanceof Number) {
-            hasher.putDouble(((Number) key).doubleValue());
-        } else {
-            hasher.putInt(key.hashCode());
-        }
-        return hasher
-            .hash()
-            .asLong();
+        return HashUtils.murmur3_128(server,key);
     }
 
 
