@@ -18,6 +18,8 @@ import java.io.File;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
@@ -25,6 +27,32 @@ import static org.junit.Assert.assertTrue;
 
 public class MVStoreQueueBuilderFactoryTest {
 
+
+    @Test
+    public void testAutoReload() {
+        MVStoreQueue<Integer> queue = new MVStoreQueue<>(
+            Paths.get("./target/testAutoReload.queue"),
+            "test",
+            Collections.emptyMap()
+        );
+        new File("./target/testAutoReload.queue/test").deleteOnExit();
+
+        int count = 10_0000;
+
+        Flux.range(1, count)
+            .doOnNext(i -> {
+                if (i % 10000 == 0) {
+                    queue.store.close(1000);
+                }
+            })
+            .flatMap(i -> Mono.fromRunnable(() -> queue.offer(i))
+                          .subscribeOn(Schedulers.parallel()))
+            .then(Mono.fromSupplier(queue::size))
+            .as(StepVerifier::create)
+            .expectNext(count)
+            .verifyComplete();
+
+    }
 
     @Test
     @SneakyThrows
@@ -87,14 +115,14 @@ public class MVStoreQueueBuilderFactoryTest {
 
         int size = 100_0000;
 
-        byte[] bytes = new byte[2 * 1024];
-        Arrays.fill(bytes, (byte) 0xDD);
-
         Duration time = Flux
             .range(0, size)
             .flatMap(i -> Mono
-                .fromRunnable(() -> queue.offer(bytes))
-                .subscribeOn(Schedulers.parallel()))
+                .fromRunnable(() -> {
+                    byte[] bytes = new byte[1024];
+                    ThreadLocalRandom.current().nextBytes(bytes);
+                    queue.offer(bytes);
+                }))
             .then()
             .as(StepVerifier::create)
             .expectComplete()
@@ -104,7 +132,10 @@ public class MVStoreQueueBuilderFactoryTest {
         System.out.println(queue.size());
         // assertEquals(size, queue.size());
         queue.close();
-        System.out.println(DataSize.ofBytes( new File("./target/benchmark-queue/benchmark").length()).toMegabytes());
+        System.out.println(
+            DataSize
+                .ofBytes(new File("./target/benchmark-queue/benchmark").length())
+                .toMegabytes());
 
     }
 
