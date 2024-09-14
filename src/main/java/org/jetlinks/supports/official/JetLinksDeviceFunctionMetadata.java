@@ -1,5 +1,6 @@
 package org.jetlinks.supports.official;
 
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
@@ -77,20 +78,22 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     @Override
     public List<PropertyMetadata> getInputs() {
         if (inputs == null && jsonObject != null) {
-            inputs = Optional.ofNullable(jsonObject.getJSONArray("inputs"))
-                             .map(Collection::stream)
-                             .map(stream -> stream
-                                 .map(JSONObject.class::cast)
-                                 .map(JetLinksPropertyMetadata::new)
-                                 .map(PropertyMetadata.class::cast)
-                                 .collect(Collectors.toList()))
-                             .orElse(Collections.emptyList());
+            JSONArray arr = jsonObject.getJSONArray("inputs");
+            inputs = new ArrayList<>(arr.size());
+            for (int i = 0, size = arr.size(); i < size; i++) {
+                JSONObject object = arr.getJSONObject(i);
+                inputs.add(new JetLinksPropertyMetadata(object));
+            }
         }
         if (inputs == null && another != null) {
-            inputs = another.getInputs()
-                            .stream()
-                            .map(JetLinksPropertyMetadata::new)
-                            .collect(Collectors.toList());
+            inputs = another
+                .getInputs()
+                .stream()
+                .map(JetLinksPropertyMetadata::new)
+                .collect(Collectors.toList());
+        }
+        if (inputs == null) {
+            return Collections.emptyList();
         }
         return inputs;
     }
@@ -101,7 +104,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
             output = Optional
                 .ofNullable(jsonObject.getJSONObject("output"))
                 .flatMap(conf -> Optional
-                    .ofNullable(DataTypes.lookup(conf.getString("type")))
+                    .ofNullable(DataTypes.lookup(String.valueOf(conf.getOrDefault("type", "id"))))
                     .map(Supplier::get)
                     .map(type -> JetLinksDataTypeCodecs.decode(type, conf)))
                 .orElseGet(UnknownType::new);
@@ -135,8 +138,9 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         json.put("description", description);
         json.put("async", async);
         json.put("inputs", getInputs().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        JetLinksDataTypeCodecs.encode(getOutput())
-                              .ifPresent(ot -> json.put("output", ot));
+        JetLinksDataTypeCodecs
+            .encode(getOutput())
+            .ifPresent(ot -> json.put("output", ot));
         json.put("expands", expands);
 
         return json;

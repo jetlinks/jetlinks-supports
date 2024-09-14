@@ -181,11 +181,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public synchronized void close() {
-        closed = true;
-        if (store == null) {
-            return;
-        }
-        if (store.isClosed()) {
+        if (closed || store == null || store.isClosed()) {
             return;
         }
         if (size() < 100_0000) {
@@ -193,6 +189,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         } else {
             store.close(20_000);
         }
+        closed = true;
     }
 
     private void checkClose() {
