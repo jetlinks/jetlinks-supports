@@ -9,11 +9,17 @@ import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.trace.MonoTracer;
 import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -22,13 +28,10 @@ import java.util.function.Supplier;
 public class EventBusStorageManager implements ConfigStorageManager, Disposable {
 
     static final String NOTIFY_TOPIC = "/_sys/cluster_cache";
-    private static final AtomicReferenceFieldUpdater<EventBusStorageManager, Disposable>
-        CLUSTER_SUBSCRIBER = AtomicReferenceFieldUpdater.newUpdater(
-        EventBusStorageManager.class, Disposable.class, "disposable"
-    );
+    private static final AtomicBoolean CLUSTER_SUBSCRIBER = new AtomicBoolean();
     final ConcurrentMap<String, LocalCacheClusterConfigStorage> cache;
 
-    private volatile Disposable disposable;
+    private final Disposable.Composite disposable = Disposables.composite();
 
     private final EventBus eventBus;
     private final Function<String, LocalCacheClusterConfigStorage> storageBuilder;
@@ -55,6 +58,17 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                     this.cache.remove(id);
                 });
         };
+        if (ttl > 0) {
+            Scheduler scheduler = Schedulers
+                .newSingle("configs-storage-cleaner");
+            disposable.add(scheduler);
+            //间隔60秒 清理一次过期数据
+            disposable.add(scheduler.schedulePeriodically(
+                this::cleanup,
+                120,
+                60,
+                TimeUnit.SECONDS));
+        }
     }
 
     @SuppressWarnings("all")
@@ -114,21 +128,24 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
 
     @Override
     public void dispose() {
-        if (disposable != null) {
-            disposable.dispose();
-        }
+        disposable.dispose();
+    }
+
+    void cleanup() {
+        cache
+            .forEach((key, value) -> {
+                value.cleanup();
+                if (value.isEmpty()) {
+                    cache.remove(key, value);
+                }
+            });
     }
 
     @Override
     @SneakyThrows
     public Mono<ConfigStorage> getStorage(String id) {
-        if (CLUSTER_SUBSCRIBER.get(this) == null) {
-            CLUSTER_SUBSCRIBER.accumulateAndGet(this, null, (pre, nil) -> {
-                if (pre == null) {
-                    return subscribeCluster();
-                }
-                return pre;
-            });
+        if (CLUSTER_SUBSCRIBER.compareAndSet(false, true)) {
+            disposable.add(subscribeCluster());
         }
         return Mono.fromSupplier(() -> cache.computeIfAbsent(id, storageBuilder));
     }

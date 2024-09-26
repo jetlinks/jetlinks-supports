@@ -75,6 +75,20 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
 
+    boolean isEmpty() {
+        return caches.isEmpty();
+    }
+
+    void cleanup() {
+        if (expires > 0) {
+            caches.forEach((k, v) -> {
+                if (v.isExpired()) {
+                    caches.remove(k, v);
+                }
+            });
+        }
+    }
+
     private Cache createCache(String key) {
         return new Cache(key);
     }
@@ -401,6 +415,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     }
                 }
             }
+            updateTime();
             return ref;
         }
 
