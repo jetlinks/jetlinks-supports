@@ -15,7 +15,6 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.ConcurrentReferenceHashMap;
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
-import reactor.core.Scannable;
 import reactor.core.publisher.*;
 import reactor.util.context.Context;
 
@@ -87,7 +86,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Value> getConfig(String key) {
-        return getOrCreateCache(key).getRef();
+        return getConfig(key, Mono.empty());
+    }
+
+    @Override
+    public Mono<Value> getConfig(String key, Mono<Object> loader) {
+        return getOrCreateCache(key)
+            .getRef(loader);
     }
 
     @Override
@@ -384,13 +389,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
 
         @SuppressWarnings("unchecked")
-        Mono<Value> getRef() {
+        Mono<Value> getRef(Mono<Object> loader) {
             Mono<Value> ref = CACHE_REF.get(this);
             if (isExpired() || ref == null) {
                 synchronized (this) {
                     ref = CACHE_REF.get(this);
                     if (ref == null) {
-                        return reload();
+                        return reload(loader);
                     } else {
                         return ref;
                     }
@@ -438,7 +443,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             dispose();
         }
 
-        Mono<Value> reload() {
+        Mono<Value> reload(Mono<Object> loader) {
             cached = null;
             dispose();
             this.sink = Sinks.one();
@@ -447,7 +452,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             Loader _loader = new Loader(this.version);
             CACHE_LOADER.set(this, _loader);
 
-            clusterCache.get(key).subscribe(_loader);
+            clusterCache
+                .get(key)
+                .switchIfEmpty(loader)
+                .subscribe(_loader);
 
             return ref;
         }
