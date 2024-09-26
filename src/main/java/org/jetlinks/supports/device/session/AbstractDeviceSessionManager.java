@@ -429,12 +429,14 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             .remoteSessionIsAlive(session.getDeviceId())
             .flatMap(alive -> session
                 .getOperator()
-                .online(getCurrentServerId(), session
-                            .getClientAddress()
-                            .map(InetSocketAddress::toString)
-                            .orElse(null),
+                .online(getCurrentServerId(),
+                        session.getClientAddress().map(InetSocketAddress::toString).orElse(null),
                         alive ? -1 : session.connectTime())
-                .then(fireEvent(DeviceSessionEvent.of(DeviceSessionEvent.Type.register, session, alive))))
+                .then(fireEvent(DeviceSessionEvent.of(
+                    session.connectTime(),
+                    DeviceSessionEvent.Type.register,
+                    session,
+                    alive))))
             .thenReturn(session);
     }
 
@@ -482,6 +484,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                 if (session.getOperator() == null) {
                     return Reactors.ALWAYS_ONE_LONG;
                 }
+                long now = System.currentTimeMillis();
                 return session
                     .getOperator()
                     .getConnectionServerId()
@@ -495,6 +498,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         }
                         return before
                             .then(this.fireEvent(DeviceSessionEvent.of(
+                                now,
                                 DeviceSessionEvent.Type.unregister,
                                 session,
                                 !sameServer
