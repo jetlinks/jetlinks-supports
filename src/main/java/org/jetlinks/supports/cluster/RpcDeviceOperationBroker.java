@@ -91,10 +91,6 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         return Disposables.disposed();
     }
 
-    @Override
-    public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
-        return super.handleReply(deviceId, messageId, timeout);
-    }
 
     @Override
     public Mono<Integer> send(String deviceGatewayServerId, Publisher<? extends Message> message) {

@@ -1,11 +1,7 @@
 package org.jetlinks.supports.cluster;
 
-import lombok.AllArgsConstructor;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.Setter;
+import lombok.*;
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.cache.Caches;
 import org.jetlinks.core.device.DeviceOperationBroker;
 import org.jetlinks.core.device.DeviceStateInfo;
 import org.jetlinks.core.device.ReplyFailureHandler;
@@ -21,17 +17,22 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import javax.annotation.Nonnull;
 import java.time.Duration;
-import java.util.Collection;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 @Slf4j
 public abstract class AbstractDeviceOperationBroker implements DeviceOperationBroker, MessageHandler {
 
-    private final Map<AwaitKey, Sinks.Many<DeviceMessageReply>> replyProcessor = Caches.newCache();
+    private final Map<AwaitKey, Sinks.Many<DeviceMessageReply>> replyProcessor = new ConcurrentHashMap<>();
+
+    private final Map<AwaitKey, AtomicInteger> fragmentCounter = new ConcurrentHashMap<>();
+
+    private final NavigableMap<PendingKey, String> pendingNoMessageId = new ConcurrentSkipListMap<>();
 
     @Override
     public abstract Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId, Collection<String> deviceIdList);
@@ -40,7 +41,25 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
     public abstract Disposable handleGetDeviceState(String serverId, Function<Publisher<String>, Flux<DeviceStateInfo>> stateMapper);
 
     @Override
-    public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
+    public Flux<DeviceMessageReply> handleReply(DeviceMessage message, Duration timeout) {
+        //标记了设备不会回复messageId
+        if (message instanceof RepayableDeviceMessage && message.getHeaderOrDefault(Headers.replyNoMessageId)) {
+            MessageType replyType = ((RepayableDeviceMessage<?>) message).getReplyType();
+            String messageId = message.getMessageId();
+            PendingKey key = new PendingKey(message.getDeviceId(), message.getTimestamp(), replyType);
+            pendingNoMessageId.put(key, message.getMessageId());
+            return handleReply0(
+                message.getDeviceId(),
+                message.getMessageId(),
+                timeout,
+                () -> pendingNoMessageId.remove(key, messageId));
+        }
+
+        return handleReply(message.getDeviceId(), message.getMessageId(), timeout);
+    }
+
+
+    public Flux<DeviceMessageReply> handleReply0(String deviceId, String messageId, Duration timeout, Runnable after) {
         long startWith = System.currentTimeMillis();
         AwaitKey id = getAwaitReplyKey(deviceId, messageId);
         return replyProcessor
@@ -60,9 +79,16 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
                                messageId,
                                System.currentTimeMillis() - startWith);
                 }
+                after.run();
                 replyProcessor.remove(id);
                 fragmentCounter.remove(id);
             });
+    }
+
+    @Override
+    public Flux<DeviceMessageReply> handleReply(String deviceId, String messageId, Duration timeout) {
+        return handleReply0(deviceId, messageId, timeout, () -> {
+        });
     }
 
     @Override
@@ -76,19 +102,41 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     protected abstract Mono<Void> doReply(DeviceMessageReply reply);
 
-    private final Map<AwaitKey, AtomicInteger> fragmentCounter = new ConcurrentHashMap<>();
-
     protected AwaitKey getAwaitReplyKey(DeviceMessage message) {
         return getAwaitReplyKey(message.getDeviceId(), message.getMessageId());
     }
 
     protected AwaitKey getAwaitReplyKey(String deviceId, String messageId) {
-        return new AwaitKey(deviceId,messageId);
+        return new AwaitKey(deviceId, messageId);
+    }
+
+    protected boolean handleNoMessageIdReply(DeviceMessageReply message) {
+        PendingKey from = new PendingKey(message.getDeviceId(),
+                                         0,
+                                         message.getMessageType());
+        PendingKey to = new PendingKey(message.getDeviceId(),
+                                       message.getTimestamp(),
+                                       message.getMessageType());
+        //查找最近的
+        Map.Entry<PendingKey, String> entry = pendingNoMessageId
+            .subMap(from, false, to, true)
+            .firstEntry();
+
+        if (entry != null
+            && Objects.equals(entry.getKey().deviceId, message.getDeviceId())
+            && Objects.equals(entry.getKey().messageType, message.getMessageType())) {
+            message.messageId(entry.getValue());
+            pendingNoMessageId.remove(entry.getKey(), entry.getValue());
+            return true;
+        } else {
+            return false;
+        }
     }
 
     @Override
     public Mono<Boolean> reply(DeviceMessageReply message) {
-        if (!StringUtils.hasText(message.getMessageId())) {
+        if (!StringUtils.hasText(message.getMessageId())
+            && !handleNoMessageIdReply(message)) {
             log.warn("reply message messageId is empty: {}", message);
             return Reactors.ALWAYS_FALSE;
         }
@@ -164,8 +212,28 @@ public abstract class AbstractDeviceOperationBroker implements DeviceOperationBr
 
     @AllArgsConstructor
     @EqualsAndHashCode(cacheStrategy = EqualsAndHashCode.CacheStrategy.LAZY)
-    protected static class AwaitKey{
+    protected static class AwaitKey {
         private String deviceId;
         private String messageId;
+    }
+
+    @AllArgsConstructor
+    @EqualsAndHashCode
+    @Getter
+    @ToString
+    protected static class PendingKey implements Comparable<PendingKey> {
+        static Comparator<PendingKey> comparator = Comparator
+            .comparing(PendingKey::getDeviceId)
+            .thenComparing(PendingKey::getMessageType)
+            .thenComparing(PendingKey::getTimestamp);
+
+        private String deviceId;
+        private long timestamp;
+        private MessageType messageType;
+
+        @Override
+        public int compareTo(@Nonnull PendingKey o) {
+            return comparator.compare(this, o);
+        }
     }
 }
