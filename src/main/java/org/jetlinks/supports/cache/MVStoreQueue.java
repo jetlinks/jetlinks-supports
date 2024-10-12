@@ -273,12 +273,16 @@ class MVStoreQueue<T> implements FileQueue<T> {
 
     private void doAdd(T value) {
         operationInStore(() -> {
-            T old;
-            do {
-                old = mvMap.putIfAbsent(INDEX.incrementAndGet(this), value);
-            } while (old != null);
+            doAdd0(value);
             return null;
         });
+    }
+
+    private void doAdd0(T value) {
+        T old;
+        do {
+            old = mvMap.putIfAbsent(INDEX.incrementAndGet(this), value);
+        } while (old != null);
     }
 
     @Override
@@ -299,7 +303,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
         try {
             return operationInStore(() -> {
                 for (T t : c) {
-                    doAdd(t);
+                    doAdd0(t);
                 }
                 return true;
             });
