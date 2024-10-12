@@ -46,7 +46,7 @@ public class MVStoreQueueBuilderFactoryTest {
                 }
             })
             .flatMap(i -> Mono.fromRunnable(() -> queue.offer(i))
-                          .subscribeOn(Schedulers.parallel()))
+                              .subscribeOn(Schedulers.parallel()))
             .then(Mono.fromSupplier(queue::size))
             .as(StepVerifier::create)
             .expectNext(count)
@@ -199,5 +199,30 @@ public class MVStoreQueueBuilderFactoryTest {
             .expectNext("test")
             .verifyComplete();
 
+    }
+
+    @Test
+    @SneakyThrows
+    public void testAddAll() {
+        FileQueue<String> strings = FileQueue
+            .<String>builder()
+            .name("testAddAll")
+            .path(Paths.get("./target/.queue"))
+            .build();
+        new File("./target/.queue/testAddAll").deleteOnExit();
+
+        int size = 10000;
+        Flux.range(0, size)
+            .flatMap(i -> Mono
+                .fromRunnable(() -> {
+                    strings.size();
+                    strings.addAll(Arrays.asList("1", "2", "3"));
+                })
+                .subscribeOn(Schedulers.boundedElastic()))
+            .then()
+            .block();
+
+
+        assertEquals(size * 3, strings.size());
     }
 }
