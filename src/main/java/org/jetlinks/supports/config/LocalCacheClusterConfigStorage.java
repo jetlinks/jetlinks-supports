@@ -19,6 +19,10 @@ import reactor.core.publisher.*;
 import reactor.util.context.Context;
 
 import javax.annotation.Nonnull;
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
+import javax.management.StandardMBean;
+import java.lang.management.ManagementFactory;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -273,6 +277,12 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         return notify(CacheNotify.expires(id, Collections.singleton(key)));
     }
 
+    Map<String, Object> getAll() {
+        return Collections.unmodifiableMap(
+            Maps.transformValues(caches, Cache::getCachedValue)
+        );
+    }
+
     @Override
     public Mono<Void> refresh() {
         return notify(CacheNotify.expiresAll(id));
@@ -483,6 +493,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
 
         void dispose() {
+            Value value = this.cached != null ? this.cached : null;
             Disposable disposable = CACHE_LOADER.getAndSet(this, null);
             if (null != disposable) {
                 disposable.dispose();
@@ -492,7 +503,6 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             this.sink = null;
 
             if (sink != null) {
-                Value value = this.cached != null ? this.cached : null;
                 if (value == null || value.get() == null) {
                     sink.emitEmpty(Reactors.emitFailureHandler());
                 } else {
