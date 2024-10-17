@@ -13,7 +13,6 @@ import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
 import org.springframework.util.ObjectUtils;
-import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
@@ -475,8 +474,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     protected Mono<Long> removeFromCluster(String deviceId) {
         DeviceSessionRef ref = localSessions.remove(deviceId);
         if (ref != null) {
-            if (ref.disposable != null) {
-                ref.disposable.dispose();
+            if (ref.loading != null) {
+                ref.loading.dispose();
             }
             DeviceSession session = ref.loaded;
             if (ref.loaded != null) {
@@ -535,19 +534,20 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         @SuppressWarnings("rawtypes")
         private final static AtomicReferenceFieldUpdater<DeviceSessionRef, Mono> LOADER
             = AtomicReferenceFieldUpdater.newUpdater(DeviceSessionRef.class, Mono.class, "loader");
+        protected volatile Mono<DeviceSession> loader;
+
+        private final static AtomicReferenceFieldUpdater<DeviceSessionRef, Disposable> LOADING
+            = AtomicReferenceFieldUpdater.newUpdater(DeviceSessionRef.class, Disposable.class, "loading");
+        private volatile Disposable loading;
 
         @SuppressWarnings("rawtypes")
         private final static AtomicReferenceFieldUpdater<DeviceSessionRef, Sinks.One> AWAIT
             = AtomicReferenceFieldUpdater.newUpdater(DeviceSessionRef.class, Sinks.One.class, "await");
-
-        private final AbstractDeviceSessionManager manager;
         private volatile Sinks.One<DeviceSession> await;
 
+        private final AbstractDeviceSessionManager manager;
         public final String deviceId;
         public volatile DeviceSession loaded;
-        protected volatile Mono<DeviceSession> loader;
-
-        private volatile Disposable disposable;
 
         private volatile Set<String> children;
 
@@ -588,9 +588,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         }
 
         public void update(Mono<DeviceSession> ref) {
-            if (disposable != null && !disposable.isDisposed()) {
-                disposable.dispose();
-            }
+            disposeLoader();
             @SuppressWarnings("all")
             Sinks.One<DeviceSession> old = AWAIT.getAndSet(this, Sinks.one());
 
@@ -669,18 +667,21 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
         private Mono<Long> close(DeviceSession session) {
             if (this.loaded == session && manager.localSessions.remove(deviceId, this)) {
-                if (disposable != null && !disposable.isDisposed()) {
-                    disposable.dispose();
-                }
+                disposeLoader();
                 return doClose(loaded);
             }
             return Reactors.ALWAYS_ZERO_LONG;
         }
 
-        private Mono<Long> close() {
+        private void disposeLoader() {
+            Disposable disposable = LOADING.getAndSet(this, null);
             if (disposable != null && !disposable.isDisposed()) {
                 disposable.dispose();
             }
+        }
+
+        private Mono<Long> close() {
+            disposeLoader();
             DeviceSession loaded = this.loaded;
             if (loaded != null) {
                 return doClose(loaded);
@@ -719,14 +720,19 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             Mono<DeviceSession> loader = LOADER.getAndSet(this, null);
 
             if (loader != null) {
-                disposable = loader
+                Disposable[] ref = new Disposable[1];
+                ref[0] = loader
                     .subscribe(
-                        null,
-                        null,
-                        null,
+                        session -> LOADING.compareAndSet(this, ref[0], null),
+                        err -> LOADING.compareAndSet(this, ref[0], null),
+                        () -> LOADING.compareAndSet(this, ref[0], null),
                         Context.of(contextView)
                                .put(DeviceSessionRef.class, this)
                     );
+                Disposable old = LOADING.getAndSet(this, ref[0]);
+                if (old != null) {
+                    old.dispose();
+                }
             }
         }
 
