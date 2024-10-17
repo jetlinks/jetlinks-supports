@@ -2,6 +2,7 @@ package org.jetlinks.supports.config;
 
 import com.google.common.collect.Maps;
 import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
@@ -55,6 +56,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private final long expires;
     private final Runnable doOnClear;
 
+    Throwable lastError;
+
     public static final Value NULL = Value.simple(null);
 
     public LocalCacheClusterConfigStorage(String id,
@@ -91,6 +94,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 }
             });
         }
+    }
+
+    void error(Throwable err) {
+        this.lastError = err;
     }
 
     private Cache createCache(String key) {
@@ -454,15 +461,16 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         void setValue(Value value) {
             updateTime();
-
-            CACHE_VERSION.incrementAndGet(this);
-            if (value != null) {
-                value = tryShare(key, value);
-                this.ref = Mono.just(value);
-                this.cached = value;
-            } else {
-                this.ref = Mono.empty();
-                this.cached = NULL;
+            int version = this.version;
+            if (CACHE_VERSION.incrementAndGet(this) == version + 1) {
+                if (value != null) {
+                    value = tryShare(key, value);
+                    this.ref = Mono.just(value);
+                    this.cached = value;
+                } else {
+                    this.ref = Mono.empty();
+                    this.cached = NULL;
+                }
             }
 
             dispose();
@@ -511,28 +519,36 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             }
         }
 
-        @AllArgsConstructor
+        @RequiredArgsConstructor
         private class Loader extends BaseSubscriber<Object> {
             private final long loadingVersion;
+            private boolean hasValue;
 
             @Override
             protected void hookOnNext(@Nonnull Object value) {
-                if (loadingVersion == version) {
-                    setValue(value);
-                } else {
-                    clear();
+                synchronized (this) {
+                    hasValue = true;
+                    if (loadingVersion == CACHE_VERSION.get(Cache.this)) {
+                        setValue(value);
+                    } else {
+                        clear();
+                    }
                 }
             }
 
             @Override
             protected void hookOnComplete() {
-                if (sink != null && loadingVersion == version) {
-                    setValue(null);
+                synchronized (this) {
+                    if (!hasValue && sink != null && loadingVersion == CACHE_VERSION.get(Cache.this)) {
+                        setValue(null);
+                    }
                 }
             }
 
             @Override
             protected void hookOnError(@Nonnull Throwable throwable) {
+                LocalCacheClusterConfigStorage.this.error(throwable);
+
                 Sinks.One<Value> _sink = sink;
                 if (_sink != null) {
                     Value cached = getCached();

@@ -23,6 +23,8 @@ import reactor.core.scheduler.Schedulers;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.Collections;
@@ -224,6 +226,12 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                 .map(e -> {
                     ConfigStorageInfo info = new ConfigStorageInfo();
                     info.setId(e.getKey());
+                    Throwable err = e.getValue().lastError;
+                    if (err != null) {
+                        StringWriter writer = new StringWriter();
+                        err.printStackTrace(new PrintWriter(writer));
+                        info.lastError = writer.toString();
+                    }
                     info.setValues(e.getValue().getAll());
                     return info;
                 })
@@ -236,7 +244,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
     @Setter
     public static class ConfigStorageInfo {
         private String id;
-
+        private String lastError;
         private Map<String, Object> values;
     }
 
