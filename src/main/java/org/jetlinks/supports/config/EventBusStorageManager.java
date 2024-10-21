@@ -36,10 +36,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.function.BiPredicate;
-import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
+import java.util.function.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -69,15 +66,16 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                                   long ttl) {
         this.cache = new ConcurrentHashMap<>();
         this.eventBus = eventBus;
+        Consumer<LocalCacheClusterConfigStorage> removeHandler = store -> {
+            this.cache.remove(store.id, store);
+        };
         storageBuilder = id -> {
             return new LocalCacheClusterConfigStorage(
                 id,
                 eventBus,
                 clusterManager.createCache(id),
                 ttl,
-                () -> {
-                    this.cache.remove(id);
-                });
+                removeHandler);
         };
         if (ttl > 0) {
             Scheduler scheduler = Schedulers
@@ -98,14 +96,15 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                                   Supplier<ConcurrentMap<String, Object>> cacheSupplier) {
         this.eventBus = eventBus;
         this.cache = (ConcurrentMap) cacheSupplier.get();
+        Consumer<LocalCacheClusterConfigStorage> removeHandler = store -> {
+            this.cache.remove(store.id, store);
+        };
         storageBuilder = id -> new LocalCacheClusterConfigStorage(
             id,
             eventBus,
             clusterManager.createCache(id),
             -1,
-            () -> {
-                this.cache.remove(id);
-            },
+            removeHandler,
             (Map) cacheSupplier.get());
     }
 

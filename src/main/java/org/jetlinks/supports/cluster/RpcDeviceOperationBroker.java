@@ -77,6 +77,15 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     @Override
     public Flux<DeviceStateInfo> getDeviceState(String deviceGatewayServerId,
                                                 Collection<String> deviceIdList) {
+        if (deviceIdList.size() == 1) {
+            String deviceId = deviceIdList.iterator().next();
+            return sessionManager
+                .checkAlive(deviceId, false)
+                .map(alive -> new DeviceStateInfo(
+                    deviceId,
+                    alive ? DeviceState.online : DeviceState.offline))
+                .flux();
+        }
         return Flux
             .fromIterable(deviceIdList)
             .flatMap(id -> sessionManager
@@ -225,7 +234,9 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
     protected ObjectOutput createOutput(ByteBuf output) {
         return new ObjectOutputStream(new ByteBufOutputStream(output));
     }
+
     static MessageType[] types = MessageType.values();
+
     @SneakyThrows
     private Message decode(ByteBuf buf) {
         try (ObjectInput input = createInput(buf)) {

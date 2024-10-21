@@ -28,6 +28,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static org.jetlinks.supports.config.EventBusStorageManager.NOTIFY_TOPIC;
@@ -48,13 +49,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private static final Set<String> sharedKey = ConcurrentHashMap.newKeySet();
 
     private final Map<String, Cache> caches;
-    private final String id;
+    final String id;
     private final EventBus eventBus;
 
     private final ClusterCache<String, Object> clusterCache;
 
     private final long expires;
-    private final Runnable doOnClear;
+    private final Consumer<LocalCacheClusterConfigStorage> doOnClear;
 
     Throwable lastError;
 
@@ -64,7 +65,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                                           EventBus eventBus,
                                           ClusterCache<String, Object> clusterCache,
                                           long expires,
-                                          Runnable doOnClear,
+                                          Consumer<LocalCacheClusterConfigStorage> doOnClear,
                                           Map<String, Cache> cacheContainer) {
         this.id = id;
         this.eventBus = eventBus;
@@ -77,7 +78,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     public LocalCacheClusterConfigStorage(String id, EventBus eventBus,
                                           ClusterCache<String, Object> clusterCache,
                                           long expires,
-                                          Runnable doOnClear) {
+                                          Consumer<LocalCacheClusterConfigStorage> doOnClear) {
         this(id, eventBus, clusterCache, expires, doOnClear, new ConcurrentHashMap<>());
     }
 
@@ -204,7 +205,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         if (CollectionUtils.isEmpty(values)) {
             return Reactors.ALWAYS_TRUE;
         }
-        values.forEach((key, value) -> getOrCreateCache(key).setValue(value));
+        values.forEach(this::trySetLocalValue);
 
         return clusterCache
             .putAll(values)
@@ -220,12 +221,21 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         if (value == null) {
             return remove(key);
         }
-        getOrCreateCache(key).setValue(value);
-
+        trySetLocalValue(key, value);
         return clusterCache
             .put(key, value)
             .then(notifyRemoveKey(key))
             .then(Reactors.ALWAYS_TRUE);
+    }
+
+    private void trySetLocalValue(String key, Object value) {
+        if (value == null) {
+            return;
+        }
+        Cache cache = caches.get(key);
+        if (cache != null) {
+            cache.setValue(value);
+        }
     }
 
     @Override
@@ -268,15 +278,17 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
         if (notify.isClear()) {
             if (doOnClear != null) {
-                doOnClear.run();
+                doOnClear.accept(this);
             }
         }
     }
 
     Mono<Void> notify(CacheNotify notify) {
-        clearLocalCache(notify);
-        return eventBus
-            .publish(NOTIFY_TOPIC, notify)
+        return Mono
+            .defer(() -> {
+                clearLocalCache(notify);
+                return eventBus.publish(NOTIFY_TOPIC, notify);
+            })
             .then();
     }
 
@@ -371,8 +383,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             Cache cache = getOrCreateCache(key);
             int version = versions.getOrDefault(key, cache.version);
             updateValue(cache, version, value);
+            Object val = cache.getCachedValue();
+            //最新值为null?可能是并发读写.版本不一致,还未成功加载值,直接使用获取到的值.
+            if (val == null) {
+                val = value;
+            }
             //设置最新的值,防止并发更新导致不一致
-            container.put(key, cache.getCachedValue());
+            container.put(key, val);
             if (null != value) {
                 keys.remove(key);
             }
@@ -473,12 +490,12 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 }
             }
 
-            dispose();
+            dispose(this.cached == null ? value : this.cached);
         }
 
         Mono<Value> reload(Mono<Object> loader) {
+            dispose(cached);
             cached = null;
-            dispose();
             this.sink = Sinks.one();
             Mono<Value> ref = sink.asMono();
             CACHE_REF.set(this, ref);
@@ -494,22 +511,15 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
 
         void clear() {
-            dispose();
+            dispose(this.cached);
             cached = null;
             CACHE_VERSION.incrementAndGet(this);
             CACHE_REF.set(this, null);
         }
 
-        void dispose() {
-            Value value = this.cached != null ? this.cached : null;
-            Disposable disposable = CACHE_LOADER.getAndSet(this, null);
-            if (null != disposable) {
-                disposable.dispose();
-            }
-
+        void dispose(Value value) {
             Sinks.One<Value> sink = this.sink;
             this.sink = null;
-
             if (sink != null) {
                 if (value == null || value.get() == null) {
                     sink.emitEmpty(Reactors.emitFailureHandler());
@@ -517,6 +527,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     sink.emitValue(value, Reactors.emitFailureHandler());
                 }
             }
+            Disposable disposable = CACHE_LOADER.getAndSet(this, null);
+            if (null != disposable) {
+                disposable.dispose();
+            }
+
         }
 
         @RequiredArgsConstructor
@@ -526,22 +541,18 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
             @Override
             protected void hookOnNext(@Nonnull Object value) {
-                synchronized (this) {
-                    hasValue = true;
-                    if (loadingVersion == CACHE_VERSION.get(Cache.this)) {
-                        setValue(value);
-                    } else {
-                        clear();
-                    }
+                hasValue = true;
+                if (loadingVersion == CACHE_VERSION.get(Cache.this)) {
+                    setValue(value);
+                } else {
+                    clear();
                 }
             }
 
             @Override
             protected void hookOnComplete() {
-                synchronized (this) {
-                    if (!hasValue && sink != null && loadingVersion == CACHE_VERSION.get(Cache.this)) {
-                        setValue(null);
-                    }
+                if (!hasValue && sink != null && loadingVersion == CACHE_VERSION.get(Cache.this)) {
+                    setValue(null);
                 }
             }
 
@@ -559,6 +570,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     }
                 }
                 clear();
+            }
+
+            @Override
+            protected void hookOnCancel() {
+                if (!isDisposed()) {
+                    upstream().cancel();
+                }
             }
 
             @Override
