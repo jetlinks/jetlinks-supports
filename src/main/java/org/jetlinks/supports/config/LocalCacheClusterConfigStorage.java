@@ -3,6 +3,7 @@ package org.jetlinks.supports.config;
 import com.google.common.collect.Maps;
 import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
@@ -29,20 +30,27 @@ import java.util.function.Function;
 
 import static org.jetlinks.supports.config.EventBusStorageManager.NOTIFY_TOPIC;
 
+@Slf4j
 public class LocalCacheClusterConfigStorage implements ConfigStorage {
     @SuppressWarnings("all")
     private static final AtomicReferenceFieldUpdater<Cache, Mono> CACHE_REF = AtomicReferenceFieldUpdater
         .newUpdater(Cache.class, Mono.class, "ref");
 
+    @SuppressWarnings("all")
+    private static final AtomicReferenceFieldUpdater<Cache, Sinks.One> AWAIT = AtomicReferenceFieldUpdater
+        .newUpdater(Cache.class, Sinks.One.class, "await");
+
     private static final AtomicIntegerFieldUpdater<Cache> CACHE_VERSION = AtomicIntegerFieldUpdater
         .newUpdater(Cache.class, "version");
 
-    private static final AtomicReferenceFieldUpdater<Cache, Disposable> CACHE_LOADER = AtomicReferenceFieldUpdater
-        .newUpdater(Cache.class, Disposable.class, "loader");
+    private static final AtomicReferenceFieldUpdater<Cache, Disposable> CACHE_LOADING = AtomicReferenceFieldUpdater
+        .newUpdater(Cache.class, Disposable.class, "loading");
 
     private static final Map<Value, Value> shared = new ConcurrentReferenceHashMap<>(1024);
 
     private static final Set<String> sharedKey = ConcurrentHashMap.newKeySet();
+
+    public static final Value NULL = Value.simple(null);
 
     private final Map<String, Cache> caches;
     final String id;
@@ -54,8 +62,6 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private final Consumer<LocalCacheClusterConfigStorage> doOnClear;
 
     Throwable lastError;
-
-    public static final Value NULL = Value.simple(null);
 
     public LocalCacheClusterConfigStorage(String id,
                                           EventBus eventBus,
@@ -161,38 +167,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             wrap
         );
 
-//        return clusterCache
-//            .get(needLoadKeys)
-//            .reduce(loaded, (map, entry) -> {
-//                String key = entry.getKey();
-//                Object value = entry.getValue();
-//                //加载到一级缓存中
-//                Cache cache = getOrCreateCache(key);
-//                int version = versions.getOrDefault(key, cache.version);
-//                updateValue(cache, version, value);
-//                if (null != value) {
-//                    map.put(key, value);
-//                }
-//                return map;
-//            })
-//            .defaultIfEmpty(Collections.emptyMap())
-//            .doOnNext(map -> {
-//                needLoadKeys.removeAll(map.keySet());
-//                //还有配置没加载出来,说明这些配置不存在，则全部设置为null
-//                if (!needLoadKeys.isEmpty()) {
-//                    for (String needLoadKey : needLoadKeys) {
-//                        Cache cache = this.getOrCreateCache(needLoadKey);
-//                        int version = versions.getOrDefault(needLoadKey, cache.version);
-//                        updateValue(cache, version, null);
-//                    }
-//                }
-//            })
-//            .thenReturn(wrap);
     }
 
     private void updateValue(Cache cache, int version, Object value) {
         if (cache != null && cache.version == version) {
-            cache.setValue(value);
+            cache.setValue(version, value);
         }
     }
 
@@ -229,8 +208,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             return;
         }
         Cache cache = caches.get(key);
-        if (cache != null) {
-            cache.setValue(value);
+        if (cache != null && cache.loading == null) {
+            cache.setValue(cache.version, value);
         }
     }
 
@@ -420,8 +399,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         volatile Value cached;
 
         volatile Mono<Value> ref;
-        Sinks.One<Value> sink;
-        volatile Disposable loader;
+        volatile Sinks.One<Value> await;
+        volatile Disposable loading;
 
         public Cache(String key) {
             this.key = key;
@@ -436,14 +415,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         Mono<Value> getRef(Mono<Object> loader) {
             Mono<Value> ref = CACHE_REF.get(this);
             if (isExpired() || ref == null) {
-                synchronized (this) {
-                    ref = CACHE_REF.get(this);
-                    if (ref == null) {
-                        return reload(loader);
-                    } else {
-                        return ref;
-                    }
-                }
+                return reload(loader);
             }
             updateTime();
             return ref;
@@ -458,7 +430,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
 
         public Object getCachedValue() {
-            Value cached = getCached();
+            updateTime();
+            Value cached = this.cached;
             return cached == null ? null : cached.get();
         }
 
@@ -468,54 +441,75 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             }
         }
 
-        void setValue(Object value) {
-            setValue(value == null ? null : Value.simple(value));
+        boolean setValue(int version, Object value) {
+            return setValue(version, value == null ? null : Value.simple(value));
         }
 
-        void setValue(Value value) {
+        boolean setValue(int version, Value value) {
             updateTime();
-            int version = this.version;
-            if (CACHE_VERSION.incrementAndGet(this) == version + 1) {
+            Value cached = this.cached;
+            boolean success;
+            if (CACHE_VERSION.compareAndSet(this, version, version + 1)) {
                 if (value != null) {
                     value = tryShare(key, value);
-                    this.ref = Mono.just(value);
-                    this.cached = value;
+                    CACHE_REF.set(this, Mono.just(value));
+                    this.cached = cached = value;
                 } else {
-                    this.ref = Mono.empty();
-                    this.cached = NULL;
+                    CACHE_REF.set(this, Mono.empty());
+                    this.cached = cached = NULL;
                 }
+                success = true;
+            } else {
+                if (log.isDebugEnabled()) {
+                    log.debug(
+                        "local cache [id=`{},`key=`{}` value={}] version not match, expect:{},actual:{}",
+                        id, key, value == null ? null : value.get(), version, this.version
+                    );
+                }
+                success = false;
             }
-
-            dispose(this.cached == null ? value : this.cached);
+            dispose(cached == null ? value : cached);
+            return success;
         }
 
         Mono<Value> reload(Mono<Object> loader) {
-            dispose(cached);
-            cached = null;
-            this.sink = Sinks.one();
-            Mono<Value> ref = sink.asMono();
-            CACHE_REF.set(this, ref);
-            Loader _loader = new Loader(this.version);
-            CACHE_LOADER.set(this, _loader);
-
-            clusterCache
-                .get(key)
-                .switchIfEmpty(loader)
-                .subscribe(_loader);
-
-            return ref;
+            for (; ; ) {
+                @SuppressWarnings("all")
+                Sinks.One<Value> await = AWAIT.get(this);
+                if (await != null) {
+                    return await.asMono();
+                }
+                await = Sinks.one();
+                if (AWAIT.compareAndSet(this, null, await)) {
+                    @SuppressWarnings("all")
+                    Mono<Value> ref = await.asMono();
+                    CACHE_REF.set(this, ref);
+                    Loader _loader = new Loader(this.version);
+                    CACHE_LOADING.set(this, _loader);
+                    clusterCache
+                        .get(key)
+                        .switchIfEmpty(loader)
+                        .subscribe(_loader);
+                    return ref;
+                }
+            }
         }
 
-        void clear() {
-            dispose(this.cached);
-            cached = null;
-            CACHE_VERSION.incrementAndGet(this);
+        void clear(Value value) {
+            Value val = this.cached;
+            if (val == null) {
+                val = value;
+            }
+            dispose(val);
+            //  cached = null;
             CACHE_REF.set(this, null);
+            CACHE_VERSION.incrementAndGet(this);
         }
 
         void dispose(Value value) {
-            Sinks.One<Value> sink = this.sink;
-            this.sink = null;
+
+            @SuppressWarnings("all")
+            Sinks.One<Value> sink = AWAIT.getAndSet(this, null);
             if (sink != null) {
                 if (value == null || value.get() == null) {
                     sink.emitEmpty(Reactors.emitFailureHandler());
@@ -523,49 +517,63 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     sink.emitValue(value, Reactors.emitFailureHandler());
                 }
             }
-            Disposable disposable = CACHE_LOADER.getAndSet(this, null);
-            if (null != disposable) {
+            Disposable disposable = CACHE_LOADING.getAndSet(this, null);
+            if (disposable != null) {
                 disposable.dispose();
             }
 
         }
 
+        void error(Throwable error) {
+            LocalCacheClusterConfigStorage.this.error(error);
+            Value cached = this.cached;
+            @SuppressWarnings("all")
+            Sinks.One<Value> await = AWAIT.getAndSet(Cache.this, null);
+            if (await != null) {
+                if (cached != null) {
+                    log.warn("load cache [{} {}] failed,use cached value:{}", id, key, cached, error);
+                    if (cached.get() == null) {
+                        await.emitEmpty(Reactors.emitFailureHandler());
+                    } else {
+                        await.emitValue(cached, Reactors.emitFailureHandler());
+                    }
+                } else {
+                    await.emitError(error, Reactors.emitFailureHandler());
+                }
+            }
+            clear(cached);
+        }
+
         @RequiredArgsConstructor
         private class Loader extends BaseSubscriber<Object> {
-            private final long loadingVersion;
+            private final int loadingVersion;
             private boolean hasValue;
+
+            @Override
+            protected void hookOnSubscribe(@Nonnull Subscription subscription) {
+                log.trace("loading cache `{}` key `{}`", id, key);
+                super.hookOnSubscribe(subscription);
+            }
 
             @Override
             protected void hookOnNext(@Nonnull Object value) {
                 hasValue = true;
-                if (loadingVersion == CACHE_VERSION.get(Cache.this)) {
-                    setValue(value);
-                } else {
-                    clear();
+                if (!setValue(loadingVersion, value)) {
+                    //版本不一致,清空缓存,下次重新加载最新数据.
+                    clear(Value.simple(value));
                 }
             }
 
             @Override
             protected void hookOnComplete() {
-                if (!hasValue && sink != null && loadingVersion == CACHE_VERSION.get(Cache.this)) {
-                    setValue(null);
+                if (!hasValue && await != null && loadingVersion == CACHE_VERSION.get(Cache.this)) {
+                    setValue(loadingVersion, null);
                 }
             }
 
             @Override
             protected void hookOnError(@Nonnull Throwable throwable) {
-                LocalCacheClusterConfigStorage.this.error(throwable);
-
-                Sinks.One<Value> _sink = sink;
-                if (_sink != null) {
-                    Value cached = getCached();
-                    if (cached != null && cached.get() != null) {
-                        _sink.emitValue(cached, Reactors.emitFailureHandler());
-                    } else {
-                        _sink.emitError(throwable, Reactors.emitFailureHandler());
-                    }
-                }
-                clear();
+                Cache.this.error(throwable);
             }
 
             @Override
@@ -577,7 +585,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
             @Override
             protected void hookFinally(@Nonnull SignalType type) {
-                CACHE_LOADER.compareAndSet(Cache.this, this, null);
+                CACHE_LOADING.compareAndSet(Cache.this, this, null);
             }
         }
     }

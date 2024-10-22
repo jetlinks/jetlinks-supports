@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
 public class EventBusStorageManager implements ConfigStorageManager, Disposable {
 
     static final String NOTIFY_TOPIC = "/_sys/cluster_cache";
-    private static final AtomicBoolean CLUSTER_SUBSCRIBER = new AtomicBoolean();
+    private final AtomicBoolean CLUSTER_SUBSCRIBER = new AtomicBoolean();
     final ConcurrentMap<String, LocalCacheClusterConfigStorage> cache;
 
     private final Disposable.Composite disposable = Disposables.composite();
