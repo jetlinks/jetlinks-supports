@@ -60,7 +60,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     public ExtendedClusterImpl(ClusterImpl impl) {
         real = impl
-                .handler(cluster -> new ClusterMessageHandlerDispatcher());
+            .handler(cluster -> new ClusterMessageHandlerDispatcher());
     }
 
     class ClusterMessageHandlerDispatcher implements ClusterMessageHandler {
@@ -69,7 +69,13 @@ public class ExtendedClusterImpl implements ExtendedCluster {
             if (System.currentTimeMillis() <= cacheEndWithTime && messageCache.size() < 2048) {
                 messageCache.add(message);
             }
-            messageSink.emitNext(message, Reactors.emitFailureHandler());
+            try {
+                if (messageSink.currentSubscriberCount() > 0) {
+                    messageSink.emitNext(message, Reactors.emitFailureHandler());
+                }
+            } catch (Throwable ignore) {
+
+            }
             doHandler(message, ClusterMessageHandler::onMessage);
         }
 
@@ -80,7 +86,13 @@ public class ExtendedClusterImpl implements ExtendedCluster {
                 member(from).ifPresent(mem -> addFeature(mem, gossip.data()));
                 return;
             }
-            messageSink.emitNext(gossip, Reactors.emitFailureHandler());
+            try {
+                if (gossipSink.currentSubscriberCount() > 0) {
+                    gossipSink.emitNext(gossip, Reactors.emitFailureHandler());
+                }
+            } catch (Throwable ignore) {
+            }
+
             doHandler(gossip, ClusterMessageHandler::onGossip);
         }
 
@@ -153,14 +165,14 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         started = true;
         cacheEndWithTime = System.currentTimeMillis() + Duration.ofSeconds(30).toMillis();
         return real
-                .start()
-                //广播特性
-                .then(Mono.defer(this::broadcastFeature))
-                .then(Flux.fromIterable(startThen)
-                          .flatMap(Function.identity())
-                          .then(Mono.fromRunnable(startThen::clear)))
-                .then(Mono.fromRunnable(this::startBroadcastFeature))
-                .thenReturn(this);
+            .start()
+            //广播特性
+            .then(Mono.defer(this::broadcastFeature))
+            .then(Flux.fromIterable(startThen)
+                      .flatMap(Function.identity())
+                      .then(Mono.fromRunnable(startThen::clear)))
+            .then(Mono.fromRunnable(this::startBroadcastFeature))
+            .thenReturn(this);
     }
 
     public ExtendedCluster startAwait() {
@@ -170,29 +182,32 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     private Mono<Void> broadcastFeature() {
         return this
-                .spreadGossip(Message
-                                      .builder()
-                                      .qualifier(FEATURE_QUALIFIER)
-                                      .header(FEATURE_FROM, member().id())
-                                      .data(localFeatures)
-                                      .build())
-                .then();
+            .spreadGossip(Message
+                              .builder()
+                              .qualifier(FEATURE_QUALIFIER)
+                              .header(FEATURE_FROM, member().id())
+                              .data(localFeatures)
+                              .build())
+            .then();
     }
 
     private void startBroadcastFeature() {
         addFeature(member(), localFeatures);
         disposable.add(
-                Flux.interval(Duration.ofSeconds(10), Duration.ofSeconds(30))
-                    .flatMap(l -> this
-                            .broadcastFeature()
-                            .onErrorResume(err -> Mono.empty()))
-                    .subscribe()
+            Flux.interval(Duration.ofSeconds(10), Duration.ofSeconds(30))
+                .onBackpressureDrop()
+                .concatMap(l -> this
+                    .broadcastFeature()
+                    .onErrorResume(err -> Mono.empty()), 0)
+                .subscribe()
         );
     }
 
     @Override
     public Flux<MembershipEvent> listenMembership() {
-        return membershipEvents.asFlux();
+        return membershipEvents
+            .asFlux()
+            .onBackpressureBuffer();
     }
 
     @Override
@@ -207,16 +222,17 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     private Disposable listen(Sinks.Many<Message> sink, @Nonnull String qualifier, BiFunction<Message, ExtendedCluster, Mono<Void>> handler) {
         return sink
-                .asFlux()
-                .filter(msg -> Objects.equals(qualifier, msg.qualifier()))
-                .flatMap(msg -> handler
-                        .apply(msg, this)
-                        .contextWrite(TraceHolder.readToContext(Context.empty(), msg.headers()))
-                        .onErrorResume(err -> {
-                            log.error(err.getMessage(), err);
-                            return Mono.empty();
-                        }))
-                .subscribe();
+            .asFlux()
+            .onBackpressureBuffer()
+            .filter(msg -> Objects.equals(qualifier, msg.qualifier()))
+            .flatMap(msg -> handler
+                .apply(msg, this)
+                .contextWrite(TraceHolder.readToContext(Context.empty(), msg.headers()))
+                .onErrorResume(err -> {
+                    log.error(err.getMessage(), err);
+                    return Mono.empty();
+                }))
+            .subscribe();
     }
 
     @Override
@@ -226,40 +242,53 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     @Override
     public Mono<Void> send(Member member, Message message) {
+        if (!real.member(member.address()).isPresent()) {
+            return Mono.empty();
+        }
         if (TraceHolder.isEnabled()) {
             return TraceHolder
-                    .writeContextTo(Message.with(message), Message.Builder::header)
-                    .flatMap(msg -> real.send(member, msg.build()));
+                .writeContextTo(Message.with(message), Message.Builder::header)
+                .flatMap(msg -> real.send(member, msg.build()));
         }
         return real.send(member, message);
     }
 
     @Override
     public Mono<Void> send(Address address, Message message) {
+        if (!real.member(address).isPresent()) {
+            return Mono.empty();
+        }
+
         if (TraceHolder.isEnabled()) {
             return TraceHolder
-                    .writeContextTo(Message.with(message), Message.Builder::header)
-                    .flatMap(msg -> real.send(address, msg.build()));
+                .writeContextTo(Message.with(message), Message.Builder::header)
+                .flatMap(msg -> real.send(address, msg.build()));
         }
         return real.send(address, message);
     }
 
     @Override
     public Mono<Message> requestResponse(Address address, Message request) {
+        if (!real.member(address).isPresent()) {
+            return Mono.empty();
+        }
         if (TraceHolder.isEnabled()) {
             return TraceHolder
-                    .writeContextTo(Message.with(request), Message.Builder::header)
-                    .flatMap(msg -> real.requestResponse(address, request));
+                .writeContextTo(Message.with(request), Message.Builder::header)
+                .flatMap(msg -> real.requestResponse(address, request));
         }
         return real.requestResponse(address, request);
     }
 
     @Override
     public Mono<Message> requestResponse(Member member, Message request) {
+        if (!real.member(member.address()).isPresent()) {
+            return Mono.empty();
+        }
         if (TraceHolder.isEnabled()) {
             return TraceHolder
-                    .writeContextTo(Message.with(request), Message.Builder::header)
-                    .flatMap(msg -> real.requestResponse(member, request));
+                .writeContextTo(Message.with(request), Message.Builder::header)
+                .flatMap(msg -> real.requestResponse(member, request));
         }
         return real.requestResponse(member, request);
     }
@@ -268,8 +297,8 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     public Mono<String> spreadGossip(Message message) {
         if (TraceHolder.isEnabled()) {
             return TraceHolder
-                    .writeContextTo(Message.with(message), Message.Builder::header)
-                    .flatMap(msg -> real.spreadGossip(message));
+                .writeContextTo(Message.with(message), Message.Builder::header)
+                .flatMap(msg -> real.spreadGossip(message));
         }
         return real.spreadGossip(message);
     }
