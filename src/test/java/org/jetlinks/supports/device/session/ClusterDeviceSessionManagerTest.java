@@ -11,6 +11,7 @@ import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceRegistry;
 import org.jetlinks.core.device.ProductInfo;
 import org.jetlinks.core.message.codec.DefaultTransport;
+import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.LostDeviceSession;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.scalecube.ExtendedClusterImpl;
@@ -23,6 +24,7 @@ import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
@@ -84,6 +86,54 @@ public class ClusterDeviceSessionManagerTest {
     }
 
     @Test
+    public void testConcurrency() {
+        LostDeviceSession session = new LostDeviceSession("testConcurrency", device, DefaultTransport.MQTT) {
+            @Override
+            public boolean isAlive() {
+                return true;
+            }
+
+            @Override
+            public Mono<Boolean> isAliveAsync() {
+                return Reactors.ALWAYS_TRUE;
+            }
+        };
+
+        AtomicInteger count = new AtomicInteger();
+        manager1.listenEvent(e -> {
+            if (e.getSession() == session) {
+                count.incrementAndGet();
+            }
+            return Mono.empty();
+        });
+
+        Flux.range(0, 2000)
+            .flatMap(ignore -> Mono
+                .defer(() -> Mono.zip(
+                    manager1
+                        .compute(session.getDeviceId(), old -> old
+                            .defaultIfEmpty(session)
+                            .delayElement(Duration.ofMillis(1))),
+                    manager1.getSession(session.getDeviceId())
+                            .subscribeOn(Schedulers.parallel())
+                ))
+                .subscribeOn(Schedulers.boundedElastic()))
+            .then(Mono.delay(Duration.ofSeconds(1)))
+            .then(Mono.fromSupplier(count::get))
+            .as(StepVerifier::create)
+            .expectNext(1)
+            .verifyComplete();
+
+        Flux.range(0, 100)
+            .flatMap(i -> Mono.defer(() -> manager1.remove(session.getDeviceId(), true))
+                          .subscribeOn(Schedulers.boundedElastic()))
+            .then(Mono.fromSupplier(count::get))
+            .as(StepVerifier::create)
+            .expectNext(2)
+            .verifyComplete();
+    }
+
+    @Test
     @SneakyThrows
     public void testRegisterInMulti() {
         LostDeviceSession session = new LostDeviceSession("test", device, DefaultTransport.MQTT) {
@@ -100,7 +150,7 @@ public class ClusterDeviceSessionManagerTest {
         AtomicInteger eventCount = new AtomicInteger();
         Disposable disposable = Disposables.composite(
             manager1.listenEvent(event -> {
-                System.err.println(event.getType()+ " manager 1: " + event.isClusterExists());
+                System.err.println(event.getType() + " manager 1: " + event.isClusterExists());
                 if (event.isClusterExists()) {
                     return Mono.empty();
                 }
@@ -108,7 +158,7 @@ public class ClusterDeviceSessionManagerTest {
                 return Mono.empty();
             }),
             manager2.listenEvent(event -> {
-                System.err.println(event.getType()+ " manager 2: " + event.isClusterExists());
+                System.err.println(event.getType() + " manager 2: " + event.isClusterExists());
                 if (event.isClusterExists()) {
                     return Mono.empty();
                 }
@@ -263,8 +313,9 @@ public class ClusterDeviceSessionManagerTest {
                     session.getDeviceId(),
                     old -> manager1
                         .getSession(session.getDeviceId())
-                        .then(Mono.fromRunnable(()->alive.set(true)))
-                        .thenReturn(session))
+                        .then(Mono.fromRunnable(() -> alive.set(true)))
+                        .<DeviceSession>thenReturn(session)
+                        .subscribeOn(Schedulers.parallel()))
                 .as(StepVerifier::create)
                 .expectNextCount(1)
                 .verifyComplete();
