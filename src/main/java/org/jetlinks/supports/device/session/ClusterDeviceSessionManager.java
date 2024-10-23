@@ -123,28 +123,32 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
         this.rpcManager.registerService(new ServiceImpl(() -> this));
         this.rpcManager
-                .getServices(Service.class)
-                .subscribe(service -> {
-                    addService(service.serverNodeId(), service.service());
-                });
+            .getServices(Service.class)
+            .subscribe(service -> {
+                addService(service.serverNodeId(), service.service());
+            });
 
         this.rpcManager
-                .listen(Service.class)
-                .subscribe(e -> {
-                    if (e.getType() == ServiceEvent.Type.removed) {
-                        services.remove(e.getServerNodeId());
-                    } else if (e.getType() == ServiceEvent.Type.added) {
-                        this.rpcManager
-                                .getService(e.getServerNodeId(), Service.class)
-                                .subscribe(service -> addService(e.getServerNodeId(), service));
-                    }
-                });
+            .listen(Service.class)
+            .subscribe(e -> {
+                if (e.getType() == ServiceEvent.Type.removed) {
+                    services.remove(e.getServerNodeId());
+                } else if (e.getType() == ServiceEvent.Type.added) {
+                    this.rpcManager
+                        .getService(e.getServerNodeId(), Service.class)
+                        .subscribe(service -> addService(e.getServerNodeId(), service));
+                }
+            });
+    }
+
+    @Override
+    public boolean isShutdown() {
+        return super.isShutdown() || rpcManager.isShutdown();
     }
 
     private void addService(String serverId, Service rpc) {
         services.put(serverId, new ErrorHandleService(serverId, rpc));
     }
-
 
     @AllArgsConstructor
     static class ErrorHandleService implements Service {
@@ -158,61 +162,61 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         @Override
         public Mono<Boolean> isAlive(String deviceId) {
             return service
-                    .isAlive(deviceId)
-                    .onErrorResume(err -> {
-                        handleError(err);
-                        return Reactors.ALWAYS_FALSE;
-                    });
+                .isAlive(deviceId)
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Reactors.ALWAYS_FALSE;
+                });
         }
 
         @Override
         public Mono<Boolean> checkAlive(String deviceId) {
             return service
-                    .checkAlive(deviceId)
-                    .onErrorResume(err -> {
-                        handleError(err);
-                        return Reactors.ALWAYS_FALSE;
-                    });
+                .checkAlive(deviceId)
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Reactors.ALWAYS_FALSE;
+                });
         }
 
         @Override
         public Mono<Long> total() {
             return service
-                    .total()
-                    .onErrorResume(err -> {
-                        handleError(err);
-                        return Reactors.ALWAYS_ZERO_LONG;
-                    });
+                .total()
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Reactors.ALWAYS_ZERO_LONG;
+                });
         }
 
         @Override
         public Mono<Boolean> init(String deviceId) {
             return service
-                    .init(deviceId)
-                    .onErrorResume(err -> {
-                        handleError(err);
-                        return Reactors.ALWAYS_FALSE;
-                    });
+                .init(deviceId)
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Reactors.ALWAYS_FALSE;
+                });
         }
 
         @Override
         public Mono<Long> remove(String deviceId) {
             return service
-                    .remove(deviceId)
-                    .onErrorResume(err -> {
-                        handleError(err);
-                        return Reactors.ALWAYS_ZERO_LONG;
-                    });
+                .remove(deviceId)
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Reactors.ALWAYS_ZERO_LONG;
+                });
         }
 
         @Override
         public Flux<DeviceSessionInfo> sessions() {
             return service
-                    .sessions()
-                    .onErrorResume(err -> {
-                        handleError(err);
-                        return Mono.empty();
-                    });
+                .sessions()
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Mono.empty();
+                });
         }
     }
 
@@ -228,9 +232,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return Reactors.ALWAYS_FALSE;
         }
         return getServices()
-                .concatMap(service -> service.init(session.getDeviceId()))
-                .takeUntil(Boolean::booleanValue)
-                .any(Boolean::booleanValue);
+            .concatMap(service -> service.init(session.getDeviceId()))
+            .takeUntil(Boolean::booleanValue)
+            .any(Boolean::booleanValue);
     }
 
     @Override
@@ -239,8 +243,8 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return Reactors.ALWAYS_ZERO_LONG;
         }
         return getServices()
-                .concatMap(service -> service.remove(deviceId))
-                .reduce(Math::addExact);
+            .concatMap(service -> service.remove(deviceId))
+            .reduce(Math::addExact);
     }
 
     @Override
@@ -249,9 +253,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return Reactors.ALWAYS_ZERO_LONG;
         }
         return this
-                .getServices()
-                .flatMap(Service::total)
-                .reduce(Math::addExact);
+            .getServices()
+            .flatMap(Service::total)
+            .reduce(Math::addExact);
     }
 
     @Override
@@ -260,9 +264,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return Reactors.ALWAYS_FALSE;
         }
         return getServices()
-                .flatMap(service -> service.isAlive(deviceId))
-                .any(Boolean::booleanValue)
-                .defaultIfEmpty(false);
+            .flatMap(service -> service.isAlive(deviceId))
+            .any(Boolean::booleanValue)
+            .defaultIfEmpty(false);
     }
 
     @Override
@@ -271,16 +275,16 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return Reactors.ALWAYS_FALSE;
         }
         return getServices()
-                .flatMap(service -> service.checkAlive(deviceId))
-                .any(Boolean::booleanValue)
-                .defaultIfEmpty(false);
+            .flatMap(service -> service.checkAlive(deviceId))
+            .any(Boolean::booleanValue)
+            .defaultIfEmpty(false);
     }
 
     @Override
     protected Flux<DeviceSessionInfo> remoteSessions(String serverId) {
         if (ObjectUtils.isEmpty(serverId)) {
             return getServices()
-                    .flatMap(Service::sessions);
+                .flatMap(Service::sessions);
         }
         Service service = services.get(serverId);
         return service == null ? Flux.empty() : service.sessions();

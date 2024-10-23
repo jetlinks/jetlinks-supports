@@ -119,6 +119,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         disposable.dispose();
     }
 
+    public boolean isShutdown() {
+        return disposable.isDisposed();
+    }
+
     @Override
     public Mono<DeviceSession> getSession(String deviceId) {
         return getSession(deviceId, true);
