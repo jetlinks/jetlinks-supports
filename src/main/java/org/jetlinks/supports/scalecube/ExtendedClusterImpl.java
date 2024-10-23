@@ -350,11 +350,6 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     @Override
     public void shutdown() {
         real.shutdown();
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
     }
 
     @Override
