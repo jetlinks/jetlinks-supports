@@ -99,12 +99,14 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private static final RetryBackoffSpec DEFAULT_RETRY = Retry
         .backoff(12, Duration.ofMillis(100))
-        .filter(err -> hasException(err,
-                                    TimeoutException.class,
-                                    SocketException.class,
-                                    SocketTimeoutException.class,
-                                    io.netty.handler.timeout.TimeoutException.class,
-                                    IOException.class))
+        .filter(err -> hasException(
+            err,
+            TimeoutException.class,
+            SocketException.class,
+            SocketTimeoutException.class,
+            io.netty.handler.timeout.TimeoutException.class,
+            IOException.class
+        ))
         .doBeforeRetry(retrySignal -> {
             if (retrySignal.totalRetriesInARow() > 3) {
                 log.warn("rpc retries {} : [{}]",
@@ -123,7 +125,6 @@ public class ScalecubeRpcManager implements RpcManager {
     private Retry retry = DEFAULT_RETRY;
 
     private Supplier<ServiceTransport> transportSupplier;
-    private final Map<String,Object> localServices = new ConcurrentHashMap<>();
     private final Map<String, ClusterNode> serverServiceRef = new NonBlockingHashMap<>();
 
     private final Map<String, Sinks.Many<ServiceEvent>> listener = new NonBlockingHashMap<>();
@@ -286,6 +287,11 @@ public class ScalecubeRpcManager implements RpcManager {
             .flatMapIterable(ServiceInstances::getAllCalls);
     }
 
+    @Override
+    public boolean isShutdown() {
+        return disposable.isDisposed() || (cluster != null && cluster.isShutdown());
+    }
+
     private void start0() {
         this.serviceCall = new ServiceCall()
             .transport(this.transport.clientTransport());
@@ -305,15 +311,16 @@ public class ScalecubeRpcManager implements RpcManager {
         if (serverTransport == null || transport == null) {
             return Mono.empty();
         }
-        localRegistrations.clear();
         disposable.dispose();
+        serverServiceRef.clear();
+        localRegistrations.clear();
         return Flux
             .concatDelayError(
-                doSyncRegistration().onErrorResume(err -> Mono.empty()),
                 serverTransport.stop(),
                 transport.stop()
             )
             .doOnComplete(() -> {
+                disposable.dispose();
                 serverTransport = null;
                 transport = null;
             })
@@ -358,7 +365,7 @@ public class ScalecubeRpcManager implements RpcManager {
     private final Map<Member, Disposable> syncMembers = new ConcurrentHashMap<>();
 
     private synchronized void syncRegistration(Member member) {
-        if (syncMembers.containsKey(member)) {
+        if (syncMembers.containsKey(member) || cluster.isShutdown()) {
             return;
         }
         Disposable.Swap _dispose = Disposables.swap();
@@ -389,6 +396,9 @@ public class ScalecubeRpcManager implements RpcManager {
     }
 
     private Mono<Void> doSyncRegistration() {
+        if (cluster.isShutdown()) {
+            return Mono.empty();
+        }
         ServiceEndpoint endpoint = createEndpoint();
         log.debug("Synchronization registration : {}", endpoint);
         return cluster
@@ -922,7 +932,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @SuppressWarnings("all")
     private static long hash(String server, Object key) {
-        return HashUtils.murmur3_128(server,key);
+        return HashUtils.murmur3_128(server, key);
     }
 
 
