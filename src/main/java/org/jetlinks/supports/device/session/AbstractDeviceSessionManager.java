@@ -365,7 +365,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             session.close();
         } catch (Throwable ignore) {
         }
-        if (session.getOperator() == null) {
+        if (session.getOperator() == null || isShutdown()) {
             CLOSE_WIP.decrementAndGet(this);
             return Mono.empty();
         }
