@@ -176,7 +176,7 @@ public class ClusterSendToDeviceMessageHandler {
             if (context.message instanceof DisconnectDeviceMessage) {
                 return sessionManager
                     .remove(context.device.getDeviceId(), false)
-                    .then(this.doReply(context, this.createReply(context.message).success()));
+                    .then(Mono.defer(() -> this.doReply(context, this.createReply(context.message).success())));
             }
 
             //子设备消息
@@ -187,7 +187,7 @@ public class ClusterSendToDeviceMessageHandler {
                 if (childMsg instanceof DisconnectDeviceMessage) {
                     return sessionManager
                         .remove(((DisconnectDeviceMessage) childMsg).getDeviceId(), false)
-                        .then(this.doReply(context, this.createReply(context.message).success()));
+                        .then(Mono.defer(()->this.doReply(context, this.createReply(context.message).success())));
                 }
                 //获取子设备状态
                 if (childMsg instanceof DeviceStateCheckMessage) {

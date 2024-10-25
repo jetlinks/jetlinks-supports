@@ -86,6 +86,7 @@ public class ClusterDeviceSessionManagerTest {
     }
 
     @Test
+    @SneakyThrows
     public void testConcurrency() {
         LostDeviceSession session = new LostDeviceSession("testConcurrency", device, DefaultTransport.MQTT) {
             @Override
@@ -106,16 +107,32 @@ public class ClusterDeviceSessionManagerTest {
             }
             return Mono.empty();
         });
+        AtomicInteger emptyCount = new AtomicInteger();
+        AtomicInteger computeCount = new AtomicInteger();
+        AtomicInteger resultCount = new AtomicInteger();
 
-        Flux.range(0, 2000)
+        int total = 2000;
+        Flux.range(0, total)
             .flatMap(ignore -> Mono
                 .defer(() -> Mono.zip(
                     manager1
-                        .compute(session.getDeviceId(), old -> old
-                            .defaultIfEmpty(session)
-                            .delayElement(Duration.ofMillis(1))),
+                        .compute(session.getDeviceId(),
+                                 Mono.fromSupplier(() -> {
+                                     emptyCount.incrementAndGet();
+                                     return session;
+                                 }),
+                                 old -> Mono.just(old)
+                                            .delayElement(Duration.ofMillis(1))
+                                            .doOnSuccess(s -> computeCount.incrementAndGet())
+                        )
+                        .subscribeOn(Schedulers.parallel())
+                        .doOnNext(s -> resultCount.incrementAndGet())
+                    ,
                     manager1.getSession(session.getDeviceId())
                             .subscribeOn(Schedulers.parallel())
+                    //  ,
+//                    manager1.removeLocalSession(session.getDeviceId())
+//                             .subscribeOn(Schedulers.parallel())
                 ))
                 .subscribeOn(Schedulers.boundedElastic()))
             .then(Mono.delay(Duration.ofSeconds(1)))
@@ -124,9 +141,13 @@ public class ClusterDeviceSessionManagerTest {
             .expectNext(1)
             .verifyComplete();
 
+        Assert.assertEquals(1, emptyCount.get());
+        Assert.assertEquals(total - 1, computeCount.get());
+        Assert.assertEquals(total, resultCount.get());
+
         Flux.range(0, 100)
             .flatMap(i -> Mono.defer(() -> manager1.remove(session.getDeviceId(), true))
-                          .subscribeOn(Schedulers.boundedElastic()))
+                              .subscribeOn(Schedulers.boundedElastic()))
             .then(Mono.fromSupplier(count::get))
             .as(StepVerifier::create)
             .expectNext(2)
@@ -281,14 +302,25 @@ public class ClusterDeviceSessionManagerTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
+        manager1.getSession(session.getDeviceId())
+                .as(StepVerifier::create)
+                .expectNextCount(1)
+                .verifyComplete();
+
         manager1.compute(
                     session.getDeviceId(),
                     old -> old
                         .then(manager1.remove(session.getDeviceId(), true))
-                        .thenReturn(session))
+                        .then(Mono.empty()))
                 .as(StepVerifier::create)
-                .expectNextCount(1)
+                .expectNextCount(0)
                 .verifyComplete();
+
+        manager1
+            .getSession(session.getDeviceId())
+            .as(StepVerifier::create)
+            .expectNextCount(0)
+            .verifyComplete();
     }
 
     @Test
