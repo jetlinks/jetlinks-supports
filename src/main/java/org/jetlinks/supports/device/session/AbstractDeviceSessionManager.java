@@ -139,7 +139,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             return Mono.empty();
         }
         if (unregisterWhenNotAlive) {
-            return ref.ref().filterWhen(this::checkSessionAlive);
+            return ref.checkSessionAlive();
         }
         return ref.ref();
     }
@@ -151,30 +151,12 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             .flatMap(DeviceSessionRef::ref);
     }
 
-    private Mono<Boolean> checkSessionAlive(String id) {
+    private Mono<DeviceSession> checkSessionAlive(String id) {
         DeviceSessionRef ref = localSessions.get(id);
-        if (ref == null || ref.loaded == null) {
-            return Reactors.ALWAYS_FALSE;
+        if (ref == null) {
+            return Mono.empty();
         }
-        return checkSessionAlive(ref.loaded);
-    }
-
-    private Mono<Boolean> checkSessionAlive(DeviceSession session) {
-        if (session == null) {
-            return Reactors.ALWAYS_FALSE;
-        }
-        return session
-            .isAliveAsync()
-            .defaultIfEmpty(true)
-            .flatMap(alive -> {
-                if (!alive) {
-                    //移除本地会话
-                    return this
-                        .removeLocalSession(session)
-                        .thenReturn(false);
-                }
-                return Reactors.ALWAYS_TRUE;
-            });
+        return ref.checkSessionAlive();
     }
 
     @Override
@@ -414,16 +396,6 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return closeSession0(session);
     }
 
-    @SneakyThrows
-    private Mono<Long> removeLocalSession(DeviceSession session) {
-        DeviceSessionRef ref = localSessions.get(session.getDeviceId());
-        if (null == ref) {
-            return Reactors.ALWAYS_ZERO_LONG;
-        }
-        return ref.close(session);
-
-    }
-
     protected final Mono<Long> removeLocalSession(String deviceId) {
         return Mono.deferContextual((ctx) -> {
             DeviceSessionRef inRef = ctx
@@ -432,7 +404,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             DeviceSessionRef ref = localSessions.remove(deviceId);
             if (ref != null) {
                 //在compute时删除自己,可能是移除后重新获取? 重新放回去
-                if (inRef == ref ) {
+                if (inRef == ref) {
                     localSessions.putIfAbsent(deviceId, ref);
 
                     return Reactors.ALWAYS_ZERO_LONG;
@@ -544,8 +516,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return Flux
             .fromIterable(localSessions.values())
             .filter(ref -> ref.loaded != null)
-            .flatMap(ref -> this
-                         .checkSessionAlive(ref.loaded)
+            .flatMap(ref -> ref
+                         .checkSessionAlive()
                          .onErrorResume(err -> {
                              log.warn("check session alive error", err);
                              return Mono.empty();
@@ -647,7 +619,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             synchronized (this) {
                 DeviceSession loaded = this.loaded;
                 if (loaded != null && test.test(loaded)) {
-                    return close(loaded);
+                    return close();
                 }
                 return Reactors.ALWAYS_ZERO_LONG;
             }
@@ -687,14 +659,6 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     .then();
             }
             return Mono.empty();
-        }
-
-        private Mono<Long> close(DeviceSession session) {
-            dispose();
-            if (this.loaded == session && manager.localSessions.remove(deviceId, this)) {
-                return doClose(loaded);
-            }
-            return Reactors.ALWAYS_ZERO_LONG;
         }
 
         private Mono<Long> close() {
@@ -799,6 +763,23 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             return sink.asMono();
         }
 
+        public Mono<DeviceSession> checkSessionAlive() {
+            if (isDisposed()) {
+                return Mono.empty();
+            }
+            DeviceSession session = this.loaded;
+            if (session != null) {
+                return session
+                    .isAliveAsync()
+                    .flatMap(alive -> {
+                        if (!alive) {
+                            return close().then(Mono.empty());
+                        }
+                        return Mono.just(session);
+                    });
+            }
+            return ref().flatMap(ignore -> checkSessionAlive());
+        }
 
         public Mono<DeviceSession> ref() {
             return Mono.deferContextual(ctx -> {
@@ -821,7 +802,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             @SuppressWarnings("all")
             Sinks.One<DeviceSession> await = AWAIT.getAndSet(this, null);
             if (await != null) {
-                await.emitError(new IllegalStateException("session closed"), Reactors.emitFailureHandler());
+                await.emitEmpty(Reactors.emitFailureHandler());
             }
             disposable.dispose();
         }
