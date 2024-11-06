@@ -401,12 +401,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             DeviceSessionRef inRef = ctx
                 .<DeviceSessionRef>getOrEmpty(DeviceSessionRef.class)
                 .orElse(null);
-            DeviceSessionRef ref = localSessions.remove(deviceId);
+            DeviceSessionRef ref = localSessions.get(deviceId);
             if (ref != null) {
-                //在compute时删除自己,可能是移除后重新获取? 重新放回去
+                //在compute时删除自己?
                 if (inRef == ref) {
-                    localSessions.putIfAbsent(deviceId, ref);
-
                     return Reactors.ALWAYS_ZERO_LONG;
                 }
                 return ref.close();
@@ -662,12 +660,21 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         }
 
         private Mono<Long> close() {
-            dispose();
-            DeviceSession loaded = LOADED.getAndSet(this, null);
-            if (loaded != null) {
-                return doClose(loaded);
+            try {
+                if (isDisposed()) {
+                    return Reactors.ALWAYS_ZERO_LONG;
+                }
+                boolean removed = manager.localSessions.remove(deviceId, this);
+                if (removed) {
+                    DeviceSession loaded = LOADED.getAndSet(this, null);
+                    if (loaded != null) {
+                        return doClose(loaded);
+                    }
+                }
+                return Reactors.ALWAYS_ZERO_LONG;
+            } finally {
+                dispose();
             }
-            return Reactors.ALWAYS_ZERO_LONG;
         }
 
         private Mono<Long> doClose(DeviceSession session) {

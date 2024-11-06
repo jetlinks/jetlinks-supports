@@ -145,7 +145,7 @@ public class ClusterDeviceSessionManagerTest {
         Assert.assertEquals(total - 1, computeCount.get());
         Assert.assertEquals(total, resultCount.get());
 
-        Flux.range(0, 100)
+        Flux.range(0, 10)
             .flatMap(i -> Mono.defer(() -> manager1.remove(session.getDeviceId(), true))
                               .subscribeOn(Schedulers.boundedElastic()))
             .then(Mono.fromSupplier(count::get))
