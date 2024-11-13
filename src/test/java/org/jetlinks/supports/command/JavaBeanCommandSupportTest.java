@@ -1,7 +1,10 @@
 package org.jetlinks.supports.command;
 
 import com.google.common.collect.Sets;
+import org.jetlinks.core.command.AbstractConvertCommand;
+import org.jetlinks.core.command.Command;
 import org.junit.Test;
+import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
 import java.util.Collections;
@@ -54,21 +57,41 @@ public class JavaBeanCommandSupportTest {
 
     @Test
     public void testCallMultiArg() {
+
         MyBean bean = new MyBean();
 
         JavaBeanCommandSupport support = new JavaBeanCommandSupport(
             bean,
-            Sets.newHashSet("callMultiArg"));
+            Sets.newHashSet("callSingleArg"));
 
-        support.getCommandMetadata("callMultiArg")
+        support.getCommandMetadata("callSingleArg")
+               .as(StepVerifier::create)
+               .expectNextCount(1)
+               .verifyComplete();
+
+        support.executeToMono("callSingleArg", Collections.singletonMap("val", "123"))
+               .as(StepVerifier::create)
+               .expectNext(123)
+               .verifyComplete();
+    }
+
+    @Test
+    public void testCallCommand() {
+        MyBean bean = new MyBean();
+
+        JavaBeanCommandSupport support = new JavaBeanCommandSupport(
+            bean,
+            Sets.newHashSet("callCommand"));
+
+        support.getCommandMetadata("callCommand")
                .doOnNext(System.out::println)
                .as(StepVerifier::create)
                .expectNextCount(1)
                .verifyComplete();
 
-        support.executeToMono("callMultiArg", Collections.singletonMap("val", "123"))
+        support.executeToMono("callCommand", Collections.singletonMap("val", "123"))
                .as(StepVerifier::create)
-               .expectNext("123null")
+               .expectNext(1)
                .verifyComplete();
 
     }
@@ -85,8 +108,18 @@ public class JavaBeanCommandSupportTest {
             return val;
         }
 
+        public int callCommand(TestCommand<String> cmd) {
+            System.out.println("callCommand(" + cmd + ")");
+            System.out.println(cmd.readable());
+            return 1;
+        }
+
         public void callVoid() {
             System.out.println("callVoid");
         }
+    }
+
+    public static class TestCommand<T> extends AbstractConvertCommand<Flux<T>,TestCommand<T>> {
+
     }
 }
