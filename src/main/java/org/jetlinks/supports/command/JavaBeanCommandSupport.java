@@ -4,16 +4,16 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 import org.hswebframework.web.aop.MethodInterceptorHolder;
 import org.hswebframework.web.bean.FastBeanCopier;
+import org.hswebframework.web.i18n.LocaleUtils;
+import org.jetlinks.core.annotation.Attr;
 import org.jetlinks.core.command.*;
-import org.jetlinks.core.metadata.DataType;
-import org.jetlinks.core.metadata.FunctionMetadata;
-import org.jetlinks.core.metadata.PropertyMetadata;
-import org.jetlinks.core.metadata.SimpleFunctionMetadata;
+import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.ObjectType;
 import org.jetlinks.supports.official.DeviceMetadataParser;
 import org.jetlinks.supports.official.JetLinksPropertyMetadata;
 import org.springframework.beans.MethodInvocationException;
 import org.springframework.core.ResolvableType;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
@@ -57,6 +57,10 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         init(defaultFilter.and(filter));
     }
 
+    public JavaBeanCommandSupport(Object target) {
+        this(target, method -> AnnotatedElementUtils
+            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
+    }
 
     private void init(Predicate<Method> filter) {
         ReflectionUtils
@@ -131,9 +135,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             invoker = ignore -> doInvoke(target, method);
         } else {
             if (argTypes.length == 1) {
+                //参数就是命令
                 if (Command.class.isAssignableFrom(argTypes[0].toClass())) {
                     invoker = new CommandInvoker(target, method, argTypes[0]);
+                    inputs  = CommandMetadataResolver.resolveInputs(argTypes[0]);
                 } else {
+                    //转换为实体类
                     RequestBody requestBody = AnnotationUtils.findAnnotation(method.getParameters()[0], RequestBody.class);
                     if (requestBody != null) {
                         DataType metadataType = DeviceMetadataParser.withType(argTypes[0]);
@@ -152,19 +159,20 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 }
             }
             if (invoker == null) {
+                //多参数？
                 for (int i = 0; i < argTypes.length; i++) {
                     ResolvableType type = argTypes[i];
                     Parameter parameter = parameters[i];
                     Schema schemaAnn = parameter.getAnnotation(Schema.class);
                     DataType dataType = DeviceMetadataParser.withType(type);
-                    JetLinksPropertyMetadata metadata = new JetLinksPropertyMetadata();
+                    SimplePropertyMetadata metadata = new SimplePropertyMetadata();
                     metadata.setId(argNames[i]);
 
                     metadata.setDescription(schemaAnn == null ? null : schemaAnn.description());
                     metadata.setName(schemaAnn != null && StringUtils.hasText(schemaAnn.title())
                                          ? schemaAnn.title()
                                          : metadata.getId());
-                    metadata.setDataType(dataType);
+                    metadata.setValueType(dataType);
                     inputs.add(metadata);
                 }
                 invoker = parameter -> {
@@ -192,17 +200,52 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             invoker,
-            applyMetadata(method, metadata),
+            applyMetadata(method,argTypes, metadata),
             method);
 
         registerHandler(metadata.getId(), handler);
 
     }
 
-    protected FunctionMetadata applyMetadata(Method method, SimpleFunctionMetadata metadata) {
+    protected FunctionMetadata applyMetadata(Method method,
+                                             ResolvableType[] argTypes,
+                                             SimpleFunctionMetadata metadata) {
+        org.jetlinks.core.annotation.command.CommandHandler annotation = AnnotatedElementUtils
+            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
+        if (annotation == null) {
+            return metadata;
+        }
+
+        //自定义命令
+        if (annotation.value() != Command.class) {
+            metadata.setId(CommandUtils.getCommandIdByType(annotation.value()));
+            metadata.setInputs(CommandMetadataResolver.resolveInputs(ResolvableType.forType(annotation.value())));
+        }
+        //自定义了命令ID
+        if (StringUtils.hasText(annotation.id())) {
+            metadata.setId(annotation.id());
+        }
+        //命令名称
+        if (StringUtils.hasText(annotation.name())) {
+            metadata.setName(LocaleUtils.resolveMessage(annotation.name(), annotation.name()));
+        }
+        //命令描述
+        if (StringUtils.hasText(annotation.description())) {
+            metadata.setDescription(annotation.description());
+        }
+        for (Attr expand : annotation.expands()) {
+            metadata.expand(expand.key(), expand.value());
+        }
+
+        //自定义输入参数描述
+        if (!Void.class.equals(annotation.inputSpec())) {
+            metadata.setInputs(CommandMetadataResolver.resolveInputs(ResolvableType.forType(annotation.inputSpec())));
+        }
+        if (!Void.class.equals(annotation.outputSpec())) {
+            metadata.setOutput(CommandMetadataResolver.resolveOutput(ResolvableType.forType(annotation.outputSpec())));
+        }
         return metadata;
     }
-
 
     interface MethodInvoker extends Function<Command<Object>, Object> {
 

@@ -1,6 +1,7 @@
 package org.jetlinks.supports.command;
 
 import com.google.common.collect.Sets;
+import org.jetlinks.core.annotation.command.CommandHandler;
 import org.jetlinks.core.command.AbstractConvertCommand;
 import org.jetlinks.core.command.Command;
 import org.junit.Test;
@@ -83,13 +84,13 @@ public class JavaBeanCommandSupportTest {
             bean,
             Sets.newHashSet("callCommand"));
 
-        support.getCommandMetadata("callCommand")
+        support.getCommandMetadata("Test")
                .doOnNext(System.out::println)
                .as(StepVerifier::create)
                .expectNextCount(1)
                .verifyComplete();
 
-        support.executeToMono("callCommand", Collections.singletonMap("val", "123"))
+        support.executeToMono("Test", Collections.singletonMap("val", "123"))
                .as(StepVerifier::create)
                .expectNext(1)
                .verifyComplete();
@@ -108,6 +109,7 @@ public class JavaBeanCommandSupportTest {
             return val;
         }
 
+        @CommandHandler(TestCommand.class)
         public int callCommand(TestCommand<String> cmd) {
             System.out.println("callCommand(" + cmd + ")");
             System.out.println(cmd.readable());
