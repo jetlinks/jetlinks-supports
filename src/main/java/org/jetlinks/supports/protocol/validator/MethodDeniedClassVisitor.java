@@ -44,6 +44,7 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
         GLOBAL.addDenied(Runtime.class, "exit");
         GLOBAL.addDenied(Runtime.class, "exec");
         GLOBAL.addDenied(Runtime.class, "halt");
+        GLOBAL.addDenied(ProcessBuilder.class, "start");
 
         //这些包下不检查
         GLOBAL.addIgnore("com.google");
