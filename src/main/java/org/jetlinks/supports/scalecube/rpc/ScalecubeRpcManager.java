@@ -1,5 +1,6 @@
 package org.jetlinks.supports.scalecube.rpc;
 
+import com.fasterxml.jackson.core.JacksonException;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import io.netty.buffer.ByteBuf;
@@ -13,6 +14,7 @@ import io.scalecube.net.Address;
 import io.scalecube.services.*;
 import io.scalecube.services.api.Qualifier;
 import io.scalecube.services.api.ServiceMessage;
+import io.scalecube.services.exceptions.MessageCodecException;
 import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodRegistry;
 import io.scalecube.services.transport.api.DataCodec;
@@ -34,6 +36,8 @@ import org.jetlinks.core.utils.HashUtils;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.reactivestreams.Publisher;
+import org.springframework.core.codec.CodecException;
+import org.springframework.core.codec.DecodingException;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -98,15 +102,20 @@ public class ScalecubeRpcManager implements RpcManager {
     private Scheduler requestScheduler = Schedulers.parallel();
 
     private static final RetryBackoffSpec DEFAULT_RETRY = Retry
-        .backoff(12, Duration.ofMillis(100))
-        .filter(err -> hasException(
-            err,
-            TimeoutException.class,
-            SocketException.class,
-            SocketTimeoutException.class,
-            io.netty.handler.timeout.TimeoutException.class,
-            IOException.class
-        ))
+        .backoff(12, Duration.ofMillis(50))
+        .filter(err ->
+                    !hasException(err,
+                                  JacksonException.class,
+                                  MessageCodecException.class,
+                                  CodecException.class)
+                        && hasException(
+                        err,
+                        TimeoutException.class,
+                        SocketException.class,
+                        SocketTimeoutException.class,
+                        io.netty.handler.timeout.TimeoutException.class,
+                        IOException.class
+                    ))
         .doBeforeRetry(retrySignal -> {
             if (retrySignal.totalRetriesInARow() > 3) {
                 log.warn("rpc retries {} : [{}]",
