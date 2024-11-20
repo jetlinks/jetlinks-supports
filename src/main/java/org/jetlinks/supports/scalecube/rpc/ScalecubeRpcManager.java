@@ -151,7 +151,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private String contentType = ServiceMessage.DEFAULT_DATA_FORMAT;
 
-    private Disposable syncJob = Disposables.disposed();
+    private final Disposable.Swap syncJob = Disposables.swap();
 
     private final Disposable.Composite disposable = Disposables.composite();
 
@@ -320,11 +320,13 @@ public class ScalecubeRpcManager implements RpcManager {
         if (serverTransport == null || transport == null) {
             return Mono.empty();
         }
+        syncJob.dispose();
         disposable.dispose();
         serverServiceRef.clear();
         localRegistrations.clear();
         return Flux
             .concatDelayError(
+                doSyncRegistration(),
                 serverTransport.stop(),
                 transport.stop()
             )
@@ -424,13 +426,12 @@ public class ScalecubeRpcManager implements RpcManager {
         if (cluster == null) {
             return;
         }
-        if (!syncJob.isDisposed()) {
-            syncJob.dispose();
-        }
-        syncJob = Mono
-            .delay(Duration.ofMillis(200))
-            .flatMap(ignore -> doSyncRegistration())
-            .subscribe();
+        syncJob.update(
+            Mono
+                .delay(Duration.ofMillis(200))
+                .flatMap(ignore -> doSyncRegistration())
+                .subscribe()
+        );
     }
 
     @Override
@@ -558,9 +559,9 @@ public class ScalecubeRpcManager implements RpcManager {
             if (node == null) {
                 return null;
             }
-            return node
-                .getApiCall(serviceId, service)
-                .service();
+            RpcServiceCall<I> call = node.getApiCall(serviceId, service);
+
+            return node.isSupported(call) ? call.service() : null;
         });
     }
 
@@ -577,7 +578,7 @@ public class ScalecubeRpcManager implements RpcManager {
         String id = member.alias() == null ? member.id() : member.alias();
         ClusterNode ref = serverServiceRef.remove(id);
         if (null != ref) {
-            fireEvent(ref.services, id, ServiceEvent.Type.removed);
+            fireEvent(ref.services.values(), id, ServiceEvent.Type.removed);
             ref.dispose();
         }
         log.debug("remove service endpoint [{}] ", member);
@@ -651,22 +652,24 @@ public class ScalecubeRpcManager implements RpcManager {
         //private final Sinks.One<Void> close = Sinks.one();
         private final Map<String, Set<ServiceReferenceInfo>> serviceReferencesByQualifier = new NonBlockingHashMap<>();
 
-        private final List<ServiceRegistration> services = new CopyOnWriteArrayList<>();
+        private final Map<String, ServiceRegistration> services = new NonBlockingHashMap<>();
         private final Map<Class<?>, ServiceInstances> serviceInstances = new NonBlockingHashMap<>();
 
+        public boolean isSupported(RpcServiceCall<?> call) {
+            return services.containsKey(call.namespace);
+        }
 
         public synchronized void register(ServiceEndpoint endpoint) {
             List<String> readyToRemove = new ArrayList<>(serviceReferencesByQualifier.keySet());
 
-            Set<ServiceRegistration> added = new TreeSet<>(Comparator.comparing(ServiceRegistration::namespace));
-            Set<ServiceRegistration> removed = new TreeSet<>(Comparator.comparing(ServiceRegistration::namespace));
-            removed.addAll(services);
+            Map<String, ServiceRegistration> added = new HashMap<>();
+            Map<String, ServiceRegistration> removed = new HashMap<>(services);
 
             log.debug("update service endpoint from [{}] : {} ", member, endpoint);
 
             for (ServiceRegistration registration : endpoint.serviceRegistrations()) {
-                if (!removed.remove(registration)) {
-                    added.add(registration);
+                if (removed.remove(registration.namespace()) == null) {
+                    added.put(registration.namespace(), registration);
                 }
 
                 for (ServiceMethodDefinition method : registration.methods()) {
@@ -684,11 +687,11 @@ public class ScalecubeRpcManager implements RpcManager {
                 serviceReferencesByQualifier.remove(qualifier);
             }
 
-            removed.forEach(services::remove);
-            services.addAll(added);
+            removed.forEach((k, v) -> services.remove(k));
+            services.putAll(added);
 
-            fireEvent(added, id, ServiceEvent.Type.added);
-            fireEvent(removed, id, ServiceEvent.Type.removed);
+            fireEvent(added.values(), id, ServiceEvent.Type.added);
+            fireEvent(removed.values(), id, ServiceEvent.Type.removed);
 
         }
 
@@ -719,7 +722,11 @@ public class ScalecubeRpcManager implements RpcManager {
                 .serviceRegistry(NoneServiceRegistry.INSTANCE)
                 .errorMapper(DetailErrorMapper.INSTANCE);
 
-            return new RpcServiceCall<>(this.id, serviceId, name, api(call, serviceId, clazz));
+            return new RpcServiceCall<>(this.id,
+                                        serviceId,
+                                        name,
+                                        api(call, serviceId, clazz),
+                                        serviceId + "/" + name);
         }
 
         private <I> List<RpcServiceCall<I>> getApiCalls(Class<I> clazz) {
@@ -736,7 +743,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
         private <I> List<RpcServiceCall<I>> getApiCalls(String id, Class<I> clazz, List<RpcServiceCall<I>> registrations) {
             String sName = getServiceName(clazz);
-            for (ServiceRegistration service : services) {
+            for (ServiceRegistration service : services.values()) {
                 String name = service.tags().getOrDefault(SERVICE_NAME_TAG, service.namespace());
                 String sid = service.tags().getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
                 if (!Objects.equals(name, sName)) {
@@ -981,6 +988,7 @@ public class ScalecubeRpcManager implements RpcManager {
         private final String id;
         private final String name;
         private final T service;
+        private final String namespace;
 
         @Override
         public String serverNodeId() {
@@ -1004,6 +1012,11 @@ public class ScalecubeRpcManager implements RpcManager {
 
         public <R> R cast(Class<R> type) {
             return type.cast(service);
+        }
+
+        @Override
+        public String toString() {
+            return name + "@" + serverNodeId;
         }
     }
 

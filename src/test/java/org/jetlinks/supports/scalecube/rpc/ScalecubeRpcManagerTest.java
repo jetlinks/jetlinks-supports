@@ -35,6 +35,7 @@ public class ScalecubeRpcManagerTest {
         ExtendedCluster cluster = new ExtendedClusterImpl(
             ClusterConfig
                 .defaultConfig()
+                .memberAlias("node1")
                 .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
         ).startAwait();
         node1 = cluster.member();
@@ -50,6 +51,7 @@ public class ScalecubeRpcManagerTest {
                 ClusterConfig
                     .defaultConfig()
                     .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+                    .memberAlias("node2")
                     .membership(conf -> conf.seedMembers(cluster.address()))
             ).startAwait();
             manager2 = new ScalecubeRpcManager(cluster2, RSocketServiceTransport::new);
@@ -63,6 +65,7 @@ public class ScalecubeRpcManagerTest {
                     .defaultConfig()
                     .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
                     .membership(conf -> conf.seedMembers(cluster.address()))
+                    .memberAlias("node3")
             ).startAwait();
             node3 = cluster3.member();
             manager3 = new ScalecubeRpcManager(cluster3, RSocketServiceTransport::new);
@@ -75,6 +78,29 @@ public class ScalecubeRpcManagerTest {
         manager3.stopAwait();
         manager2.stopAwait();
         manager1.stopAwait();
+    }
+
+    @Test
+    @SneakyThrows
+    public void testNoService() {
+        manager1.registerService(new ServiceImpl("1"));
+
+        manager3
+            .getService(manager2.currentServerId(),
+                        Service.class)
+            .as(StepVerifier::create)
+            .expectComplete()
+            .verify();
+
+        manager2.registerService(new ServiceImpl("2"));
+
+        Thread.sleep(1000);
+        manager3
+            .getService(manager2.currentServerId(),
+                        Service.class)
+            .as(StepVerifier::create)
+            .expectNextCount(1)
+            .verifyComplete();
     }
 
     @Test
@@ -92,13 +118,15 @@ public class ScalecubeRpcManagerTest {
                 .expectNextCount(2)
                 .verifyComplete();
 
-        manager3.getService(node1.id(), Service.class)
+        manager3.getService(node1.alias(), Service.class)
                 .flatMap(service -> service.upper("test"))
                 .as(StepVerifier::create)
                 .expectNext("1TEST")
                 .verifyComplete();
 
         manager2.stopAwait();
+        Thread.sleep(1000);
+
         manager3.getServices(Service.class)
                 .as(StepVerifier::create)
                 .expectNextCount(1)
@@ -116,7 +144,7 @@ public class ScalecubeRpcManagerTest {
 
         manager3
             .getServices("e1", Service.class)
-            .flatMap(service->service.service().error())
+            .flatMap(service -> service.service().error())
             .as(StepVerifier::create)
             .expectErrorMatches(err -> {
                 err.printStackTrace();
@@ -147,13 +175,13 @@ public class ScalecubeRpcManagerTest {
                 .expectNextCount(4)
                 .verifyComplete();
 
-        manager3.getService(node1.id(), "s1", Service.class)
+        manager3.getService(node1.alias(), "s1", Service.class)
                 .flatMap(service -> service.upper("test"))
                 .as(StepVerifier::create)
                 .expectNext("1TEST")
                 .verifyComplete();
 
-        manager3.getService(node1.id(), "s2", Service.class)
+        manager3.getService(node1.alias(), "s2", Service.class)
                 .flatMap(service -> service.upper("test"))
                 .as(StepVerifier::create)
                 .expectNext("2TEST")
@@ -218,14 +246,14 @@ public class ScalecubeRpcManagerTest {
 
         Thread.sleep(2000);
 
-        manager3.getService(node1.id(), "n1", Service.class)
+        manager3.getService(node1.alias(), "n1", Service.class)
                 .flatMapMany(service -> service.read("test"))
                 .map(buf -> buf.toString(StandardCharsets.UTF_8))
                 .as(StepVerifier::create)
                 .expectNext("hel", "lo")
                 .verifyComplete();
 
-        manager3.getService(node1.id(), "n1", Service.class)
+        manager3.getService(node1.alias(), "n1", Service.class)
                 .flatMapMany(service -> service.read0(Unpooled.wrappedBuffer("test".getBytes())))
                 .map(buf -> buf.toString(StandardCharsets.UTF_8))
                 .as(StepVerifier::create)
