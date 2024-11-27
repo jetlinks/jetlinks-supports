@@ -1,15 +1,20 @@
 package org.jetlinks.supports.scalecube.rpc;
 
 import io.netty.util.concurrent.FastThreadLocal;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Context;
 import io.scalecube.services.api.ErrorData;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.exceptions.*;
+import lombok.Setter;
+import org.jetlinks.core.trace.TraceHolder;
 import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Optional;
 
@@ -29,6 +34,13 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
     public static final DetailErrorMapper INSTANCE = new DetailErrorMapper();
     public static final String ERROR_DETAIL = "errorDetail";
 
+
+    StackTraceElement[] topTrace = new StackTraceElement[0];
+
+    void setTopTrace(StackTraceElement... trace) {
+        topTrace = trace;
+    }
+
     @Override
     public Throwable toError(ServiceMessage message) {
         ErrorData data = message.data();
@@ -36,7 +48,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
         int errorType = message.errorType();
         int errorCode = data.getErrorCode();
         String errorMessage = data.getErrorMessage();
-        StackTraceElement[] stackTrace = decodeDetail(message.header(ERROR_DETAIL));
+        StackTraceElement[] stackTrace = decodeDetail(message.header(ERROR_DETAIL),topTrace);
 
         Throwable error;
         switch (errorType) {
@@ -66,14 +78,14 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
 
     }
 
-    public static StackTraceElement[] decodeDetail(String e) {
+    public static StackTraceElement[] decodeDetail(String e, StackTraceElement... top) {
         if (!StringUtils.hasText(e)) {
             return null;
         }
         try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(Base64.getDecoder().decode(e)))) {
             int length = input.readInt();
-            StackTraceElement[] stack = new StackTraceElement[length];
-            for (int i = 0; i < length; i++) {
+            StackTraceElement[] stack = Arrays.copyOf(top, top.length + length);
+            for (int i = top.length; i < length + top.length; i++) {
                 String className = input.readUTF();
                 String methodName = input.readUTF();
                 String fileName = input.readUTF();
@@ -87,14 +99,21 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
     }
 
 
-    public static String createDetail(Throwable e) {
+    public static String createDetail(StackTraceElement[] top, Throwable e) {
         StackTraceElement[] stack = e.getStackTrace();
         if (stack.length == 0) {
             return "";
         }
         ByteArrayOutputStream out = SHARED_OUT.get();
         try (DataOutputStream dataOut = new DataOutputStream(out)) {
-            dataOut.writeInt(stack.length);
+            dataOut.writeInt(stack.length + top.length);
+
+            for (StackTraceElement element : top) {
+                dataOut.writeUTF(element.getClassName());
+                dataOut.writeUTF(element.getMethodName());
+                dataOut.writeUTF(element.getFileName() == null ? "" : element.getFileName());
+                dataOut.writeInt(element.getLineNumber());
+            }
             for (StackTraceElement element : stack) {
                 dataOut.writeUTF(element.getClassName());
                 dataOut.writeUTF(element.getMethodName());
@@ -135,7 +154,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
             .builder()
             .qualifier(qualifier)
             .header(HEADER_ERROR_TYPE, String.valueOf(errorType))
-            .header(ERROR_DETAIL, createDetail(throwable))
+            .header(ERROR_DETAIL, createDetail(topTrace, throwable))
             .data(new ErrorData(errorCode, errorMessage))
             .build();
     }

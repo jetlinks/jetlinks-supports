@@ -37,7 +37,6 @@ import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.reactivestreams.Publisher;
 import org.springframework.core.codec.CodecException;
-import org.springframework.core.codec.DecodingException;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -100,6 +99,8 @@ public class ScalecubeRpcManager implements RpcManager {
     private ServiceCall serviceCall;
 
     private Scheduler requestScheduler = Schedulers.parallel();
+
+    private final DetailErrorMapper errorMapper = new DetailErrorMapper();
 
     private static final RetryBackoffSpec DEFAULT_RETRY = Retry
         .backoff(12, Duration.ofMillis(50))
@@ -301,7 +302,18 @@ public class ScalecubeRpcManager implements RpcManager {
         return disposable.isDisposed() || (cluster != null && cluster.isShutdown());
     }
 
+
     private void start0() {
+
+        StackTraceElement trace = new StackTraceElement(
+            "RpcCallFailed",
+            currentServerId(),
+            null,
+            1
+        );
+
+        errorMapper.setTopTrace(trace);
+
         this.serviceCall = new ServiceCall()
             .transport(this.transport.clientTransport());
         syncRegistration();
@@ -439,7 +451,7 @@ public class ScalecubeRpcManager implements RpcManager {
         Disposable.Composite _dispose = Disposables.composite();
         ServiceInfo serviceInfo = ServiceInfo
             .fromServiceInstance(rpcService)
-            .errorMapper(DetailErrorMapper.INSTANCE)
+            .errorMapper(errorMapper)
             .dataDecoder((msg, type) -> {
                 if (type.isAssignableFrom(ByteBuf.class) && msg.hasData(ByteBuf.class)) {
                     return ServiceMessage
@@ -720,7 +732,7 @@ public class ScalecubeRpcManager implements RpcManager {
                     return Optional.empty();
                 })
                 .serviceRegistry(NoneServiceRegistry.INSTANCE)
-                .errorMapper(DetailErrorMapper.INSTANCE);
+                .errorMapper(errorMapper);
 
             return new RpcServiceCall<>(this.id,
                                         serviceId,

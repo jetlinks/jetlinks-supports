@@ -11,6 +11,7 @@ import io.scalecube.transport.netty.tcp.TcpTransportFactory;
 import lombok.AllArgsConstructor;
 import lombok.SneakyThrows;
 import org.hswebframework.web.exception.BusinessException;
+import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.jetlinks.supports.scalecube.ExtendedClusterImpl;
 import org.junit.After;
@@ -284,7 +285,9 @@ public class ScalecubeRpcManagerTest {
 
         @Override
         public Mono<String> error() {
-            return Mono.error(new BusinessException("error"));
+            return Mono
+                .<String>defer(() -> Mono.error(new BusinessException("error")))
+                .as(MonoTracer.create("/test"));
         }
 
         @Override
