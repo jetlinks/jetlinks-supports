@@ -10,7 +10,6 @@ import org.jetlinks.core.command.*;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.ObjectType;
 import org.jetlinks.supports.official.DeviceMetadataParser;
-import org.jetlinks.supports.official.JetLinksPropertyMetadata;
 import org.springframework.beans.MethodInvocationException;
 import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotatedElementUtils;
@@ -30,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -101,6 +99,10 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     }
 
     private void register(Method method) {
+        if (ignoreRegister(method)) {
+            return;
+        }
+
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
 
         String name = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
@@ -205,6 +207,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         registerHandler(metadata.getId(), handler);
 
+    }
+
+    private static boolean ignoreRegister(Method method) {
+        org.jetlinks.core.annotation.command.CommandHandler annotation = AnnotatedElementUtils
+            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
+        return annotation != null && annotation.ignore();
     }
 
     protected FunctionMetadata applyMetadata(Method method,
