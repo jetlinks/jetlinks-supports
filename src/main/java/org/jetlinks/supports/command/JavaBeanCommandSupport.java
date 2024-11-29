@@ -40,9 +40,16 @@ import java.util.stream.Collectors;
 public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     private static final Predicate<Method> defaultFilter
-        = method -> !Modifier.isStatic(method.getModifiers())
-        && Modifier.isPublic(method.getModifiers())
-        && method.getDeclaringClass() != Object.class;
+        = method -> {
+        org.jetlinks.core.annotation.command.CommandHandler annotation = AnnotatedElementUtils
+            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
+
+        return !Modifier.isStatic(method.getModifiers())
+            && Modifier.isPublic(method.getModifiers())
+            && method.getDeclaringClass() != Object.class
+            //如果注解了则不能忽略
+            && (annotation == null || !annotation.ignore());
+    };
 
     private final Object target;
 
@@ -99,10 +106,6 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     }
 
     private void register(Method method) {
-        if (ignoreRegister(method)) {
-            return;
-        }
-
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
 
         String name = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
@@ -140,7 +143,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 //参数就是命令
                 if (Command.class.isAssignableFrom(argTypes[0].toClass())) {
                     invoker = new CommandInvoker(target, method, argTypes[0]);
-                    inputs  = CommandMetadataResolver.resolveInputs(argTypes[0]);
+                    inputs = CommandMetadataResolver.resolveInputs(argTypes[0]);
                 } else {
                     //转换为实体类
                     RequestBody requestBody = AnnotationUtils.findAnnotation(method.getParameters()[0], RequestBody.class);
@@ -202,17 +205,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             invoker,
-            applyMetadata(method,argTypes, metadata),
+            applyMetadata(method, argTypes, metadata),
             method);
 
         registerHandler(metadata.getId(), handler);
 
-    }
-
-    private static boolean ignoreRegister(Method method) {
-        org.jetlinks.core.annotation.command.CommandHandler annotation = AnnotatedElementUtils
-            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
-        return annotation != null && annotation.ignore();
     }
 
     protected FunctionMetadata applyMetadata(Method method,
