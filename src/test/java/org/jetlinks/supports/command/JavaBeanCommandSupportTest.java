@@ -3,14 +3,11 @@ package org.jetlinks.supports.command;
 import com.google.common.collect.Sets;
 import org.jetlinks.core.annotation.command.CommandHandler;
 import org.jetlinks.core.command.AbstractConvertCommand;
-import org.jetlinks.core.command.Command;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
 import java.util.Collections;
-
-import static org.junit.Assert.*;
 
 public class JavaBeanCommandSupportTest {
 
@@ -97,6 +94,21 @@ public class JavaBeanCommandSupportTest {
 
     }
 
+    @Test
+    public void testIgnore() {
+        MyBean bean = new MyBean();
+
+        JavaBeanCommandSupport support = new JavaBeanCommandSupport(
+            bean,
+            Sets.newHashSet("ignore"));
+
+        support.getCommandMetadata("ignore")
+               .as(StepVerifier::create)
+               .expectNextCount(0)
+               .verifyComplete();
+
+    }
+
     public static class MyBean {
 
         public String callMultiArg(int val, String val2) {
@@ -116,12 +128,17 @@ public class JavaBeanCommandSupportTest {
             return 1;
         }
 
+        @CommandHandler(ignore = true)
+        public int ignore(int val) {
+            return val;
+        }
+
         public void callVoid() {
             System.out.println("callVoid");
         }
     }
 
-    public static class TestCommand<T> extends AbstractConvertCommand<Flux<T>,TestCommand<T>> {
+    public static class TestCommand<T> extends AbstractConvertCommand<Flux<T>, TestCommand<T>> {
 
     }
 }

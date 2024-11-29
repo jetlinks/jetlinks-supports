@@ -10,7 +10,6 @@ import org.jetlinks.core.command.*;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.ObjectType;
 import org.jetlinks.supports.official.DeviceMetadataParser;
-import org.jetlinks.supports.official.JetLinksPropertyMetadata;
 import org.springframework.beans.MethodInvocationException;
 import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotatedElementUtils;
@@ -30,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -42,9 +40,16 @@ import java.util.stream.Collectors;
 public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     private static final Predicate<Method> defaultFilter
-        = method -> !Modifier.isStatic(method.getModifiers())
-        && Modifier.isPublic(method.getModifiers())
-        && method.getDeclaringClass() != Object.class;
+        = method -> {
+        org.jetlinks.core.annotation.command.CommandHandler annotation = AnnotatedElementUtils
+            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
+
+        return !Modifier.isStatic(method.getModifiers())
+            && Modifier.isPublic(method.getModifiers())
+            && method.getDeclaringClass() != Object.class
+            //如果注解了则不能忽略
+            && (annotation == null || !annotation.ignore());
+    };
 
     private final Object target;
 
@@ -138,7 +143,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 //参数就是命令
                 if (Command.class.isAssignableFrom(argTypes[0].toClass())) {
                     invoker = new CommandInvoker(target, method, argTypes[0]);
-                    inputs  = CommandMetadataResolver.resolveInputs(argTypes[0]);
+                    inputs = CommandMetadataResolver.resolveInputs(argTypes[0]);
                 } else {
                     //转换为实体类
                     RequestBody requestBody = AnnotationUtils.findAnnotation(method.getParameters()[0], RequestBody.class);
@@ -200,7 +205,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             invoker,
-            applyMetadata(method,argTypes, metadata),
+            applyMetadata(method, argTypes, metadata),
             method);
 
         registerHandler(metadata.getId(), handler);
