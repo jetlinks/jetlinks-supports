@@ -22,6 +22,7 @@ import reactor.util.context.Context;
 import javax.annotation.Nonnull;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
@@ -359,7 +360,13 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     @Override
     public boolean isShutdown() {
-        return real.isShutdown();
+        CompletableFuture<Void> future = onShutdown().toFuture();
+        try {
+            return future.isDone();
+        } finally {
+            //cancel future
+            future.cancel(true);
+        }
     }
 
     @Override
