@@ -350,6 +350,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     @Override
     public void shutdown() {
+        disposable.dispose();
         real.shutdown();
     }
 
@@ -360,13 +361,14 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
     @Override
     public boolean isShutdown() {
-        CompletableFuture<Void> future = onShutdown().toFuture();
-        try {
-            return future.isDone();
-        } finally {
-            //cancel future
-            future.cancel(true);
-        }
+        return disposable.isDisposed();
+//        CompletableFuture<Void> future = onShutdown().toFuture();
+//        try {
+//            return future.isDone();
+//        } finally {
+//            //cancel future
+//            future.cancel(true);
+//        }
     }
 
     @Override
