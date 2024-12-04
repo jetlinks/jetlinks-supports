@@ -1,9 +1,14 @@
 package org.jetlinks.supports.command;
 
 import com.google.common.collect.Sets;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.ToString;
 import org.jetlinks.core.annotation.command.CommandHandler;
 import org.jetlinks.core.command.AbstractConvertCommand;
 import org.junit.Test;
+import org.springframework.web.bind.annotation.RequestBody;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
@@ -71,6 +76,11 @@ public class JavaBeanCommandSupportTest {
                .as(StepVerifier::create)
                .expectNext(123)
                .verifyComplete();
+
+        support.executeToMono("callSingleArg", Collections.singletonMap("val", null))
+               .as(StepVerifier::create)
+               .expectNext(0)
+               .verifyComplete();
     }
 
     @Test
@@ -109,7 +119,29 @@ public class JavaBeanCommandSupportTest {
 
     }
 
-    public static class MyBean {
+
+    @Test
+    public void testBody() {
+        MyBean bean = new MyBean();
+
+        JavaBeanCommandSupport support = new JavaBeanCommandSupport(
+            bean,
+            Sets.newHashSet("callBody"));
+
+        support.getCommandMetadata("callBody")
+               .doOnNext(System.out::println)
+               .as(StepVerifier::create)
+               .expectNextCount(1)
+               .verifyComplete();
+
+        support.executeToMono("callBody", Collections.singletonMap("data", "123"))
+               .doOnNext(System.out::println)
+               .as(StepVerifier::create)
+               .expectNextCount(1)
+               .verifyComplete();
+    }
+
+    public static class MyBean implements MyBeanApi<TestBody> {
 
         public String callMultiArg(int val, String val2) {
             System.out.println("callMultiArg(" + val + "," + val2 + ")");
@@ -120,6 +152,7 @@ public class JavaBeanCommandSupportTest {
             System.out.println("callSingleArg(" + val + ")");
             return val;
         }
+
 
         @CommandHandler(TestCommand.class)
         public int callCommand(TestCommand<String> cmd) {
@@ -136,6 +169,23 @@ public class JavaBeanCommandSupportTest {
         public void callVoid() {
             System.out.println("callVoid");
         }
+    }
+
+    public interface MyBeanApi<T> {
+
+        default T callBody(@RequestBody T data) {
+            System.out.println("callBody(" + data + ")");
+            return data;
+        }
+
+    }
+
+    @Getter
+    @Setter
+    @ToString
+    public static class TestBody {
+        @Schema(title = "Data")
+        private int data;
     }
 
     public static class TestCommand<T> extends AbstractConvertCommand<Flux<T>, TestCommand<T>> {

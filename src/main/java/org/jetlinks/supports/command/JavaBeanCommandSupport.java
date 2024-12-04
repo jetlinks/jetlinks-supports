@@ -23,6 +23,7 @@ import javax.annotation.Nonnull;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -68,12 +69,14 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     }
 
     private void init(Predicate<Method> filter) {
+        Class<?> clazz = ClassUtils.getUserClass(target);
+
         ReflectionUtils
             .doWithMethods(
-                ClassUtils.getUserClass(target),
+                clazz,
                 method -> {
                     if (filter.test(method)) {
-                        register(method);
+                        register(method, clazz);
                     }
                 });
     }
@@ -105,7 +108,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             .collect(Collectors.toList());
     }
 
-    private void register(Method method) {
+    private void register(Method method, Class<?> owner) {
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
 
         String name = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
@@ -117,7 +120,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         MethodInvoker invoker = null;
 
         for (int i = 0; i < method.getParameterCount(); i++) {
-            argTypes[i] = ResolvableType.forMethodParameter(method, i);
+            argTypes[i] = ResolvableType.forMethodParameter(method, i, owner);
         }
         String[] discoveredArgName = MethodInterceptorHolder.nameDiscoverer.getParameterNames(method);
         Parameter[] parameters = method.getParameters();
@@ -132,7 +135,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             }
         }
 
-        ResolvableType returnType = ResolvableType.forMethodReturnType(method);
+        ResolvableType returnType = ResolvableType.forMethodReturnType(method, owner);
         if (!returnIsVoid(returnType)) {
             output = DeviceMetadataParser.withType(returnType);
         }
@@ -152,13 +155,10 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                         if (metadataType instanceof ObjectType) {
                             inputs = ((ObjectType) metadataType).getProperties();
                         }
-                        invoker = parameter -> {
-                            ResolvableType type = argTypes[0];
-                            return doInvoke(
-                                target,
-                                method,
-                                FastBeanCopier.DEFAULT_CONVERT.convert(parameter.asMap(), type.toClass(), type.resolveGenerics())
-                            );
+                        Type type = argTypes[0].toClass();
+                        invoker = cmd -> {
+                            Object param = cmd.as(type);
+                            return doInvoke(target, method, param);
                         };
                     }
                 }
@@ -180,16 +180,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                     metadata.setValueType(dataType);
                     inputs.add(metadata);
                 }
-                invoker = parameter -> {
-                    Map<String, Object> params = parameter.asMap();
+                invoker = cmd -> {
                     Object[] args = new Object[argTypes.length];
                     for (int i = 0; i < argTypes.length; i++) {
                         ResolvableType type = argTypes[i];
-                        Object val = params.get(argNames[i]);
-                        if (!type.isInstance(val)) {
-                            val = FastBeanCopier.DEFAULT_CONVERT.convert(val, type.toClass(), type.resolveGenerics());
-                        }
-                        args[i] = val;
+                        args[i] = cmd.getOrNull(argNames[i], type.toClass());
                     }
                     return doInvoke(target, method, args);
                 };
