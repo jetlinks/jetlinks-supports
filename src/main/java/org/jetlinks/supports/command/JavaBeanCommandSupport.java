@@ -146,6 +146,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 //参数就是命令
                 if (Command.class.isAssignableFrom(argTypes[0].toClass())) {
                     invoker = new CommandInvoker(target, method, argTypes[0]);
+                    name = CommandUtils.getCommandIdByType(argTypes[0].toClass());
                     inputs = CommandMetadataResolver.resolveInputs(argTypes[0]);
                 } else {
                     //转换为实体类

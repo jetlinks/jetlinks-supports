@@ -154,7 +154,7 @@ public class JavaBeanCommandSupportTest {
         }
 
 
-        @CommandHandler(TestCommand.class)
+        @CommandHandler
         public int callCommand(TestCommand<String> cmd) {
             System.out.println("callCommand(" + cmd + ")");
             System.out.println(cmd.readable());
