@@ -17,6 +17,9 @@ import java.util.Collections;
 public class JavaBeanCommandSupportTest {
 
 
+    public static final String TEST_COMMAND_NAME = "测试命令";
+    public static final String TEST_COMMAND_DESCRIPTION = "测试命令描述";
+
     @Test
     public void testVoid() {
 
@@ -94,14 +97,14 @@ public class JavaBeanCommandSupportTest {
         support.getCommandMetadata("Test")
                .doOnNext(System.out::println)
                .as(StepVerifier::create)
-               .expectNextCount(1)
+               .expectNextMatches(f -> f.getName().equals(TEST_COMMAND_NAME)
+                   && f.getDescription().equals(TEST_COMMAND_DESCRIPTION))
                .verifyComplete();
 
         support.executeToMono("Test", Collections.singletonMap("val", "123"))
                .as(StepVerifier::create)
                .expectNext(1)
                .verifyComplete();
-
     }
 
     @Test
@@ -188,6 +191,7 @@ public class JavaBeanCommandSupportTest {
         private int data;
     }
 
+    @Schema(title = TEST_COMMAND_NAME, description = TEST_COMMAND_DESCRIPTION)
     public static class TestCommand<T> extends AbstractConvertCommand<Flux<T>, TestCommand<T>> {
 
     }
