@@ -201,7 +201,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         metadata.setOutput(output);
         metadata.setInputs(inputs);
         metadata.setName(schema != null && StringUtils.hasText(schema.title()) ? schema.title() : name);
-        metadata.setDescription(schema != null ? schema.description() : description);
+        metadata.setDescription(schema != null && StringUtils.hasText(schema.description()) ? schema.description() : description);
 
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             invoker,
