@@ -3,7 +3,6 @@ package org.jetlinks.supports.command;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 import org.hswebframework.web.aop.MethodInterceptorHolder;
-import org.hswebframework.web.bean.FastBeanCopier;
 import org.hswebframework.web.i18n.LocaleUtils;
 import org.jetlinks.core.annotation.Attr;
 import org.jetlinks.core.command.*;
@@ -27,7 +26,6 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -111,7 +109,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     private void register(Method method, Class<?> owner) {
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
 
-        String name = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
+        String id = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
+        String name = id;
+        String description = id;
 
         ResolvableType[] argTypes = new ResolvableType[method.getParameterCount()];
         String[] argNames = new String[method.getParameterCount()];
@@ -146,8 +146,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 //参数就是命令
                 if (Command.class.isAssignableFrom(argTypes[0].toClass())) {
                     invoker = new CommandInvoker(target, method, argTypes[0]);
-                    name = CommandUtils.getCommandIdByType(argTypes[0].toClass());
-                    inputs = CommandMetadataResolver.resolveInputs(argTypes[0]);
+                    //不解析出参，以方法出参为准
+                    FunctionMetadata resolve = CommandMetadataResolver.resolve(argTypes[0], ResolvableType.NONE);
+                    id = resolve.getId();
+                    name = resolve.getName();
+                    description = resolve.getDescription();
+                    inputs = resolve.getInputs();
                 } else {
                     //转换为实体类
                     RequestBody requestBody = AnnotationUtils.findAnnotation(method.getParameters()[0], RequestBody.class);
@@ -193,11 +197,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
 
         SimpleFunctionMetadata metadata = new SimpleFunctionMetadata();
-        metadata.setId(name);
+        metadata.setId(id);
         metadata.setOutput(output);
         metadata.setInputs(inputs);
         metadata.setName(schema != null && StringUtils.hasText(schema.title()) ? schema.title() : name);
-        metadata.setDescription(schema == null ? name : schema.description());
+        metadata.setDescription(schema != null && StringUtils.hasText(schema.description()) ? schema.description() : description);
 
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             invoker,
@@ -219,8 +223,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         //自定义命令
         if (annotation.value() != Command.class) {
-            metadata.setId(CommandUtils.getCommandIdByType(annotation.value()));
-            metadata.setInputs(CommandMetadataResolver.resolveInputs(ResolvableType.forType(annotation.value())));
+            //不解析出参，以方法出参为准
+            FunctionMetadata resolve = CommandMetadataResolver.resolve(annotation.value(), Object.class);
+            metadata.setId(resolve.getId());
+            metadata.setName(resolve.getName());
+            metadata.setDescription(resolve.getDescription());
+            metadata.setInputs(resolve.getInputs());
         }
         //自定义了命令ID
         if (StringUtils.hasText(annotation.id())) {
