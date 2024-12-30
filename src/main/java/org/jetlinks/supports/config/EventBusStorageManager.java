@@ -10,6 +10,7 @@ import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.config.ConfigStorageManager;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
+import org.jetlinks.core.lang.SharedPathString;
 import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.utils.CompositeMap;
 import org.springframework.util.StringUtils;
@@ -109,6 +110,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
     }
 
     private Disposable subscribeCluster() {
+        SharedPathString pathString = SharedPathString.of("/_sys/storage-manager/notify");
         return eventBus
             .subscribe(
                 Subscription
@@ -121,7 +123,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                     CacheNotify notify = topicPayload.decode(CacheNotify.class);
                     return Mono
                         .<Void>fromRunnable(() -> handleNotify(notify))
-                        .as(MonoTracer.create("/_sys/storage-manager/notify/" + notify.getName()));
+                        .as(MonoTracer.create(pathString.append(notify.getName())));
                 })
             );
     }
