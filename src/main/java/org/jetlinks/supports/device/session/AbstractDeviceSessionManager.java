@@ -758,7 +758,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         () -> {
                             async.emitEmpty(Reactors.emitFailureHandler());
                         },
-                        Context.of(DeviceSessionRef.class, this)
+                        Context.of(ctx).put(DeviceSessionRef.class, this)
                     );
                 return async.asMono();
             }
