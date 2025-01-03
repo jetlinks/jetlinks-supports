@@ -26,12 +26,15 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
+import reactor.util.context.ContextView;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class ClusterDeviceSessionManagerTest {
     ClusterDeviceSessionManager manager1;
@@ -351,5 +354,34 @@ public class ClusterDeviceSessionManagerTest {
                 .as(StepVerifier::create)
                 .expectNextCount(1)
                 .verifyComplete();
+    }
+
+    @Test
+    public void testContext() {
+        AtomicReference<ContextView> alive = new AtomicReference<>();
+        LostDeviceSession session = new LostDeviceSession("test", device, DefaultTransport.MQTT) {
+            @Override
+            public boolean isAlive() {
+                return true;
+            }
+
+        };
+        manager1.listenEvent(e->{
+            return Mono.deferContextual(ctx->{
+                alive.set(ctx);
+                return Mono.empty();
+            });
+        });
+
+        manager1.compute(
+                    session.getDeviceId(),
+                    old -> Mono.just(session))
+            .contextWrite(ctx->ctx.put("test",123))
+                .as(StepVerifier::create)
+                .expectNextCount(1)
+                .verifyComplete();
+
+        Assert.assertNotNull(alive.get());
+        Assert.assertEquals(123, Objects.requireNonNull(alive.get().getOrDefault("test", 0)).intValue());
     }
 }

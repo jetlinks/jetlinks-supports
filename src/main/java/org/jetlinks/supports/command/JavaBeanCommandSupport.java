@@ -69,14 +69,23 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     private void init(Predicate<Method> filter) {
         Class<?> clazz = ClassUtils.getUserClass(target);
 
-        ReflectionUtils
-            .doWithMethods(
+        ReflectionUtils.doWithMethods(
                 clazz,
                 method -> {
                     if (filter.test(method)) {
                         register(method, clazz);
                     }
                 });
+
+        for (Class<?> iface : clazz.getInterfaces()) {
+            ReflectionUtils.doWithMethods(
+                    iface,
+                    method -> {
+                        if (filter.test(method)) {
+                            register(method, iface);
+                        }
+                    });
+        }
     }
 
     private boolean returnIsVoid(ResolvableType type) {
