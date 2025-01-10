@@ -41,7 +41,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     private static final Predicate<Method> defaultFilter
         = method -> {
         org.jetlinks.core.annotation.command.CommandHandler annotation = AnnotatedElementUtils
-            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
+            .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
 
         return !Modifier.isStatic(method.getModifiers())
             && Modifier.isPublic(method.getModifiers())
@@ -63,7 +63,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     public JavaBeanCommandSupport(Object target) {
         this(target, method -> AnnotatedElementUtils
-            .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
+            .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
     }
 
     private void init(Predicate<Method> filter) {
