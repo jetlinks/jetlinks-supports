@@ -25,6 +25,7 @@ import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.concurrent.Queues;
 
 import java.io.ObjectInput;
@@ -36,6 +37,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static com.google.common.cache.RemovalCause.EXPIRED;
@@ -72,6 +74,13 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
         this.rpcManager = rpcManager;
         this.sessionManager = sessionManager;
         rpcManager.registerService(new ServiceImpl());
+        Schedulers
+            .parallel()
+            .schedulePeriodically(
+                this::checkExpires,
+                10,
+                10,
+                TimeUnit.SECONDS);
     }
 
     @Override

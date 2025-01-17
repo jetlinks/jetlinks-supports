@@ -31,7 +31,7 @@ import java.util.Optional;
 import java.util.function.Function;
 
 @Slf4j
-public class ClusterSendToDeviceMessageHandler {
+public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono<Void>> {
 
     private static final HeaderKey<Boolean> resumeSession = HeaderKey.of("resume-session", true);
 
@@ -59,7 +59,7 @@ public class ClusterSendToDeviceMessageHandler {
         handler
             .handleSendToDeviceMessage(
                 sessionManager.getCurrentServerId(),
-                this::handleMessage);
+                this);
     }
 
     private DeviceMessageReply createReply(Message message) {
@@ -187,7 +187,7 @@ public class ClusterSendToDeviceMessageHandler {
                 if (childMsg instanceof DisconnectDeviceMessage) {
                     return sessionManager
                         .remove(((DisconnectDeviceMessage) childMsg).getDeviceId(), false)
-                        .then(Mono.defer(()->this.doReply(context, this.createReply(context.message).success())));
+                        .then(Mono.defer(() -> this.doReply(context, this.createReply(context.message).success())));
                 }
                 //获取子设备状态
                 if (childMsg instanceof DeviceStateCheckMessage) {
@@ -286,6 +286,11 @@ public class ClusterSendToDeviceMessageHandler {
         return doReply((DeviceOperator) null, message)
             .contextWrite(ctx -> TraceHolder.readToContext(ctx, message.getHeaders()));
 
+    }
+
+    @Override
+    public Mono<Void> apply(Message message) {
+        return handleMessage(message);
     }
 
     class CodecContext implements ToDeviceMessageContext {
