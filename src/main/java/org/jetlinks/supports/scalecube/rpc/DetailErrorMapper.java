@@ -1,13 +1,10 @@
 package org.jetlinks.supports.scalecube.rpc;
 
 import io.netty.util.concurrent.FastThreadLocal;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.context.Context;
 import io.scalecube.services.api.ErrorData;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.exceptions.*;
-import lombok.Setter;
-import org.jetlinks.core.trace.TraceHolder;
+import org.jetlinks.core.utils.ExceptionUtils;
 import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
@@ -48,7 +45,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
         int errorType = message.errorType();
         int errorCode = data.getErrorCode();
         String errorMessage = data.getErrorMessage();
-        StackTraceElement[] stackTrace = decodeDetail(message.header(ERROR_DETAIL),topTrace);
+        StackTraceElement[] stackTrace = decodeDetail(message.header(ERROR_DETAIL), topTrace);
 
         Throwable error;
         switch (errorType) {
@@ -100,7 +97,11 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
 
 
     public static String createDetail(StackTraceElement[] top, Throwable e) {
-        StackTraceElement[] stack = e.getStackTrace();
+        StackTraceElement[] stack = Arrays
+            .stream(e.getStackTrace())
+            .filter(_stack -> !ExceptionUtils.isUnimportant(_stack))
+            .toArray(StackTraceElement[]::new);
+
         if (stack.length == 0) {
             return "";
         }
