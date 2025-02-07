@@ -65,7 +65,7 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
      *
      * @param context 解码上下文
      * @see BlockingMessageDecodeContext
-     * @see BlockingMessageDecodeContext#getUpstream()
+     * @see BlockingMessageDecodeContext#getData()
      * @see BlockingMessageDecodeContext#sendToDeviceLater(EncodedMessage)
      * @see BlockingMessageDecodeContext#sendToPlatformLater(DeviceMessage)
      */

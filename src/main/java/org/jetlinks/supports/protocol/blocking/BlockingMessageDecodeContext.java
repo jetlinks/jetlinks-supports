@@ -73,7 +73,7 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
      *
      * @return EncodedMessage
      */
-    public EncodedMessage getUpstream() {
+    public EncodedMessage getData() {
         return context.getMessage();
     }
 
