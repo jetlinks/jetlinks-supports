@@ -11,6 +11,7 @@ import org.jetlinks.supports.official.JetLinksDataTypeCodecs;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static java.util.Optional.of;
 import static java.util.Optional.ofNullable;
 
 @Getter
@@ -55,6 +56,8 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
             })
             .ifPresent(type::setValueType);
 
+        type.setMulti(jsonObject.getBooleanValue("multi"));
+
         return type;
     }
 
@@ -70,6 +73,8 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
             .map(EnumType.Element::toMap).collect(Collectors.toList()));
 
         encoded.put("valueType", JetLinksDataTypeCodecs.encode(type.getValueType()).orElse(null));
+
+        encoded.put("multi", type.isMulti());
 
     }
 }
