@@ -8,6 +8,7 @@ import reactor.core.publisher.Mono;
 
 import javax.annotation.Nonnull;
 
+@Deprecated
 @AllArgsConstructor
 public class BlockingDeviceMessageCodec implements DeviceMessageCodec {
 
