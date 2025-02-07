@@ -5,9 +5,11 @@ import org.jetlinks.core.message.DeviceMessage;
 import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.FromDeviceMessageContext;
 import org.jetlinks.core.message.codec.MessageDecodeContext;
+import org.jetlinks.core.message.codec.ToDeviceMessageContext;
 import org.jetlinks.core.monitor.Monitor;
 import org.jetlinks.core.server.ClientConnection;
 import org.jetlinks.core.server.session.DeviceSession;
+import reactor.core.publisher.Mono;
 import reactor.util.context.ContextView;
 
 import javax.annotation.Nullable;
@@ -19,7 +21,7 @@ import java.time.Duration;
  * <pre>{@code
  *
  *  public void decode(BlockingMessageDecodeContext ctx){
- *      ByteBuf data = ctx.getUpstream().getPayload();
+ *      ByteBuf data = ctx.getData().getPayload();
  *      BlockingDeviceOperator device = ctx.getDevice();
  *      //首次通信,进行认证
  *      if(device == null){
@@ -107,6 +109,9 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
 
     /**
      * 发送数据到设备
+     * <p>
+     * 注意: 避免在响应式上下文中执行此方法，否则可能导致性能问题。
+     * 如果需要在响应式中使用，建议使用{@link #sendToDeviceReactive(EncodedMessage)}
      *
      * @param message 消息
      */
@@ -132,7 +137,22 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
     }
 
     /**
+     * 响应式发送数据到设备
+     *
+     * @param message 消息
+     */
+    public Mono<Void> sendToDeviceReactive(EncodedMessage message) {
+        return context
+            .unwrap(ToDeviceMessageContext.class)
+            .sendToDevice(message)
+            .then();
+    }
+
+    /**
      * 立即发送设备消息到平台,请使用平台内置的{@link DeviceMessage}相关,请勿自己在协议包中创建实现类.
+     * <p>
+     * 注意: 避免在响应式上下文中执行此方法，否则可能导致性能问题。
+     * 如果需要在响应式中使用，建议使用{@link #sendToPlatformReactive(DeviceMessage)}
      *
      * @param message 消息
      */
@@ -147,6 +167,15 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
      */
     public void sendToPlatformLater(DeviceMessage message) {
         async(context.handleMessage(message));
+    }
+
+    /**
+     * 响应式发送设备消息到平台,请使用平台内置的{@link DeviceMessage}相关,请勿自己在协议包中创建实现类.
+     *
+     * @param message 消息
+     */
+    public Mono<Void> sendToPlatformReactive(DeviceMessage message) {
+        return context.handleMessage(message);
     }
 
 }

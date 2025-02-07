@@ -7,6 +7,8 @@ import org.jetlinks.core.message.codec.MessageEncodeContext;
 import org.jetlinks.core.message.codec.ToDeviceMessageContext;
 import org.jetlinks.core.monitor.Monitor;
 import org.jetlinks.core.server.session.DeviceSession;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Mono;
 import reactor.util.context.ContextView;
 
 import javax.annotation.Nullable;
@@ -57,7 +59,7 @@ public class BlockingMessageEncodeContext extends BlockingMessageCodecContext<Me
      * @see org.jetlinks.core.message.function.FunctionInvokeMessage
      * @see org.jetlinks.core.message.firmware.UpgradeFirmwareMessage
      */
-    public DeviceMessage getDownstream() {
+    public DeviceMessage getMessage() {
         return (DeviceMessage) context.getMessage();
     }
 
@@ -102,11 +104,13 @@ public class BlockingMessageEncodeContext extends BlockingMessageCodecContext<Me
     }
 
     /**
-     * 发送数据到设备
+     * 发送数据到设备,此方法可能导致线程阻塞.
+     * <p>
+     * 注意: 避免在响应式上下文中执行此方法，否则可能导致性能问题。
      *
      * @param message 消息
      */
-    public void sendToDevice(EncodedMessage message) {
+    public void sendToDeviceNow(EncodedMessage message) {
         await(context
                   .unwrap(ToDeviceMessageContext.class)
                   .sendToDevice(message));
@@ -125,11 +129,34 @@ public class BlockingMessageEncodeContext extends BlockingMessageCodecContext<Me
     }
 
     /**
+     * 响应式发送数据到设备
+     *
+     * @param message 消息
+     */
+    public Mono<Void> sendToDeviceReactive(EncodedMessage message) {
+        return context
+            .unwrap(ToDeviceMessageContext.class)
+            .sendToDevice(message)
+            .then();
+    }
+
+    /**
      * 异步发送设备消息到平台,请使用平台内置的{@link DeviceMessage}相关,请勿自己在协议包中创建实现类.
      *
      * @param message 消息
      */
     public void sendToPlatformLater(Collection<? extends DeviceMessage> message) {
+        async(
+            context.reply(message)
+        );
+    }
+
+    /**
+     * 异步发送设备消息到平台,请使用平台内置的{@link DeviceMessage}相关,请勿自己在协议包中创建实现类.
+     *
+     * @param message 消息
+     */
+    public void sendToPlatformLater(Publisher<? extends DeviceMessage> message) {
         async(
             context.reply(message)
         );
@@ -147,7 +174,18 @@ public class BlockingMessageEncodeContext extends BlockingMessageCodecContext<Me
     }
 
     /**
+     * 响应式发送设备消息到平台,请使用平台内置的{@link DeviceMessage}相关,请勿自己在协议包中创建实现类.
+     *
+     * @param message 消息
+     */
+    public Mono<Void> sendToPlatformReactive(DeviceMessage message) {
+        return context.reply(message);
+    }
+
+    /**
      * 立即发送设备消息到平台,请使用平台内置的{@link DeviceMessage}相关,请勿自己在协议包中创建实现类.
+     * <p>
+     * 注意: 避免在响应式上下文中执行此方法，否则可能导致性能问题。
      *
      * @param message 消息
      */
@@ -157,6 +195,8 @@ public class BlockingMessageEncodeContext extends BlockingMessageCodecContext<Me
 
     /**
      * 立即发送设备消息到平台,请使用平台内置的{@link DeviceMessage}相关,请勿自己在协议包中创建实现类.
+     * <p>
+     * 注意: 避免在响应式上下文中执行此方法，否则可能导致性能问题。
      *
      * @param message 消息
      */
