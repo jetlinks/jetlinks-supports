@@ -11,6 +11,7 @@ import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 import reactor.util.context.ContextView;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.Collection;
@@ -30,8 +31,9 @@ public class BlockingMessageEncodeContext extends BlockingMessageCodecContext<Me
      *
      * @return 设备操作接口
      */
-    @Nullable
+    @Nonnull
     @Override
+    @SuppressWarnings("all")
     public BlockingDeviceOperator getDevice() {
         return super.getDevice();
     }

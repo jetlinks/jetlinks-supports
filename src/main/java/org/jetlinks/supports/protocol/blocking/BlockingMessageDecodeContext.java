@@ -95,6 +95,12 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
         getSession().close();
     }
 
+    /**
+     * 在处理完成后断开设备连接
+     */
+    public void disconnectLater() {
+        async(Mono.fromRunnable(this::disconnect));
+    }
 
     /**
      * 获取设备的连接信息,在长连接的场景下,可通过此方式获取到原始链接信息.
@@ -157,6 +163,9 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
      * @param message 消息
      */
     public void sendToPlatformNow(DeviceMessage message) {
+        if (message == null) {
+            return;
+        }
         await(context.handleMessage(message));
     }
 
@@ -166,6 +175,9 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
      * @param message 消息
      */
     public void sendToPlatformLater(DeviceMessage message) {
+        if (message == null) {
+            return;
+        }
         async(context.handleMessage(message));
     }
 
@@ -175,6 +187,9 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
      * @param message 消息
      */
     public Mono<Void> sendToPlatformReactive(DeviceMessage message) {
+        if (message == null) {
+            return Mono.empty();
+        }
         return context.handleMessage(message);
     }
 

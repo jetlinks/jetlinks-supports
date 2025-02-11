@@ -11,11 +11,13 @@ import org.jetlinks.core.metadata.PropertyMetadata;
 import org.jetlinks.core.metadata.ValidateResult;
 import org.jetlinks.core.monitor.Monitor;
 import org.jetlinks.core.monitor.logger.Logger;
+import org.jetlinks.core.monitor.tracer.Tracer;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.core.things.BlockingThingsDataManager;
 import org.jetlinks.core.things.ThingsDataManager;
 import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -59,6 +61,15 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
     protected final Logger logger(String deviceId) {
         return context.getMonitor(deviceId).logger();
     }
+
+    protected final Tracer tracer() {
+        return context.getMonitor().tracer();
+    }
+
+    protected final Tracer tracer(String deviceId) {
+        return context.getMonitor(deviceId).tracer();
+    }
+
 
     /**
      * 处理设备上行消息,当设备向平台发送消息时,将调用此方法进行处理.
@@ -156,8 +167,8 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
 
     @Nonnull
     @Override
-    public final Publisher<? extends Message> decode(@Nonnull MessageDecodeContext context) {
-        return Mono.deferContextual((ctx) -> {
+    public final Flux<Message> decode(@Nonnull MessageDecodeContext context) {
+        return Flux.deferContextual((ctx) -> {
             DeviceOperator device = context.getDevice();
             Monitor monitor = device == null ? this.context.getMonitor() : this.context.getMonitor(device.getDeviceId());
             //在非阻塞线程中,需要使用单独的调度器来执行.
@@ -186,8 +197,8 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
 
     @Nonnull
     @Override
-    public final Publisher<? extends EncodedMessage> encode(@Nonnull MessageEncodeContext context) {
-        return Mono.deferContextual((ctx) -> {
+    public final Flux<EncodedMessage> encode(@Nonnull MessageEncodeContext context) {
+        return Flux.deferContextual((ctx) -> {
             DeviceOperator device = context.getDevice();
             Monitor monitor = device == null ? this.context.getMonitor() : this.context.getMonitor(device.getDeviceId());
             //在非阻塞线程中,需要使用单独的调度器来执行.
