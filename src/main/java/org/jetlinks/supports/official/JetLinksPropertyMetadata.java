@@ -73,7 +73,8 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
     protected DataType parseDataType() {
         JSONObject dataTypeJson = json.getJSONObject("valueType");
         if (dataTypeJson == null) {
-            throw new IllegalArgumentException("属性" + getId() + "类型不能为空");
+            return null;
+//            throw new IllegalArgumentException("属性" + getId() + "类型不能为空");
         }
         DataType dataType = Optional
                 .ofNullable(dataTypeJson.getString("type"))

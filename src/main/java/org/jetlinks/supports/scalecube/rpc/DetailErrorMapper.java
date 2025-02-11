@@ -97,10 +97,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
 
 
     public static String createDetail(StackTraceElement[] top, Throwable e) {
-        StackTraceElement[] stack = Arrays
-            .stream(e.getStackTrace())
-            .filter(_stack -> !ExceptionUtils.isUnimportant(_stack))
-            .toArray(StackTraceElement[]::new);
+        StackTraceElement[] stack = ExceptionUtils.getMergedStackTrace(e);
 
         if (stack.length == 0) {
             return "";

@@ -26,23 +26,24 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
         super.decode(type, config);
         JSONObject jsonObject = new JSONObject(config);
         ofNullable(jsonObject.get("elementType"))
-                .map(v -> {
-                    if (v instanceof Map) {
-                        return new JSONObject(((Map) v));
-                    }
-                    JSONObject eleType = new JSONObject();
-                    eleType.put("type", v);
-                    return eleType;
-                })
-                .map(eleType -> {
-                    DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
+            .map(v -> {
+                if (v instanceof Map) {
+                    return new JSONObject(((Map) v));
+                }
+                JSONObject eleType = new JSONObject();
+                eleType.put("type", v);
+                return eleType;
+            })
+            .map(eleType -> {
+                DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
 
-                    JetLinksDataTypeCodecs.getCodec(dataType.getId())
-                            .ifPresent(codec -> codec.decode(dataType, eleType));
+                JetLinksDataTypeCodecs
+                    .getCodec(dataType.getId())
+                    .ifPresent(codec -> codec.decode(dataType, eleType));
 
-                    return dataType;
-                })
-                .ifPresent(type::setElementType);
+                return dataType;
+            })
+            .ifPresent(type::setElementType);
 
         return type;
     }
@@ -50,8 +51,11 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
     @Override
     protected void doEncode(Map<String, Object> encoded, ArrayType type) {
         super.doEncode(encoded, type);
-        JetLinksDataTypeCodecs.getCodec(type.getElementType().getId())
+        if (type != null && type.getElementType()!=null) {
+            JetLinksDataTypeCodecs
+                .getCodec(type.getElementType().getId())
                 .ifPresent(codec -> encoded.put("elementType", codec.encode(type.getElementType())));
+        }
 
     }
 }
