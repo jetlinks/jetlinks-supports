@@ -171,6 +171,10 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
     }
 
     private Mono<Void> handleUnsupportedMessage(CodecContext context) {
+        // 已经发送给了设备,则认为已经处理
+        if(context.alreadySent){
+            return Mono.empty();
+        }
         if (!context.alreadyReply) {
             //断开连接
             if (context.message instanceof DisconnectDeviceMessage) {
@@ -298,7 +302,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
         private final DeviceMessage message;
         private final DeviceSession session;
 
-        private volatile boolean alreadyReply = false;
+        private volatile boolean alreadyReply = false,alreadySent = false;
 
         CodecContext(DeviceOperator device, DeviceMessage message, DeviceSession session) {
             this.device = device;
@@ -357,6 +361,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
 
         @Override
         public Mono<Boolean> sendToDevice(@Nonnull EncodedMessage message) {
+            alreadySent = true;
             //异步请求,只要发送则响应成功
             if (this.message.getHeaderOrDefault(Headers.async)) {
                 return session
