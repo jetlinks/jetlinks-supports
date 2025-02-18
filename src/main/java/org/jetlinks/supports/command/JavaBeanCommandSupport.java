@@ -66,6 +66,14 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
     }
 
+    protected JavaBeanCommandSupport() {
+        this.target = this;
+        init(defaultFilter
+                 .and(method ->
+                          AnnotatedElementUtils
+                              .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null));
+    }
+
     private void init(Predicate<Method> filter) {
         Class<?> clazz = ClassUtils.getUserClass(target);
 
