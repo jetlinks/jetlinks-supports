@@ -17,6 +17,7 @@ import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestBody;
+import reactor.core.publisher.Flux;
 
 import javax.annotation.Nonnull;
 import java.lang.reflect.Method;
@@ -245,6 +246,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         for (Attr expand : annotation.expands()) {
             metadata.expand(expand.key(), expand.value());
         }
+        metadata.expand(CommandConstant.responseFlux,
+                        Flux.class.isAssignableFrom(method.getReturnType()));
 
         //自定义输入参数描述
         if (!Void.class.equals(annotation.inputSpec())) {
@@ -302,7 +305,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         @Nonnull
         @Override
+        @SuppressWarnings("all")
         public Command<Object> createCommand() {
+            if(metadata.getExpand(CommandConstant.responseFlux).orElse(false)){
+                return (Command)new MethodCallFluxCommand(metadata.getId());
+            }
             return new MethodCallCommand(metadata.getId());
         }
 
@@ -317,6 +324,13 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
     }
 
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class MethodCallFluxCommand extends AbstractCommand<Flux<Object>, MethodCallFluxCommand> {
+        private String commandId;
+    }
 
     @Getter
     @Setter
