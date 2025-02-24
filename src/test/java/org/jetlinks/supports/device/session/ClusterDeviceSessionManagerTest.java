@@ -10,6 +10,9 @@ import org.jetlinks.core.device.DeviceInfo;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceRegistry;
 import org.jetlinks.core.device.ProductInfo;
+import org.jetlinks.core.device.session.DeviceSessionEvent;
+import org.jetlinks.core.message.DeviceMessage;
+import org.jetlinks.core.message.DeviceOfflineMessage;
 import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.server.session.LostDeviceSession;
@@ -26,6 +29,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
+import reactor.util.context.Context;
 import reactor.util.context.ContextView;
 
 import java.time.Duration;
@@ -357,6 +361,48 @@ public class ClusterDeviceSessionManagerTest {
     }
 
     @Test
+    public void testRemoveContext() {
+        LostDeviceSession session = new LostDeviceSession("test2", device, DefaultTransport.MQTT) {
+            @Override
+            public boolean isAlive() {
+                return true;
+            }
+        };
+        AtomicReference<ContextView> alive = new AtomicReference<>();
+
+        manager1.listenEvent(e -> Mono.deferContextual(ctx -> {
+            if (e.getType() == DeviceSessionEvent.Type.unregister) {
+                alive.set(ctx);
+            }
+            return Mono.empty();
+        }));
+
+        manager1
+            .compute(session.getDeviceId(), old -> Mono.just(session))
+            .as(StepVerifier::create)
+            .expectNextCount(1)
+            .verifyComplete();
+
+        manager2
+            .compute(session.getDeviceId(), old -> Mono.just(session))
+            .as(StepVerifier::create)
+            .expectNextCount(1)
+            .verifyComplete();
+        //从node2移除
+        manager2
+            .remove(session.getDeviceId(), false)
+            .contextWrite(Context.of(DeviceMessage.class, new DeviceOfflineMessage()
+                .thingId("device",session.getDeviceId())))
+            .as(StepVerifier::create)
+            .expectNext(2L)
+            .verifyComplete();
+
+        Assert.assertNotNull(alive.get());
+        Assert.assertTrue(alive.get().hasKey(DeviceMessage.class));
+
+    }
+
+    @Test
     public void testContext() {
         AtomicReference<ContextView> alive = new AtomicReference<>();
         LostDeviceSession session = new LostDeviceSession("test", device, DefaultTransport.MQTT) {
@@ -366,8 +412,8 @@ public class ClusterDeviceSessionManagerTest {
             }
 
         };
-        manager1.listenEvent(e->{
-            return Mono.deferContextual(ctx->{
+        manager1.listenEvent(e -> {
+            return Mono.deferContextual(ctx -> {
                 alive.set(ctx);
                 return Mono.empty();
             });
@@ -376,7 +422,7 @@ public class ClusterDeviceSessionManagerTest {
         manager1.compute(
                     session.getDeviceId(),
                     old -> Mono.just(session))
-            .contextWrite(ctx->ctx.put("test",123))
+                .contextWrite(ctx -> ctx.put("test", 123))
                 .as(StepVerifier::create)
                 .expectNextCount(1)
                 .verifyComplete();

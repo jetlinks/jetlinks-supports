@@ -60,6 +60,18 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
     }
 
     /**
+     * 响应式获取指定设备ID的设备操作接口
+     *
+     * @param deviceId 设备ID
+     * @return 设备操作接口
+     */
+    @Nonnull
+    public Mono<DeviceOperator> getDeviceAsync(String deviceId) {
+        return context.getDevice(deviceId);
+    }
+
+
+    /**
      * 阻塞等待异步任务执行完成,并获取结果.
      *
      * <pre>{@code

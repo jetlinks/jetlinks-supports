@@ -1,19 +1,33 @@
 package org.jetlinks.supports.device.session;
 
+import com.google.common.collect.Maps;
+import io.scalecube.services.annotations.Service;
 import io.scalecube.services.annotations.ServiceMethod;
 import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
+import org.jetlinks.core.message.DeviceMessage;
+import org.jetlinks.core.message.Message;
+import org.jetlinks.core.message.MessageType;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.ServiceEvent;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
+import org.jetlinks.core.utils.SerializeUtils;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.context.Context;
+import reactor.util.context.ContextView;
 
+import java.io.Externalizable;
+import java.io.IOException;
+import java.io.ObjectInput;
+import java.io.ObjectOutput;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -47,7 +61,60 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         Mono<Long> remove(String deviceId);
 
         @ServiceMethod
+        Mono<Long> remove0(SessionOperation operation);
+
+        @ServiceMethod
         Flux<DeviceSessionInfo> sessions();
+
+        @Getter
+        @Setter
+        class SessionOperation implements Externalizable {
+            private String deviceId;
+            private Map<String, Object> context;
+
+            public static SessionOperation of(String deviceId, ContextView ctx) {
+                SessionOperation opt = new SessionOperation();
+                opt.deviceId = deviceId;
+                return opt.with(ctx);
+            }
+
+            @Override
+            public void writeExternal(ObjectOutput out) throws IOException {
+                out.writeUTF(deviceId);
+                SerializeUtils.writeKeyValue(context, out);
+            }
+
+            @Override
+            public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
+                deviceId = in.readUTF();
+                context = SerializeUtils.readMap(in, Maps::newHashMapWithExpectedSize);
+            }
+
+            public Context toContext() {
+                if (context == null) {
+                    return Context.empty();
+                }
+                Object msg = context.get("@msg");
+                if (msg instanceof DeviceMessage) {
+                    return Context.of(DeviceMessage.class, msg);
+                } else if (msg instanceof Map) {
+                    return MessageType
+                        .<DeviceMessage>convertMessage(((Map<String, Object>) msg))
+                        .map(_msg -> Context.of(DeviceMessage.class, _msg))
+                        .orElse(Context.empty());
+                }
+                return Context.empty();
+            }
+
+            public SessionOperation with(ContextView view) {
+                if (context == null) {
+                    context = Maps.newHashMapWithExpectedSize(1);
+                }
+                view.getOrEmpty(DeviceMessage.class)
+                    .ifPresent(msg -> context.put("@msg", msg));
+                return this;
+            }
+        }
     }
 
     @AllArgsConstructor
@@ -62,6 +129,15 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                 return defaultValue;
             }
             return arg.apply(manager, arg0);
+        }
+
+        @Override
+        public Mono<Long> remove0(SessionOperation operation) {
+            return this
+                .doWith(operation.deviceId,
+                        AbstractDeviceSessionManager::removeFromCluster,
+                        Reactors.ALWAYS_ZERO_LONG)
+                .contextWrite(operation.toContext());
         }
 
         @Override
@@ -160,6 +236,16 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         }
 
         @Override
+        public Mono<Long> remove0(SessionOperation operation) {
+            return service
+                .remove0(operation)
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Reactors.ALWAYS_ZERO_LONG;
+                });
+        }
+
+        @Override
         public Mono<Boolean> isAlive(String deviceId) {
             return service
                 .isAlive(deviceId)
@@ -242,9 +328,17 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         if (services.isEmpty()) {
             return Reactors.ALWAYS_ZERO_LONG;
         }
-        return getServices()
-            .concatMap(service -> service.remove(deviceId))
-            .reduce(Math::addExact);
+        // 传递上下文
+        return Mono.deferContextual(ctx -> {
+            Service.SessionOperation operation = Service.SessionOperation.of(deviceId, ctx);
+            return this
+                .getServices()
+                .concatMap(service -> service.remove0(operation))
+                .reduce(Math::addExact);
+        });
+//        return getServices()
+//            .concatMap(service -> service.remove(deviceId))
+//            .reduce(Math::addExact);
     }
 
     @Override
