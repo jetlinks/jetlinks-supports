@@ -109,7 +109,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     private void register(Method method, Class<?> owner) {
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
-
+        Object target = this.target;
         String id = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
         String name = id;
         String description = id;
@@ -307,8 +307,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         @Override
         @SuppressWarnings("all")
         public Command<Object> createCommand() {
-            if(metadata.getExpand(CommandConstant.responseFlux).orElse(false)){
-                return (Command)new MethodCallFluxCommand(metadata.getId());
+            if (metadata.getExpand(CommandConstant.responseFlux).orElse(false)) {
+                return (Command) new MethodCallFluxCommand(metadata.getId());
             }
             return new MethodCallCommand(metadata.getId());
         }
