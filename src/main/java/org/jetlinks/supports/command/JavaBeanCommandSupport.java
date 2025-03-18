@@ -8,6 +8,7 @@ import org.jetlinks.core.annotation.Attr;
 import org.jetlinks.core.command.*;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.ObjectType;
+import org.jetlinks.core.utils.MetadataUtils;
 import org.jetlinks.supports.official.DeviceMetadataParser;
 import org.springframework.beans.MethodInvocationException;
 import org.springframework.core.ResolvableType;
@@ -51,7 +52,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             && (annotation == null || !annotation.ignore());
     };
 
-    private final Object target;
+    protected final Object target;
 
     public JavaBeanCommandSupport(Object target, Collection<String> filter) {
         this(target, m -> filter.contains(m.getName()));
@@ -243,6 +244,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         if (StringUtils.hasText(annotation.description())) {
             metadata.setDescription(annotation.description());
         }
+
+        metadata.setExpands(MetadataUtils.parseExpands(method));
+
         for (Attr expand : annotation.expands()) {
             metadata.expand(expand.key(), expand.value());
         }
