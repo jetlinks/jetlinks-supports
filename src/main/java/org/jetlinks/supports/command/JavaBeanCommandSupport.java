@@ -208,12 +208,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             method);
 
         //优先注册子类重写的方法
-        registerAbsentHandler(metadata.getId(), handler);
+        registerHandlerAbsent(metadata.getId(), handler);
 
     }
 
     @SuppressWarnings("all")
-    protected <C extends Command<R>, R> void registerAbsentHandler(String id,
+    protected <C extends Command<R>, R> void registerHandlerAbsent(String id,
                                                                    CommandHandler<C, R> handler) {
         handlers.computeIfAbsent(id, k -> (CommandHandler<Command<?>, ?>) handler);
     }
