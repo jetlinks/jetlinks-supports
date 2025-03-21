@@ -21,10 +21,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import reactor.core.publisher.Flux;
 
 import javax.annotation.Nonnull;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.lang.reflect.Parameter;
-import java.lang.reflect.Type;
+import java.lang.reflect.*;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -210,8 +207,15 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             applyMetadata(method, argTypes, metadata),
             method);
 
-        registerHandler(metadata.getId(), handler);
+        //优先注册子类重写的方法
+        registerHandlerAbsent(metadata.getId(), handler);
 
+    }
+
+    @SuppressWarnings("all")
+    protected <C extends Command<R>, R> void registerHandlerAbsent(String id,
+                                                                   CommandHandler<C, R> handler) {
+        handlers.computeIfAbsent(id, k -> (CommandHandler<Command<?>, ?>) handler);
     }
 
     protected FunctionMetadata applyMetadata(Method method,
