@@ -21,7 +21,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import reactor.core.publisher.Flux;
 
 import javax.annotation.Nonnull;
-import java.lang.reflect.*;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -182,6 +185,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                                          ? schemaAnn.title()
                                          : metadata.getId());
                     metadata.setValueType(dataType);
+                    MetadataUtils
+                        .parseExpands(parameter.getAnnotations())
+                        .forEach(metadata::expand);
                     inputs.add(metadata);
                 }
                 invoker = cmd -> {
