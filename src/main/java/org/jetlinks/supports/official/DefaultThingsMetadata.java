@@ -60,26 +60,34 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.name = another.getName();
         this.description = another.getDescription();
         this.expands = another.getExpands();
-        this.properties = another.getProperties()
-                                 .stream()
-                                 .map(JetLinksPropertyMetadata::new)
-                                 .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+        this.properties = another
+            .getProperties()
+            .stream()
+            .map(JetLinksPropertyMetadata::new)
+            .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
-        this.functions = another.getFunctions()
-                                .stream()
-                                .map(JetLinksDeviceFunctionMetadata::new)
-                                .collect(Collectors.toMap(JetLinksDeviceFunctionMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+        this.functions = another
+            .getFunctions()
+            .stream()
+            .map(JetLinksDeviceFunctionMetadata::new)
+            .collect(Collectors.toMap(JetLinksDeviceFunctionMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
-        this.events = another.getEvents()
-                             .stream()
-                             .map(JetLinksEventMetadata::new)
-                             .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+        this.events = another
+            .getEvents()
+            .stream()
+            .map(JetLinksEventMetadata::new)
+            .collect(Collectors.toMap(JetLinksEventMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
-        this.tags = another.getTags()
-                           .stream()
-                           .map(JetLinksPropertyMetadata::new)
-                           .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+        this.tags = another
+            .getTags()
+            .stream()
+            .map(JetLinksPropertyMetadata::new)
+            .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
+    }
+
+    static JSONObject toJSONObject(Object obj) {
+        return (JSONObject) JSONObject.toJSON(obj);
     }
 
     @Override
@@ -89,15 +97,17 @@ public class DefaultThingsMetadata implements ThingMetadata {
         }
         if (this.properties == null && jsonObject != null) {
             this.properties = Optional
-                    .ofNullable(jsonObject.getJSONArray("properties"))
-                    .map(Collection::stream)
-                    .<Map<String, PropertyMetadata>>map(stream -> stream
-                            .map(JSONObject.class::cast)
-                            .map(JetLinksPropertyMetadata::new)
-                            .map(PropertyMetadata.class::cast)
-                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
-                    )
-                    .orElse(Collections.emptyMap());
+                .ofNullable(jsonObject.getJSONArray("properties"))
+                .map(Collection::stream)
+                .<Map<String, PropertyMetadata>>map(stream -> stream
+                    .map(obj -> new JetLinksPropertyMetadata(toJSONObject(obj)))
+                    .collect(Collectors.toMap(
+                        PropertyMetadata::getId,
+                        Function.identity(),
+                        (a, b) -> a,
+                        LinkedHashMap::new))
+                )
+                .orElse(Collections.emptyMap());
         }
 
         if (this.propertyMetadataList == null && this.properties != null) {
@@ -111,15 +121,16 @@ public class DefaultThingsMetadata implements ThingMetadata {
     public List<FunctionMetadata> getFunctions() {
         if (functions == null && jsonObject != null) {
             functions = Optional
-                    .ofNullable(jsonObject.getJSONArray("functions"))
-                    .map(Collection::stream)
-                    .<Map<String, FunctionMetadata>>map(stream -> stream
-                            .map(JSONObject.class::cast)
-                            .map(JetLinksDeviceFunctionMetadata::new)
-                            .map(FunctionMetadata.class::cast)
-                            .collect(Collectors.toMap(FunctionMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
-                    )
-                    .orElse(Collections.emptyMap());
+                .ofNullable(jsonObject.getJSONArray("functions"))
+                .map(Collection::stream)
+                .<Map<String, FunctionMetadata>>map(stream -> stream
+                    .map(obj -> new JetLinksDeviceFunctionMetadata(toJSONObject(obj)))
+                    .collect(Collectors.toMap(
+                        FunctionMetadata::getId,
+                        Function.identity(),
+                        (a, b) -> a, LinkedHashMap::new))
+                )
+                .orElse(Collections.emptyMap());
         }
         if (functions == null) {
             this.functions = new LinkedHashMap<>();
@@ -131,15 +142,17 @@ public class DefaultThingsMetadata implements ThingMetadata {
     public List<PropertyMetadata> getTags() {
         if (tags == null && jsonObject != null) {
             tags = Optional
-                    .ofNullable(jsonObject.getJSONArray("tags"))
-                    .map(Collection::stream)
-                    .<Map<String, PropertyMetadata>>map(stream -> stream
-                            .map(JSONObject.class::cast)
-                            .map(JetLinksPropertyMetadata::new)
-                            .map(PropertyMetadata.class::cast)
-                            .collect(Collectors.toMap(PropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
-                    )
-                    .orElse(Collections.emptyMap());
+                .ofNullable(jsonObject.getJSONArray("tags"))
+                .map(Collection::stream)
+                .<Map<String, PropertyMetadata>>map(stream -> stream
+                    .map(obj -> new JetLinksPropertyMetadata(toJSONObject(obj)))
+                    .collect(Collectors.toMap(
+                        PropertyMetadata::getId,
+                        Function.identity(),
+                        (a, b) -> a,
+                        LinkedHashMap::new))
+                )
+                .orElse(Collections.emptyMap());
         }
         if (tags == null) {
             this.tags = new LinkedHashMap<>();
@@ -151,15 +164,17 @@ public class DefaultThingsMetadata implements ThingMetadata {
     public List<EventMetadata> getEvents() {
         if (events == null && jsonObject != null) {
             events = Optional
-                    .ofNullable(jsonObject.getJSONArray("events"))
-                    .map(Collection::stream)
-                    .<Map<String, EventMetadata>>map(stream -> stream
-                            .map(JSONObject.class::cast)
-                            .map(JetLinksEventMetadata::new)
-                            .map(EventMetadata.class::cast)
-                            .collect(Collectors.toMap(EventMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new))
-                    )
-                    .orElse(Collections.emptyMap());
+                .ofNullable(jsonObject.getJSONArray("events"))
+                .map(Collection::stream)
+                .<Map<String, EventMetadata>>map(stream -> stream
+                    .map(obj -> new JetLinksEventMetadata(toJSONObject(obj)))
+                    .collect(Collectors.toMap(
+                        EventMetadata::getId,
+                        Function.identity(),
+                        (a, b) -> a,
+                        LinkedHashMap::new))
+                )
+                .orElse(Collections.emptyMap());
         }
         if (events == null) {
             this.events = new LinkedHashMap<>();

@@ -1,6 +1,8 @@
 package org.jetlinks.supports.official.types;
 
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
+import com.google.common.collect.Maps;
 import lombok.Getter;
 import lombok.Setter;
 import org.jetlinks.core.metadata.DataType;
@@ -8,6 +10,8 @@ import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.core.metadata.types.EnumType;
 import org.jetlinks.supports.official.JetLinksDataTypeCodecs;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -28,13 +32,23 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
         super.decode(type, config);
         JSONObject jsonObject = new JSONObject(config);
 
-        ofNullable(jsonObject.getJSONArray("elements"))
-            .map(list -> list
-                .stream()
-                .map(JSONObject.class::cast)
-                .map(e -> EnumType.Element.of(e.getString("value"), e.getString("text"), e.getString("description")))
-                .collect(Collectors.toList()))
-            .ifPresent(type::setElements);
+        JSONArray arr = jsonObject.getJSONArray("elements");
+        if (arr != null) {
+            List<EnumType.Element> elements = new ArrayList<>(arr.size());
+            for (Object obj : arr) {
+                if (obj instanceof Map) {
+                    elements.add(
+                        EnumType.Element.of(
+                            Maps.transformValues((Map<String, Object>) obj, String::valueOf)
+                        )
+                    );
+                } else if (obj instanceof EnumType.Element) {
+                    elements.add((EnumType.Element) obj);
+                }
+            }
+            type.setElements(elements);
+        }
+
 
         ofNullable(jsonObject.get("valueType"))
             .map(v -> {
@@ -49,8 +63,9 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
             .map(eleType -> {
                 DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
 
-                JetLinksDataTypeCodecs.getCodec(dataType.getId())
-                                      .ifPresent(codec -> codec.decode(dataType, eleType));
+                JetLinksDataTypeCodecs
+                    .getCodec(dataType.getId())
+                    .ifPresent(codec -> codec.decode(dataType, eleType));
 
                 return dataType;
             })
