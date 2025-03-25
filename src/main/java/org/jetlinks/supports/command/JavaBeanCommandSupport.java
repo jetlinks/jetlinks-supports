@@ -185,6 +185,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                                          ? schemaAnn.title()
                                          : metadata.getId());
                     metadata.setValueType(dataType);
+                    MetadataUtils
+                        .parseExpands(parameter.getAnnotations())
+                        .forEach(metadata::expand);
                     inputs.add(metadata);
                 }
                 invoker = cmd -> {
@@ -210,8 +213,15 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             applyMetadata(method, argTypes, metadata),
             method);
 
-        registerHandler(metadata.getId(), handler);
+        //优先注册子类重写的方法
+        registerHandlerAbsent(metadata.getId(), handler);
 
+    }
+
+    @SuppressWarnings("all")
+    protected <C extends Command<R>, R> void registerHandlerAbsent(String id,
+                                                                   CommandHandler<C, R> handler) {
+        handlers.computeIfAbsent(id, k -> (CommandHandler<Command<?>, ?>) handler);
     }
 
     protected FunctionMetadata applyMetadata(Method method,
