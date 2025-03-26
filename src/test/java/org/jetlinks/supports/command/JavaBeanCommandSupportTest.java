@@ -1,10 +1,13 @@
 package org.jetlinks.supports.command;
 
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.serializer.SerializerFeature;
 import com.google.common.collect.Sets;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
+import org.hibernate.validator.constraints.Range;
 import org.jetlinks.core.annotation.command.CommandHandler;
 import org.jetlinks.core.command.AbstractConvertCommand;
 import org.junit.Test;
@@ -71,6 +74,9 @@ public class JavaBeanCommandSupportTest {
             Sets.newHashSet("callSingleArg"));
 
         support.getCommandMetadata("callSingleArg")
+            .doOnNext(cmd->{
+                System.out.println(JSON.toJSONString(cmd.toJson(), SerializerFeature.PrettyFormat));
+            })
                .as(StepVerifier::create)
                .expectNextCount(1)
                .verifyComplete();
@@ -151,7 +157,7 @@ public class JavaBeanCommandSupportTest {
             return val + val2;
         }
 
-        public int callSingleArg(int val) {
+        public int callSingleArg(@Range(min = 10,max = 100) int val) {
             System.out.println("callSingleArg(" + val + ")");
             return val;
         }
