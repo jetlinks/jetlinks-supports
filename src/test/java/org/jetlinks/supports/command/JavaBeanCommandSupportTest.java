@@ -10,9 +10,13 @@ import lombok.ToString;
 import org.hibernate.validator.constraints.Range;
 import org.jetlinks.core.annotation.command.CommandHandler;
 import org.jetlinks.core.command.AbstractConvertCommand;
+import org.jetlinks.core.metadata.DataType;
+import org.jetlinks.core.metadata.types.ObjectType;
+import org.jetlinks.core.metadata.types.StringType;
 import org.junit.Test;
 import org.springframework.web.bind.annotation.RequestBody;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.Collections;
@@ -74,9 +78,9 @@ public class JavaBeanCommandSupportTest {
             Sets.newHashSet("callSingleArg"));
 
         support.getCommandMetadata("callSingleArg")
-            .doOnNext(cmd->{
-                System.out.println(JSON.toJSONString(cmd.toJson(), SerializerFeature.PrettyFormat));
-            })
+               .doOnNext(cmd -> {
+                   System.out.println(JSON.toJSONString(cmd.toJson(), SerializerFeature.PrettyFormat));
+               })
                .as(StepVerifier::create)
                .expectNextCount(1)
                .verifyComplete();
@@ -150,6 +154,29 @@ public class JavaBeanCommandSupportTest {
                .verifyComplete();
     }
 
+    @Test
+    public void testCustomOutput() {
+        MyBean bean = new MyBean();
+
+        JavaBeanCommandSupport support = new JavaBeanCommandSupport(
+            bean,
+            Sets.newHashSet("custom"));
+
+        support
+            .getCommandMetadata("custom")
+            .as(StepVerifier::create)
+            .expectNextMatches(metadata -> metadata.getOutput() instanceof StringType)
+            .verifyComplete();
+
+        support
+            .getCommandMetadata("custom", Collections.singletonMap("deviceId", "test"))
+//            .doOnNext(metadata -> System.out.println(JSON.toJSONString(metadata.toJson(), SerializerFeature.PrettyFormat)))
+            .as(StepVerifier::create)
+            .expectNextMatches(metadata -> metadata.getOutput() instanceof ObjectType)
+            .verifyComplete();
+
+    }
+
     public static class MyBean implements MyBeanApi<TestBody> {
 
         public String callMultiArg(int val, String val2) {
@@ -157,7 +184,7 @@ public class JavaBeanCommandSupportTest {
             return val + val2;
         }
 
-        public int callSingleArg(@Range(min = 10,max = 100) int val) {
+        public int callSingleArg(@Range(min = 10, max = 100) int val) {
             System.out.println("callSingleArg(" + val + ")");
             return val;
         }
@@ -178,6 +205,20 @@ public class JavaBeanCommandSupportTest {
         public void callVoid() {
             System.out.println("callVoid");
         }
+
+        @CommandHandler(outputProvider = "customOutput")
+        public String custom(String deviceId) {
+            return deviceId;
+        }
+
+        private Mono<DataType> customOutput(String deviceId) {
+            System.out.println("customOutput(" + deviceId + ")");
+            return Mono.just(
+                new ObjectType()
+                    .addProperty(deviceId, StringType.GLOBAL)
+            );
+        }
+
     }
 
     public interface MyBeanApi<T> {
