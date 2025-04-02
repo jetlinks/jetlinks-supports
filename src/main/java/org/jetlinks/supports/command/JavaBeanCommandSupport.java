@@ -169,7 +169,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 Object[] args = new Object[argTypes.length];
                 for (int i = 0; i < argTypes.length; i++) {
                     ResolvableType type = argTypes[i];
-                    args[i] = cmd.getOrNull(argNames[i], type.toClass());
+                    args[i] = cmd.getOrNull(argNames[i], type.getType());
                 }
                 return doInvoke(target, method, args);
             };
@@ -248,7 +248,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                     Object[] args = new Object[argTypes.length];
                     for (int i = 0; i < argTypes.length; i++) {
                         ResolvableType type = argTypes[i];
-                        args[i] = cmd.getOrNull(argNames[i], type.toClass());
+                        args[i] = cmd.getOrNull(argNames[i], type.getType());
                     }
                     return doInvoke(target, method, args);
                 };
