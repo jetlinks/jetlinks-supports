@@ -16,6 +16,7 @@ import reactor.core.Exceptions;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.concurrent.Queues;
 import reactor.util.context.Context;
 import reactor.util.context.ContextView;
@@ -203,7 +204,15 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
                 };
 
             PENDING.set(this, subscriber);
-            task.subscribe(subscriber);
+            if (Schedulers.isNonBlockingThread(Thread.currentThread())) {
+                task.subscribe(subscriber);
+            } else {
+                //在阻塞线程中,使用单独的调度器来执行.
+                Schedulers
+                    .parallel()
+                    .schedule(() -> task.subscribe(subscriber));
+            }
+
         }
 
         @Override
