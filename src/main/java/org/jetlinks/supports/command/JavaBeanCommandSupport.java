@@ -366,9 +366,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         metadata.setExpands(MetadataUtils.parseExpands(method));
 
-        for (Attr expand : annotation.expands()) {
-            metadata.expand(expand.key(), expand.value());
-        }
+        MetadataUtils.resolveAttrs(annotation.expands(),metadata::expand);
+      
         metadata.expand(CommandConstant.responseFlux,
                         Flux.class.isAssignableFrom(method.getReturnType()));
 

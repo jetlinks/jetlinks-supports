@@ -127,10 +127,10 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         }
         DeviceOperator deviceOperator = createOperator(deviceId);
         return deviceOperator
-            //有productId说明是存在的设备
-            .getSelfConfig(DeviceConfigKey.productId)
+            //有产品则认为是
+            .getProduct()
             .doOnNext(r -> operatorCache.put(deviceId, deviceOperator
-                .getSelfConfig(DeviceConfigKey.productId)
+                .getProduct()
                 .map(ignore -> deviceOperator)
                 //设备被注销了？则移除之
                 .switchIfEmpty(Mono.fromRunnable(() -> operatorCache.invalidate(deviceId)))
