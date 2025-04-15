@@ -127,7 +127,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         }
         DeviceOperator deviceOperator = createOperator(deviceId);
         return deviceOperator
-            //有产品则认为是
+            //有产品则认为存在
             .getProduct()
             .doOnNext(r -> operatorCache.put(deviceId, deviceOperator
                 .getProduct()
