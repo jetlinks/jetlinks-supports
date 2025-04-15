@@ -75,7 +75,6 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     private void init(Predicate<Method> filter) {
         Class<?> clazz = ClassUtils.getUserClass(target);
-
         ReflectionUtils
             .doWithMethods(
                 clazz,
@@ -146,7 +145,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             ResolvableType[] argTypes = this.argTypes;
             String[] argNames = this.argNames;
             Method method = this.method;
-            method.setAccessible(true);
+            ReflectionUtils.makeAccessible(method);
             if (argTypes.length == 0) {
                 return ignore -> doInvoke(target, method);
             }
@@ -367,7 +366,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         metadata.setExpands(MetadataUtils.parseExpands(method));
 
         MetadataUtils.resolveAttrs(annotation.expands(),metadata::expand);
-      
+
         metadata.expand(CommandConstant.responseFlux,
                         Flux.class.isAssignableFrom(method.getReturnType()));
 
