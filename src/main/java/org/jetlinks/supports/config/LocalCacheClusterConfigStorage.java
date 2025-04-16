@@ -4,6 +4,7 @@ import com.google.common.collect.Maps;
 import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.hswebframework.web.exception.BusinessException;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
@@ -22,6 +23,7 @@ import reactor.util.context.Context;
 
 import javax.annotation.Nonnull;
 import java.util.*;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
@@ -402,6 +404,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         volatile Sinks.One<Value> await;
         volatile Disposable loading;
 
+        @Override
+        public String toString() {
+            return key + ":" + version + "(" + cached + ")";
+        }
+
         public Cache(String key) {
             this.key = key;
             updateTime();
@@ -418,6 +425,14 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 return reload(loader);
             }
             updateTime();
+            Value cached = this.cached;
+            if (cached != null && !(ref instanceof Callable)) {
+                // 缓存加载错误？
+                if (loading == null && await != null) {
+                    error(new BusinessException.NoStackTrace("cache load error"));
+                }
+                return Mono.just(cached);
+            }
             return ref;
         }
 
@@ -466,6 +481,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                         id, key, value == null ? null : value.get(), version, this.version
                     );
                 }
+                CACHE_REF.set(this, null);
                 success = false;
             }
             dispose(cached == null ? value : cached);
@@ -485,7 +501,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     Mono<Value> ref = await.asMono();
                     CACHE_REF.set(this, ref);
                     Loader _loader = new Loader(this.version);
-                    CACHE_LOADING.set(this, _loader);
+                    Disposable old = CACHE_LOADING.getAndSet(this, _loader);
+                    if (old != null) {
+                        old.dispose();
+                    }
                     clusterCache
                         .get(key)
                         .switchIfEmpty(loader)
@@ -581,12 +600,27 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 if (!isDisposed()) {
                     upstream().cancel();
                 }
+                if (CACHE_LOADING.compareAndSet(Cache.this, this, null)) {
+                    @SuppressWarnings("all")
+                    Sinks.One<Object> await = AWAIT.getAndSet(Cache.this, null);
+                    if (await != null) {
+                        await.emitEmpty(Reactors.emitFailureHandler());
+                    }
+                }
             }
 
             @Override
             protected void hookFinally(@Nonnull SignalType type) {
-                CACHE_LOADING.compareAndSet(Cache.this, this, null);
+                if (type != SignalType.CANCEL) {
+                    CACHE_LOADING.compareAndSet(Cache.this, this, null);
+                }
             }
         }
+    }
+
+    @Override
+    public String toString() {
+
+        return caches.toString();
     }
 }
