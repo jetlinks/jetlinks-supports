@@ -431,7 +431,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 if (loading == null && await != null) {
                     error(new BusinessException.NoStackTrace("cache load error"));
                 }
-                return Mono.just(cached);
+                return cached.get() == null ? Mono.empty() : Mono.just(cached);
             }
             return ref;
         }
