@@ -36,15 +36,16 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
 
     @Override
     public Flux<Map.Entry<K, V>> get(Collection<K> key) {
-        return hash.multiGet(redisKey, key)
-                   .flatMapIterable(list -> {
-                       Object[] keyArr = key.toArray();
-                       List<Map.Entry<K, V>> entries = new ArrayList<>(keyArr.length);
-                       for (int i = 0; i < list.size(); i++) {
-                           entries.add(new RedisSimpleEntry((K) keyArr[i], list.get(i)));
-                       }
-                       return entries;
-                   });
+        return hash
+            .multiGet(redisKey, key)
+            .flatMapIterable(list -> {
+                Object[] keyArr = key.toArray();
+                List<Map.Entry<K, V>> entries = new ArrayList<>(keyArr.length);
+                for (int i = 0; i < list.size(); i++) {
+                    entries.add(new RedisSimpleEntry((K) keyArr[i], list.get(i)));
+                }
+                return entries;
+            });
     }
 
     @Override
@@ -108,10 +109,10 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
             Map<K, V> newTarget = new HashMap<>(multi);
             remove.forEach(newTarget::remove);
             return hash
-                    .remove(redisKey, remove.toArray())
-                    .then(newTarget.isEmpty()?
-                                  Reactors.ALWAYS_TRUE :
-                                  hash.putAll(redisKey, newTarget));
+                .remove(redisKey, remove.toArray())
+                .then(newTarget.isEmpty() ?
+                          Reactors.ALWAYS_TRUE :
+                          hash.putAll(redisKey, newTarget));
         }
         return hash.putAll(redisKey, multi);
     }
@@ -131,8 +132,8 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
     @Override
     public Mono<Void> clear() {
         return hash
-                .delete(redisKey)
-                .then();
+            .delete(redisKey)
+            .then();
     }
 
     class RedisSimpleEntry implements Map.Entry<K, V> {

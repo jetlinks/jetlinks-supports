@@ -61,7 +61,7 @@ public class EventBusStorageManagerTest {
 
         storage.setConfig("productId", "test").block();
 
-        Flux.range(0, 1000)
+        Flux.range(0, 10000)
             .flatMap(i -> Mono
                 .zip(
                     i % 10 == 0 ? Mono.just(i) : storage
@@ -69,24 +69,26 @@ public class EventBusStorageManagerTest {
                         .subscribeOn(Schedulers.boundedElastic())
                         .thenReturn(1),
                     storage.getConfig("productId")
-                           .subscribeOn(Schedulers.boundedElastic()),
+                           .subscribeOn(Schedulers.parallel()),
                     storage.getConfig("productId")
                            .subscribeOn(Schedulers.boundedElastic()),
                     Mono.fromRunnable(() -> storage.getConfig("productId").subscribe().dispose())
                         .thenReturn(1)
+                        .subscribeOn(Schedulers.parallel()),
+                    Mono.fromRunnable(() -> storage.getConfig("productId").subscribe().dispose())
+                        .thenReturn(1)
                         .subscribeOn(Schedulers.boundedElastic()),
                     storage.getConfig("productId")
-                           .subscribeOn(Schedulers.boundedElastic()),
+                           .subscribeOn(Schedulers.parallel()),
                     storage.getConfigs("productId", "deviceId")
                            .subscribeOn(Schedulers.boundedElastic()),
                     storage.getConfigs("productId", "deviceId")
-                           .subscribeOn(Schedulers.boundedElastic()),
-                    storage.getConfigs("productId", "deviceId")
-                           .subscribeOn(Schedulers.boundedElastic())
+                           .subscribeOn(Schedulers.parallel())
                 )
-                .subscribeOn(Schedulers.boundedElastic()))
+                .subscribeOn(Schedulers.boundedElastic()),
+                     Integer.MAX_VALUE)
             .as(StepVerifier::create)
-            .expectNextCount(1000)
+            .expectNextCount(10000)
             .verifyComplete();
 
         System.out.println(storage);
