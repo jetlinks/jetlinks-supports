@@ -2,7 +2,6 @@ package org.jetlinks.supports;
 
 import io.netty.buffer.Unpooled;
 import lombok.AllArgsConstructor;
-import org.jetlinks.core.Payload;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.message.codec.DefaultTransport;
 import org.jetlinks.core.message.codec.EncodedMessage;
@@ -79,8 +78,4 @@ public class TestDeviceSession implements DeviceSession {
 
     }
 
-
-    public static void main(String[] args) {
-        Payload.of(Unpooled.buffer());
-    }
 }

@@ -1,7 +1,6 @@
 package org.jetlinks.supports.event;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
 import lombok.AllArgsConstructor;
@@ -10,9 +9,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hswebframework.web.dict.EnumDict;
-import org.jetlinks.core.Payload;
-import org.jetlinks.core.codec.Decoder;
-import org.jetlinks.core.codec.Encoder;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
@@ -55,23 +51,6 @@ public class InternalEventBus implements EventBus {
                 ));
     }
 
-    @Override
-    public <T> Flux<T> subscribe(Subscription subscription, Decoder<T> decoder) {
-        return this
-            .subscribe(subscription)
-            .mapNotNull(payload -> {
-                try {
-                    //收到消息后解码
-                    return payload.decode(decoder, false);
-                } catch (Throwable e) {
-                    //忽略解码错误,如果返回错误,可能会导致整个流中断
-                    log.error("decode message [{}] error", payload.getTopic(), e);
-                } finally {
-                    ReferenceCountUtil.safeRelease(payload);
-                }
-                return null;
-            });
-    }
 
     @Override
     public <T> Flux<T> subscribe(Subscription subscription, Class<T> type) {
@@ -147,11 +126,6 @@ public class InternalEventBus implements EventBus {
     }
 
     @Override
-    public <T> Mono<Long> publish(String topic, Encoder<T> encoder, T event) {
-        return publish(topic, event);
-    }
-
-    @Override
     public <T> Mono<Long> publish(String topic, T event) {
         return doPublish(topic,
                          event,
@@ -202,26 +176,11 @@ public class InternalEventBus implements EventBus {
     }
 
     private <T> Mono<Void> publishFromLocal(String topic, T value, List<SubscriptionInfo> subs, ContextView ctx) {
-        TopicPayload payload = TopicPayload.of(topic, Payload.of(value, null));
+        TopicPayload payload = TopicPayload.of(topic,value);
 
         TraceHolder.writeContextTo(ctx, payload, TopicPayload::addHeader);
 
         return doPublish0(topic, payload, subs, ctx);
-    }
-
-    @Override
-    public <T> Mono<Long> publish(String topic,
-                                  Encoder<T> encoder,
-                                  Publisher<? extends T> eventStream) {
-        return publish(topic, eventStream);
-    }
-
-    @Override
-    public <T> Mono<Long> publish(String topic,
-                                  Encoder<T> encoder,
-                                  Publisher<? extends T> eventStream,
-                                  Scheduler scheduler) {
-        return publish(topic, eventStream);
     }
 
     private static final FastThreadLocal<Set<SubscriptionInfo>> PUB_HANDLERS = new FastThreadLocal<Set<SubscriptionInfo>>() {

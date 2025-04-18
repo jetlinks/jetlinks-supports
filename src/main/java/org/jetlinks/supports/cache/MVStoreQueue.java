@@ -5,19 +5,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.h2.mvstore.*;
 import org.h2.mvstore.type.DataType;
 import org.jetlinks.core.cache.FileQueue;
-import org.jetlinks.core.codec.Codec;
 import org.jetlinks.core.config.ConfigKey;
 import org.jetlinks.core.utils.ConverterUtils;
 import org.jetlinks.supports.utils.MVStoreUtils;
 import org.springframework.util.Assert;
 
 import javax.annotation.Nonnull;
-import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Callable;
@@ -397,11 +392,6 @@ class MVStoreQueue<T> implements FileQueue<T> {
         @Override
         public FileQueue.Builder<T> name(String name) {
             this.name = name;
-            return this;
-        }
-
-        @Override
-        public FileQueue.Builder<T> codec(Codec<T> codec) {
             return this;
         }
 
