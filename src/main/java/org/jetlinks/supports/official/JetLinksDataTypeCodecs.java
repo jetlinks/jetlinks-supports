@@ -4,13 +4,13 @@ import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.DataTypeCodec;
 import org.jetlinks.supports.official.types.*;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class JetLinksDataTypeCodecs {
 
-    private static final Map<String, DataTypeCodec<? extends DataType>> codecMap = new HashMap<>();
+    private static final Map<String, DataTypeCodec<? extends DataType>> codecMap = new ConcurrentHashMap<>();
 
     static {
         register(new JetLinksArrayCodec());
@@ -29,6 +29,10 @@ public class JetLinksDataTypeCodecs {
         register(new JetLinksGeoShapeCodec());
         register(new JetLinksUserCodec());
         register(new JetLinksShortCodec());
+        register(new JetLinksByteCodec());
+    }
+
+    private JetLinksDataTypeCodecs() {
     }
 
     public static void register(DataTypeCodec<? extends DataType> codec) {
