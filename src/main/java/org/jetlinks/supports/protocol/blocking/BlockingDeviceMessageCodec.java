@@ -1,5 +1,6 @@
 package org.jetlinks.supports.protocol.blocking;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import org.jetlinks.core.command.CommandSupport;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.message.DeviceMessage;
@@ -16,7 +17,6 @@ import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.core.things.BlockingThingsDataManager;
 import org.jetlinks.core.things.ThingsDataManager;
 import org.jetlinks.core.utils.Reactors;
-import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -223,6 +223,8 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
     }
 
     protected boolean isInNonBlocking() {
-        return Schedulers.isNonBlockingThread(Thread.currentThread());
+        Thread thread = Thread.currentThread();
+        return Schedulers.isNonBlockingThread(thread)
+            || thread instanceof FastThreadLocalThread;
     }
 }
