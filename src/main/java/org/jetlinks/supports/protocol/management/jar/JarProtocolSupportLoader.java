@@ -4,6 +4,7 @@ import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.ProtocolSupport;
+import org.jetlinks.core.monitor.Monitor;
 import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.core.trace.MonoTracer;
@@ -43,8 +44,8 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
         return "jar";
     }
 
-    protected ProtocolClassLoader createClassLoader(URL location) {
-        return new ProtocolClassLoader(new URL[]{location}, this.getClass().getClassLoader());
+    protected ProtocolClassLoader createClassLoader(Monitor monitor, URL location) {
+        return new ProtocolClassLoader(monitor,new URL[]{location}, this.getClass().getClassLoader());
     }
 
     protected void closeAll() {
@@ -92,6 +93,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                             oldProvider.dispose();
                         }
                     }
+                    ServiceContext context = createServiceContext(definition);
                     loader = protocolLoaders.compute(id, (key, old) -> {
                         if (null != old) {
                             try {
@@ -99,7 +101,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                             } catch (Exception ignore) {
                             }
                         }
-                        return createClassLoader(fLocation);
+                        return createClassLoader(context.getMonitor(),fLocation);
                     });
 
                     ProtocolSupportProvider supportProvider;
@@ -121,7 +123,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                     } catch (Throwable e) {
                         log.error(e.getMessage(), e);
                     }
-                    return supportProvider.create(createServiceContext(definition));
+                    return supportProvider.create(context);
                 } catch (Throwable e) {
                     return Mono.error(e);
                 }
