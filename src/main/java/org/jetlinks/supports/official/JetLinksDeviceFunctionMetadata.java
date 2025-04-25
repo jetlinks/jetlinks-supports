@@ -79,10 +79,12 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     public List<PropertyMetadata> getInputs() {
         if (inputs == null && jsonObject != null) {
             JSONArray arr = jsonObject.getJSONArray("inputs");
-            inputs = new ArrayList<>(arr.size());
-            for (int i = 0, size = arr.size(); i < size; i++) {
-                JSONObject object = arr.getJSONObject(i);
-                inputs.add(new JetLinksPropertyMetadata(object));
+            if (arr != null) {
+                inputs = new ArrayList<>(arr.size());
+                for (int i = 0, size = arr.size(); i < size; i++) {
+                    JSONObject object = arr.getJSONObject(i);
+                    inputs.add(new JetLinksPropertyMetadata(object));
+                }
             }
         }
         if (inputs == null && another != null) {
