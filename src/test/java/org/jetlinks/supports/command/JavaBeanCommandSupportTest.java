@@ -10,10 +10,13 @@ import lombok.ToString;
 import org.hibernate.validator.constraints.Range;
 import org.jetlinks.core.annotation.command.CommandHandler;
 import org.jetlinks.core.command.AbstractConvertCommand;
+import org.jetlinks.core.command.CommandSupport;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.types.ObjectType;
 import org.jetlinks.core.metadata.types.StringType;
 import org.junit.Test;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.ResolvableType;
 import org.springframework.web.bind.annotation.RequestBody;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -177,6 +180,34 @@ public class JavaBeanCommandSupportTest {
 
     }
 
+    @Test
+    public void testTemplate() {
+
+        // 使用接口定义模版
+        JavaBeanCommandSupport template =
+            JavaBeanCommandSupport.createTemplate(ResolvableType.forClassWithGenerics(MyBeanApi.class, TestBody.class));
+
+        template.getCommandMetadata()
+                .subscribe(System.out::println);
+
+        // 创建实现
+        CommandSupport copy = template.copyWith(new MyBean() {
+            @Override
+            public TestBody callBody(TestBody data) {
+                data.data = 234;
+                return super.callBody(data);
+            }
+        });
+        // 执行
+        copy
+            .executeToMono("callBody", Collections.singletonMap("data", "123"))
+            .as(StepVerifier::create)
+            .expectNextCount(1)
+            .verifyComplete();
+
+
+    }
+
     public static class MyBean implements MyBeanApi<TestBody> {
 
         public String callMultiArg(int val, String val2) {
@@ -223,6 +254,7 @@ public class JavaBeanCommandSupportTest {
 
     public interface MyBeanApi<T> {
 
+        @CommandHandler
         default T callBody(@RequestBody T data) {
             System.out.println("callBody(" + data + ")");
             return data;

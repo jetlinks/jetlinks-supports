@@ -5,7 +5,6 @@ import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.hswebframework.web.aop.MethodInterceptorHolder;
 import org.hswebframework.web.i18n.LocaleUtils;
-import org.jetlinks.core.annotation.Attr;
 import org.jetlinks.core.command.*;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.ObjectType;
@@ -13,6 +12,7 @@ import org.jetlinks.core.utils.MetadataUtils;
 import org.jetlinks.supports.official.DeviceMetadataParser;
 import org.reactivestreams.Publisher;
 import org.springframework.beans.MethodInvocationException;
+import org.springframework.core.MethodParameter;
 import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.annotation.AnnotationUtils;
@@ -22,6 +22,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestBody;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.function.Function3;
 
 import javax.annotation.Nonnull;
 import java.lang.reflect.Method;
@@ -32,7 +33,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -58,6 +58,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     };
 
     protected final Object target;
+    protected final ResolvableType targetType;
 
     public JavaBeanCommandSupport(Object target, Collection<String> filter) {
         this(target, m -> filter.contains(m.getName()));
@@ -65,6 +66,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     public JavaBeanCommandSupport(Object target, Predicate<Method> filter) {
         this.target = target;
+        this.targetType = ResolvableType.forInstance(target);
         init(defaultFilter.and(filter));
     }
 
@@ -73,14 +75,32 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
     }
 
+    JavaBeanCommandSupport(ResolvableType targetType, Collection<String> filter) {
+        this(targetType, m -> filter.contains(m.getName()));
+    }
+
+    JavaBeanCommandSupport(ResolvableType targetType, Predicate<Method> filter) {
+        this.target = null;
+        this.targetType = targetType;
+        init(defaultFilter.and(filter));
+    }
+
+    JavaBeanCommandSupport(ResolvableType targetType) {
+        this(targetType, method -> AnnotatedElementUtils
+            .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
+    }
+
+    public static JavaBeanCommandSupport createTemplate(ResolvableType type) {
+        return new JavaBeanCommandSupport(type);
+    }
+
     private void init(Predicate<Method> filter) {
-        Class<?> clazz = ClassUtils.getUserClass(target);
         ReflectionUtils
             .doWithMethods(
-                clazz,
+                targetType.toClass(),
                 method -> {
                     if (filter.test(method)) {
-                        register(method, clazz);
+                        register(method);
                     }
                 });
     }
@@ -112,20 +132,20 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             .collect(Collectors.toList());
     }
 
-    private class MethodDesc {
+    private static class MethodDesc {
         final ResolvableType[] argTypes;
         final String[] argNames;
         final Method method;
         final ResolvableType returnType;
         final Parameter[] parameters;
 
-        public MethodDesc(Class<?> owner, Method method) {
+        public MethodDesc(ResolvableType owner, Method method) {
             this.method = method;
             argTypes = new ResolvableType[method.getParameterCount()];
             argNames = new String[method.getParameterCount()];
             parameters = method.getParameters();
             for (int i = 0; i < method.getParameterCount(); i++) {
-                argTypes[i] = ResolvableType.forMethodParameter(method, i, owner);
+                argTypes[i] = ResolvableType.forMethodParameter(new MethodParameter(method,i), owner);
             }
             String[] discoveredArgName = MethodInterceptorHolder.nameDiscoverer.getParameterNames(method);
 
@@ -138,7 +158,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                     argNames[i] = (discoveredArgName != null && discoveredArgName.length > i) ? discoveredArgName[i] : "arg" + i;
                 }
             }
-            returnType = ResolvableType.forMethodReturnType(method, owner);
+            returnType = ResolvableType.forMethodParameter(new MethodParameter(method,-1), owner);
         }
 
         public MethodInvoker createMethodInvoker() {
@@ -147,24 +167,24 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             Method method = this.method;
             ReflectionUtils.makeAccessible(method);
             if (argTypes.length == 0) {
-                return ignore -> doInvoke(target, method);
+                return (target, ignore) -> doInvoke(target, method);
             }
             if (argTypes.length == 1) {
                 if (Command.class.isAssignableFrom(argTypes[0].toClass())) {
-                    return new CommandInvoker(target, method, argTypes[0]);
+                    return new CommandInvoker(method, argTypes[0]);
                 }
             }
             //转换为实体类
             RequestBody requestBody = AnnotationUtils.findAnnotation(parameters[0], RequestBody.class);
             if (requestBody != null) {
                 Type type = argTypes[0].toClass();
-                return cmd -> {
+                return (target, cmd) -> {
                     Object param = cmd.as(type);
                     return doInvoke(target, method, param);
                 };
             }
 
-            return cmd -> {
+            return (target, cmd) -> {
                 Object[] args = new Object[argTypes.length];
                 for (int i = 0; i < argTypes.length; i++) {
                     ResolvableType type = argTypes[i];
@@ -176,15 +196,15 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     }
 
-    private void register(Method method, Class<?> owner) {
+    private void register(Method method) {
+        ResolvableType owner = targetType;
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
-        Object target = this.target;
         String id = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
         String name = id;
         String description = id;
 
         MethodDesc desc = new MethodDesc(owner, method);
-        ResolvableType returnType = ResolvableType.forMethodReturnType(method, owner);
+        ResolvableType returnType = ResolvableType.forMethodParameter(new MethodParameter(method,-1), owner);
         DataType output = null;
         MethodInvoker invoker = null;
         Parameter[] parameters = desc.parameters;
@@ -195,12 +215,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             output = DeviceMetadataParser.withType(returnType);
         }
         if (argTypes.length == 0) {
-            invoker = ignore -> doInvoke(target, method);
+            invoker = (_target, ignore) -> doInvoke(_target, method);
         } else {
             if (argTypes.length == 1) {
                 //参数就是命令
                 if (Command.class.isAssignableFrom(argTypes[0].toClass())) {
-                    invoker = new CommandInvoker(target, method, argTypes[0]);
+                    invoker = new CommandInvoker(method, argTypes[0]);
                     //不解析出参，以方法出参为准
                     FunctionMetadata resolve = CommandMetadataResolver.resolve(desc.argTypes[0], ResolvableType.NONE);
                     id = resolve.getId();
@@ -216,9 +236,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                             inputs = ((ObjectType) metadataType).getProperties();
                         }
                         Type type = argTypes[0].toClass();
-                        invoker = cmd -> {
+                        invoker = (_target, cmd) -> {
                             Object param = cmd.as(type);
-                            return doInvoke(target, method, param);
+                            return doInvoke(_target, method, param);
                         };
                     }
                 }
@@ -243,13 +263,13 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                         .forEach(metadata::expand);
                     inputs.add(metadata);
                 }
-                invoker = cmd -> {
+                invoker = (_target, cmd) -> {
                     Object[] args = new Object[argTypes.length];
                     for (int i = 0; i < argTypes.length; i++) {
                         ResolvableType type = argTypes[i];
                         args[i] = cmd.getOrNull(argNames[i], type.getType());
                     }
-                    return doInvoke(target, method, args);
+                    return doInvoke(_target, method, args);
                 };
             }
         }
@@ -262,6 +282,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         metadata.setDescription(schema != null && StringUtils.hasText(schema.description()) ? schema.description() : description);
 
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
+            this.target,
             invoker,
             applyMetadata(method, argTypes, metadata),
             createMetadataHandler(owner, method),
@@ -279,9 +300,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     }
 
     private static final MetadataHandler DO_NOTHING_HANDLER =
-        (cmd, metadata) -> Mono.just(metadata);
+        (target, cmd, metadata) -> Mono.just(metadata);
 
-    private MetadataHandler createMetadataHandler(Class<?> owner, Method method) {
+    private MetadataHandler createMetadataHandler(ResolvableType owner, Method method) {
 
         org.jetlinks.core.annotation.command.CommandHandler annotation = AnnotatedElementUtils
             .getMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class);
@@ -290,7 +311,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
         String provider = annotation.outputProvider();
         Method providerMethod = ReflectionUtils.findMethod(
-            ClassUtils.getUserClass(target),
+            targetType.toClass(),
             provider,
             (Class<?>[]) null);
         if (providerMethod == null) {
@@ -321,9 +342,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
 
         @Override
-        public Mono<FunctionMetadata> apply(Command<?> objectCommand, SimpleFunctionMetadata metadata) {
+        public Mono<FunctionMetadata> apply(Object target, Command<?> objectCommand, SimpleFunctionMetadata metadata) {
             @SuppressWarnings("all")
-            Object object = invoker.apply((Command<Object>) objectCommand);
+            Object object = invoker.apply(target, (Command<Object>) objectCommand);
             if (object instanceof Publisher) {
                 return Mono.from(((Publisher<?>) object))
                            .flatMap(data -> convertMetadata(data, metadata));
@@ -365,7 +386,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         metadata.setExpands(MetadataUtils.parseExpands(method));
 
-        MetadataUtils.resolveAttrs(annotation.expands(),metadata::expand);
+        MetadataUtils.resolveAttrs(annotation.expands(), metadata::expand);
 
         metadata.expand(CommandConstant.responseFlux,
                         Flux.class.isAssignableFrom(method.getReturnType()));
@@ -380,23 +401,22 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         return metadata;
     }
 
-    interface MethodInvoker extends Function<Command<Object>, Object> {
+    interface MethodInvoker extends BiFunction<Object, Command<Object>, Object> {
 
     }
 
-    interface MetadataHandler extends BiFunction<Command<?>, SimpleFunctionMetadata, Mono<FunctionMetadata>> {
+    interface MetadataHandler extends Function3<Object, Command<?>, SimpleFunctionMetadata, Mono<FunctionMetadata>> {
         @Override
-        Mono<FunctionMetadata> apply(Command<?> objectCommand, SimpleFunctionMetadata metadata);
+        Mono<FunctionMetadata> apply(Object target, Command<?> objectCommand, SimpleFunctionMetadata metadata);
     }
 
     @AllArgsConstructor
     static class CommandInvoker implements MethodInvoker {
-        private final Object target;
         private final Method method;
         private final ResolvableType type;
 
         @Override
-        public Object apply(Command<Object> objectCommand) {
+        public Object apply(Object target, Command<Object> objectCommand) {
             //类型相同直接调用
             if (type.toClass().isInstance(objectCommand)) {
                 return doInvoke(target, method, objectCommand);
@@ -418,22 +438,65 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     }
 
+    /**
+     * 将当前命令支持作为模版，使用另外一个实现类来执行命令调用。
+     *
+     * @param target 实现类实例
+     * @return CommandSupport
+     */
+    public CommandSupport copyWith(Object target) {
+        return new CopyJavaBeanCommandSupport(this, target);
+    }
+
+    static class CopyJavaBeanCommandSupport extends TemplateCommandSupport {
+        private final Object target;
+
+        public CopyJavaBeanCommandSupport(JavaBeanCommandSupport parent, Object target) {
+            super(parent);
+            this.target = target;
+        }
+
+        @Nonnull
+        @Override
+        @SuppressWarnings("all")
+        public <R> R execute(@Nonnull Command<R> command) {
+            JavaBeanCommandSupport parent = template.unwrap(JavaBeanCommandSupport.class);
+            //从注册的执行器中获取处理器进行执行
+            CommandHandler handler = parent.handlers.get(command.getCommandId());
+            if (handler instanceof MethodCallCommandHandler) {
+                handler = ((MethodCallCommandHandler) handler).with(target);
+            }
+            if (handler == null) {
+                return parent.executeUndefinedCommand(command);
+            }
+            return (R) handler.handle(command, parent);
+        }
+    }
+
     @AllArgsConstructor
     static class MethodCallCommandHandler implements CommandHandler<Command<Object>, Object> {
+        private final Object target;
         private final MethodInvoker invoker;
         private final SimpleFunctionMetadata metadata;
         private final MetadataHandler metadataHandler;
         private final Method method;
 
+        MethodCallCommandHandler with(Object target) {
+            return new MethodCallCommandHandler(target, invoker, metadata, metadataHandler, method);
+        }
+
         @Override
         public Object handle(@Nonnull Command<Object> command,
                              @Nonnull CommandSupport support) {
-            return invoker.apply(command);
+            if (target == null) {
+                throw new UnsupportedOperationException("unsupported call not implement method " + method);
+            }
+            return invoker.apply(target, command);
         }
 
         @Override
         public Mono<FunctionMetadata> getMetadata(Command<?> cmd) {
-            return metadataHandler.apply(cmd, metadata);
+            return metadataHandler.apply(target, cmd, metadata);
         }
 
         @Nonnull
