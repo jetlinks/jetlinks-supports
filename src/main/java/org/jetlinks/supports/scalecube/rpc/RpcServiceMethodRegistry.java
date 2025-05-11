@@ -5,6 +5,8 @@ import io.scalecube.services.ServiceInfo;
 import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodInvoker;
 import io.scalecube.services.methods.ServiceMethodRegistry;
+import lombok.Setter;
+import org.jetlinks.core.rpc.ContextCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
@@ -25,6 +27,9 @@ class RpcServiceMethodRegistry implements ServiceMethodRegistry {
 
     private final ConcurrentMap<String, ServiceMethodInvoker> methodInvokers =
         new ConcurrentHashMap<>();
+
+    @Setter
+    private ContextCodec contextCodec = ContextCodec.DEFAULT;
 
     Disposable registerService0(ServiceInfo serviceInfo) {
         Disposable.Composite disposable = Disposables.composite();
@@ -67,6 +72,7 @@ class RpcServiceMethodRegistry implements ServiceMethodRegistry {
                                    serviceInfo.dataDecoder(),
                                    serviceInfo.authenticator(),
                                    serviceInfo.principalMapper());
+                           methodInvoker.setContextCodec(contextCodec);
 
                            methodInvokers.put(methodInfo.qualifier(), methodInvoker);
                            methodInvokers.put(methodInfo.oldQualifier(), methodInvoker);

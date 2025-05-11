@@ -28,9 +28,7 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jctools.maps.NonBlockingHashSet;
-import org.jetlinks.core.rpc.RpcManager;
-import org.jetlinks.core.rpc.RpcService;
-import org.jetlinks.core.rpc.ServiceEvent;
+import org.jetlinks.core.rpc.*;
 import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.HashUtils;
 import org.jetlinks.core.utils.Reactors;
@@ -47,6 +45,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.util.context.Context;
+import reactor.util.context.ContextView;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
@@ -94,7 +93,11 @@ public class ScalecubeRpcManager implements RpcManager {
     static final String SERVICE_NAME_TAG = "_sname";
     static final String REGISTER_TIME_TAG = "_regtime";
 
+    public static final String HEADER_CONTEXT = ".ctx";
+
     private ExtendedCluster cluster;
+
+    private ContextCodec contextCodec = ContextCodec.DEFAULT;
 
     private ServiceCall serviceCall;
 
@@ -172,6 +175,11 @@ public class ScalecubeRpcManager implements RpcManager {
         this.externalHost = another.externalHost;
         this.externalPort = another.externalPort;
         this.contentType = another.contentType;
+    }
+
+    public void setContextCodec(ContextCodec contextCodec) {
+        this.contextCodec = contextCodec;
+        methodRegistry.setContextCodec(contextCodec);
     }
 
     @Override
@@ -804,13 +812,22 @@ public class ScalecubeRpcManager implements RpcManager {
             return builder;
         }
 
-        private Mono<ServiceMessage> toServiceMessage(MethodInfo methodInfo, Object request) {
+        private ServiceMessage toServiceMessage(ContextView ctx,
+                                                MethodInfo methodInfo,
+                                                Object request,
+                                                SerializedContext serialized) {
 
-            ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, request);
+            ServiceMessage.Builder builder = TraceHolder
+                .writeContextTo(ctx, toServiceMessageBuilder(methodInfo, request), (ServiceMessage.Builder::header));
+
+            String sctx = serialized.getContext();
+            if (sctx != null) {
+                builder = builder.header(HEADER_CONTEXT, sctx);
+            }
 
             return TraceHolder
-                .writeContextTo(builder, (ServiceMessage.Builder::header))
-                .map(ServiceMessage.Builder::build);
+                .writeContextTo(ctx, builder, (ServiceMessage.Builder::header))
+                .build();
 
         }
 
@@ -864,51 +881,62 @@ public class ScalecubeRpcManager implements RpcManager {
 
                             switch (methodInfo.communicationMode()) {
                                 case FIRE_AND_FORGET:
-                                    return toServiceMessage(methodInfo, request)
-                                        .flatMap(serviceCall::oneWay)
-                                        .subscribeOn(requestScheduler)
-                                        .retryWhen(getRetry(method));
+                                    return Mono
+                                        .deferContextual(ctx -> {
+                                            SerializedContext serialize = contextCodec.serialize(ctx);
+                                            return serviceCall
+                                                .oneWay(toServiceMessage(ctx, methodInfo, request, serialize))
+                                                .subscribeOn(requestScheduler)
+                                                .retryWhen(getRetry(method))
+                                                .doFinally(ignore -> serialize.dispose());
+                                        });
 
                                 case REQUEST_RESPONSE:
-                                    return toServiceMessage(methodInfo, request)
-                                        .flatMap(msg -> serviceCall.requestOne(msg, returnType))
-                                        .subscribeOn(requestScheduler)
-                                        .transform(asMono(isServiceMessage))
-                                        .retryWhen(getRetry(method));
+                                    return Mono
+                                        .deferContextual(ctx -> {
+                                            SerializedContext serialize = contextCodec.serialize(ctx);
+                                            return serviceCall
+                                                .requestOne(toServiceMessage(ctx, methodInfo, request, serialize),returnType)
+                                                .subscribeOn(requestScheduler)
+                                                .retryWhen(getRetry(method))
+                                                .doFinally(ignore -> serialize.dispose());
+                                        })
+                                        .transform(asMono(isServiceMessage));
 
                                 case REQUEST_STREAM:
-
-                                    return toServiceMessage(methodInfo, request)
-                                        .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
-                                        .subscribeOn(requestScheduler)
-                                        .transform(asFlux(isServiceMessage))
-                                        .retryWhen(getRetry(method));
+                                    return Flux
+                                        .deferContextual(ctx -> {
+                                            SerializedContext serialize = contextCodec.serialize(ctx);
+                                            return serviceCall
+                                                .requestMany(toServiceMessage(ctx, methodInfo, request, serialize),returnType)
+                                                .subscribeOn(requestScheduler)
+                                                .retryWhen(getRetry(method))
+                                                .doFinally(ignore -> serialize.dispose());
+                                        })
+                                        .transform(asFlux(isServiceMessage));
 
                                 case REQUEST_CHANNEL:
                                     // this is REQUEST_CHANNEL so it means params[0] must
                                     // be a publisher - its safe to cast.
                                     //noinspection rawtypes
-                                    return serviceCall
-                                        .requestBidirectional(
-                                            Flux.deferContextual(ctx -> {
-                                                return Flux
-                                                    .from((Publisher<?>) request)
-                                                    .index((o, data) -> {
-                                                        if (o == 0) {
-                                                            return TraceHolder
-                                                                .writeContextTo(
-                                                                    ctx,
-                                                                    toServiceMessageBuilder(methodInfo, data),
-                                                                    ServiceMessage.Builder::header)
-                                                                .build();
-                                                        }
-                                                        return toServiceMessageBuilder(methodInfo, data).build();
-                                                    });
-                                            }),
-                                            returnType)
-                                        .subscribeOn(requestScheduler)
-                                        .transform(asFlux(isServiceMessage))
-                                        .retryWhen(getRetry(method));
+                                    return Flux
+                                        .deferContextual(ctx -> {
+                                            SerializedContext serialize = contextCodec.serialize(ctx);
+                                            return serviceCall
+                                                .requestBidirectional(
+                                                    Flux
+                                                        .from((Publisher<?>) request)
+                                                        .index((o, data) -> {
+                                                            if (o == 0) {
+                                                                return toServiceMessage(ctx, methodInfo, request, serialize);
+                                                            }
+                                                            return toServiceMessageBuilder(methodInfo, data).build();
+                                                        }), returnType)
+                                                .subscribeOn(requestScheduler)
+                                                .retryWhen(getRetry(method))
+                                                .doFinally(ignore -> serialize.dispose());
+                                        })
+                                        .transform(asFlux(isServiceMessage));
 
                                 default:
                                     throw new IllegalArgumentException(

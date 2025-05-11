@@ -1,5 +1,8 @@
 package io.scalecube.services.methods;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.base64.Base64;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.auth.Authenticator;
 import io.scalecube.services.auth.PrincipalMapper;
@@ -8,6 +11,8 @@ import io.scalecube.services.exceptions.ServiceException;
 import io.scalecube.services.exceptions.ServiceProviderErrorMapper;
 import io.scalecube.services.exceptions.UnauthorizedException;
 import io.scalecube.services.transport.api.ServiceMessageDataDecoder;
+import lombok.Setter;
+import org.jetlinks.core.rpc.ContextCodec;
 import org.jetlinks.core.trace.TraceHolder;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
@@ -19,12 +24,14 @@ import reactor.util.context.ContextView;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
 
 import static io.scalecube.services.auth.Authenticator.AUTH_CONTEXT_KEY;
 import static io.scalecube.services.auth.Authenticator.NULL_AUTH_CONTEXT;
+import static org.jetlinks.supports.scalecube.rpc.ScalecubeRpcManager.HEADER_CONTEXT;
 
 public final class ServiceMethodInvoker {
 
@@ -37,6 +44,8 @@ public final class ServiceMethodInvoker {
     private final ServiceMessageDataDecoder dataDecoder;
     private final Authenticator<Object> authenticator;
     private final PrincipalMapper<Object, Object> principalMapper;
+    @Setter
+    private ContextCodec contextCodec = ContextCodec.DEFAULT;
 
     /**
      * Constructs a service method invoker out of real service object instance and method info.
@@ -140,20 +149,26 @@ public final class ServiceMethodInvoker {
 //                                       Flux.just(errorMapper.toMessage(first.get().qualifier(), throwable))));
     }
 
+    private Context decodeContext(Context ctx, ServiceMessage message) {
+        ctx = TraceHolder
+            .readToContext(
+                ctx,
+                message.headers());
+        String context = message.header(HEADER_CONTEXT);
+        if (context != null) {
+            ctx = ctx.putAll(contextCodec.deserialize(ctx,() -> context).readOnly());
+        }
+        return ctx;
+    }
+
     private Mono<?> deferWithContextOne(ServiceMessage message, Object authData) {
         return Mono.from(invoke(toRequest(message)))
-                   .contextWrite(context -> TraceHolder
-                       .readToContext(
-                           enhanceContext(authData, context),
-                           message.headers()));
+                   .contextWrite(context -> decodeContext(enhanceContext(authData, context), message));
     }
 
     private Flux<?> deferWithContextMany(ServiceMessage message, Object authData) {
         return Flux.from(invoke(toRequest(message)))
-                   .contextWrite(context -> TraceHolder
-                       .readToContext(
-                           enhanceContext(authData, context),
-                           message.headers()));
+                   .contextWrite(context -> decodeContext(enhanceContext(authData, context), message));
     }
 
     private Flux<?> deferWithContextBidirectional(Flux<ServiceMessage> messages, Object authData) {
@@ -164,7 +179,7 @@ public final class ServiceMethodInvoker {
                     return flux
                         .map(this::toRequest)
                         .transform(this::invoke)
-                        .contextWrite(TraceHolder.readToContext(s.getContextView(), msg.headers()));
+                        .contextWrite(context -> decodeContext(enhanceContext(authData, context), msg));
                 }
                 return flux;
             })
