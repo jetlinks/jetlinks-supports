@@ -461,7 +461,7 @@ public class ScalecubeRpcManager implements RpcManager {
             .fromServiceInstance(rpcService)
             .errorMapper(errorMapper)
             .dataDecoder((msg, type) -> {
-                if (type.isAssignableFrom(ByteBuf.class) && msg.hasData(ByteBuf.class)) {
+                if (type == ByteBuf.class && msg.hasData(ByteBuf.class)) {
                     return ServiceMessage
                         .from(msg)
                         .data(msg.data())
@@ -928,7 +928,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                                         .from((Publisher<?>) request)
                                                         .index((o, data) -> {
                                                             if (o == 0) {
-                                                                return toServiceMessage(ctx, methodInfo, request, serialize);
+                                                                return toServiceMessage(ctx, methodInfo, data, serialize);
                                                             }
                                                             return toServiceMessageBuilder(methodInfo, data).build();
                                                         }), returnType)

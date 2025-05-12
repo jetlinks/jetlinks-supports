@@ -6,8 +6,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.hswebframework.web.aop.MethodInterceptorHolder;
 import org.hswebframework.web.i18n.LocaleUtils;
 import org.jetlinks.core.command.*;
+import org.jetlinks.core.lang.SeparatedCharSequence;
+import org.jetlinks.core.lang.SharedPathString;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.metadata.types.ObjectType;
+import org.jetlinks.core.trace.FluxTracer;
+import org.jetlinks.core.trace.MonoTracer;
+import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.MetadataUtils;
 import org.jetlinks.supports.official.DeviceMetadataParser;
 import org.reactivestreams.Publisher;
@@ -32,7 +37,9 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -145,7 +152,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             argNames = new String[method.getParameterCount()];
             parameters = method.getParameters();
             for (int i = 0; i < method.getParameterCount(); i++) {
-                argTypes[i] = ResolvableType.forMethodParameter(new MethodParameter(method,i), owner);
+                argTypes[i] = ResolvableType.forMethodParameter(new MethodParameter(method, i), owner);
             }
             String[] discoveredArgName = MethodInterceptorHolder.nameDiscoverer.getParameterNames(method);
 
@@ -158,7 +165,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                     argNames[i] = (discoveredArgName != null && discoveredArgName.length > i) ? discoveredArgName[i] : "arg" + i;
                 }
             }
-            returnType = ResolvableType.forMethodParameter(new MethodParameter(method,-1), owner);
+            returnType = ResolvableType.forMethodParameter(new MethodParameter(method, -1), owner);
         }
 
         public MethodInvoker createMethodInvoker() {
@@ -204,11 +211,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         String description = id;
 
         MethodDesc desc = new MethodDesc(owner, method);
-        ResolvableType returnType = ResolvableType.forMethodParameter(new MethodParameter(method,-1), owner);
+        ResolvableType returnType = ResolvableType.forMethodParameter(new MethodParameter(method, -1), owner);
         DataType output = null;
         MethodInvoker invoker = null;
         Parameter[] parameters = desc.parameters;
         String[] argNames = desc.argNames;
+        Map<String, Object> expands = null;
         List<PropertyMetadata> inputs = new ArrayList<>();
         ResolvableType[] argTypes = desc.argTypes;
         if (!returnIsVoid(returnType)) {
@@ -227,6 +235,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                     name = resolve.getName();
                     description = resolve.getDescription();
                     inputs = resolve.getInputs();
+                    expands = resolve.getExpands();
                 } else {
                     //转换为实体类
                     RequestBody requestBody = AnnotationUtils.findAnnotation(method.getParameters()[0], RequestBody.class);
@@ -280,10 +289,12 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         metadata.setInputs(inputs);
         metadata.setName(schema != null && StringUtils.hasText(schema.title()) ? schema.title() : name);
         metadata.setDescription(schema != null && StringUtils.hasText(schema.description()) ? schema.description() : description);
-
+        if (expands != null) {
+            expands.forEach(metadata::expand);
+        }
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             this.target,
-            invoker,
+            new TraceMethodInvoker(method, invoker),
             applyMetadata(method, argTypes, metadata),
             createMetadataHandler(owner, method),
             method);
@@ -384,13 +395,16 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             metadata.setDescription(annotation.description());
         }
 
-        metadata.setExpands(MetadataUtils.parseExpands(method));
+        MetadataUtils
+            .parseExpands(method)
+            .forEach(metadata::expand);
 
         MetadataUtils.resolveAttrs(annotation.expands(), metadata::expand);
 
-        metadata.expand(CommandConstant.responseFlux,
-                        Flux.class.isAssignableFrom(method.getReturnType()));
-
+        if (!metadata.getExpand(CommandConstant.responseFlux).isPresent()) {
+            metadata.expand(CommandConstant.responseFlux,
+                            Flux.class.isAssignableFrom(method.getReturnType()));
+        }
         //自定义输入参数描述
         if (!Void.class.equals(annotation.inputSpec())) {
             metadata.setInputs(CommandMetadataResolver.resolveInputs(ResolvableType.forType(annotation.inputSpec())));
@@ -410,10 +424,14 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         Mono<FunctionMetadata> apply(Object target, Command<?> objectCommand, SimpleFunctionMetadata metadata);
     }
 
-    @AllArgsConstructor
     static class CommandInvoker implements MethodInvoker {
         private final Method method;
         private final ResolvableType type;
+
+        public CommandInvoker(Method method, ResolvableType type) {
+            this.method = method;
+            this.type = type;
+        }
 
         @Override
         public Object apply(Object target, Command<Object> objectCommand) {
@@ -422,7 +440,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 return doInvoke(target, method, objectCommand);
             } else {
                 //copy类型
-                return doInvoke(target, method, createCommand().with(objectCommand.asMap()));
+                return doInvoke(target, method, createCommand().with(objectCommand));
             }
         }
 
@@ -473,6 +491,34 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
     }
 
+    static class TraceMethodInvoker implements MethodInvoker {
+        private final static SharedPathString TRACE_TEMPLATE = SharedPathString.of("/java/command/*/*");
+        private final Method method;
+        private final MethodInvoker invoker;
+
+        TraceMethodInvoker(Method method, MethodInvoker invoker) {
+            this.method = method;
+            this.invoker = invoker;
+        }
+
+        @Override
+        public Object apply(Object o, Command<Object> objectCommand) {
+            if (TraceHolder.isDisabled()) {
+                return invoker.apply(o, objectCommand);
+            }
+            SeparatedCharSequence span = TRACE_TEMPLATE
+                .replace(3,
+                         ClassUtils.getUserClass(o).getSimpleName(), 4, method.getName());
+            if (Mono.class.isAssignableFrom(method.getReturnType())) {
+                return Mono.defer(() -> (Mono<?>) invoker.apply(o, objectCommand)).as(MonoTracer.create(span));
+            }
+            if (Flux.class.isAssignableFrom(method.getReturnType())) {
+                return Flux.defer(() -> (Flux<?>) invoker.apply(o, objectCommand)).as(FluxTracer.create(span));
+            }
+            return TraceHolder.traceBlocking(span, (ignore) -> invoker.apply(o, objectCommand));
+        }
+    }
+
     @AllArgsConstructor
     static class MethodCallCommandHandler implements CommandHandler<Command<Object>, Object> {
         private final Object target;
@@ -485,13 +531,24 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             return new MethodCallCommandHandler(target, invoker, metadata, metadataHandler, method);
         }
 
+        private Object call0(Object target, Command<Object> command) {
+            return invoker.apply(target, command);
+        }
+
         @Override
+        @SuppressWarnings("all")
         public Object handle(@Nonnull Command<Object> command,
                              @Nonnull CommandSupport support) {
             if (target == null) {
                 throw new UnsupportedOperationException("unsupported call not implement method " + method);
             }
-            return invoker.apply(target, command);
+            Object result = call0(target, command);
+            // 转换flux
+            if (command.isWrapperFor(StreamCommand.class)
+                || metadata.getExpand(CommandConstant.responseFlux).orElse(false)) {
+                return CommandUtils.convertResponseToFlux(result, command);
+            }
+            return result;
         }
 
         @Override
@@ -506,6 +563,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             if (metadata.getExpand(CommandConstant.responseFlux).orElse(false)) {
                 return (Command) new MethodCallFluxCommand(metadata.getId());
             }
+            if (CommandConstant.isStream(metadata)) {
+                return (Command) new MethodCallStreamCommand(metadata.getId());
+            }
             return new MethodCallCommand(metadata.getId());
         }
 
@@ -517,6 +577,24 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         @Override
         public String toString() {
             return String.valueOf(method);
+        }
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class MethodCallStreamCommand extends AbstractStreamCommand<Object, Object, MethodCallStreamCommand> {
+        private String commandId;
+
+        @Override
+        public Object createResponseData(Object value) {
+            return value;
+        }
+
+        @Override
+        public Object convertStreamValue(Object value) {
+            return value;
         }
     }
 
