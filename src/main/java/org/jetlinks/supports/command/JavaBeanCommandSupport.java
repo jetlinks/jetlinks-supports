@@ -97,6 +97,10 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
     }
 
+    public static JavaBeanCommandSupport createTemplate(Class<?> type) {
+        return createTemplate(ResolvableType.forType(type));
+    }
+
     public static JavaBeanCommandSupport createTemplate(ResolvableType type) {
         return new JavaBeanCommandSupport(type);
     }
@@ -482,7 +486,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             //从注册的执行器中获取处理器进行执行
             CommandHandler handler = parent.handlers.get(command.getCommandId());
             if (handler instanceof MethodCallCommandHandler) {
-                handler = ((MethodCallCommandHandler) handler).with(target);
+                return (R) ((MethodCallCommandHandler) handler)
+                    .handle0(target, (Command) command, parent);
             }
             if (handler == null) {
                 return parent.executeUndefinedCommand(command);
@@ -527,18 +532,14 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         private final MetadataHandler metadataHandler;
         private final Method method;
 
-        MethodCallCommandHandler with(Object target) {
-            return new MethodCallCommandHandler(target, invoker, metadata, metadataHandler, method);
-        }
-
         private Object call0(Object target, Command<Object> command) {
             return invoker.apply(target, command);
         }
 
-        @Override
         @SuppressWarnings("all")
-        public Object handle(@Nonnull Command<Object> command,
-                             @Nonnull CommandSupport support) {
+        private Object handle0(Object target,
+                               @Nonnull Command<Object> command,
+                               @Nonnull CommandSupport support) {
             if (target == null) {
                 throw new UnsupportedOperationException("unsupported call not implement method " + method);
             }
@@ -549,6 +550,13 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 return CommandUtils.convertResponseToFlux(result, command);
             }
             return result;
+        }
+
+        @Override
+        @SuppressWarnings("all")
+        public Object handle(@Nonnull Command<Object> command,
+                             @Nonnull CommandSupport support) {
+            return handle0(target, command, support);
         }
 
         @Override
