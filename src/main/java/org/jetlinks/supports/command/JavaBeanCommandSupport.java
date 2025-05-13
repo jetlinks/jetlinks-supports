@@ -3,6 +3,7 @@ package org.jetlinks.supports.command;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.MapUtils;
 import org.hswebframework.web.aop.MethodInterceptorHolder;
 import org.hswebframework.web.i18n.LocaleUtils;
 import org.jetlinks.core.command.*;
@@ -30,6 +31,7 @@ import reactor.core.publisher.Mono;
 import reactor.function.Function3;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
@@ -39,7 +41,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -494,6 +495,29 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             }
             return (R) handler.handle(command, parent);
         }
+
+        @Override
+        public Mono<FunctionMetadata> getCommandMetadata(@Nonnull String commandId,
+                                                         @Nullable Map<String, Object> parameters) {
+            if (MapUtils.isEmpty(parameters)) {
+                return getCommandMetadata(commandId);
+            }
+            return this
+                .createCommandAsync(commandId)
+                .flatMap(cmd->getCommandMetadata(cmd.with(parameters)));
+        }
+
+        @Override
+        public Mono<FunctionMetadata> getCommandMetadata(Command<?> command) {
+            JavaBeanCommandSupport parent = template.unwrap(JavaBeanCommandSupport.class);
+            //从注册的执行器中获取处理器进行执行
+            CommandHandler<?, ?> handler = parent.handlers.get(command.getCommandId());
+            if (handler instanceof MethodCallCommandHandler) {
+                return ((MethodCallCommandHandler) handler)
+                    .getMetadata0(target, command);
+            }
+            return super.getCommandMetadata(command);
+        }
     }
 
     static class TraceMethodInvoker implements MethodInvoker {
@@ -536,6 +560,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             return invoker.apply(target, command);
         }
 
+
+        private Mono<FunctionMetadata> getMetadata0(Object target, Command<?> cmd) {
+            return metadataHandler.apply(target, cmd, metadata);
+        }
+
         @SuppressWarnings("all")
         private Object handle0(Object target,
                                @Nonnull Command<Object> command,
@@ -561,7 +590,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         @Override
         public Mono<FunctionMetadata> getMetadata(Command<?> cmd) {
-            return metadataHandler.apply(target, cmd, metadata);
+            return getMetadata0(target, cmd);
         }
 
         @Nonnull
