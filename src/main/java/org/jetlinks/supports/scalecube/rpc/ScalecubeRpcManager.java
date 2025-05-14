@@ -6,6 +6,8 @@ import com.google.common.hash.Hashing;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
+import io.rsocket.exceptions.ConnectionErrorException;
+import io.rsocket.exceptions.Retryable;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
 import io.scalecube.cluster.membership.MembershipEvent;
@@ -114,6 +116,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                   CodecException.class)
                         && hasException(
                         err,
+                        Retryable.class,
                         TimeoutException.class,
                         SocketException.class,
                         SocketTimeoutException.class,
@@ -636,10 +639,10 @@ public class ScalecubeRpcManager implements RpcManager {
 
     @SafeVarargs
     @SuppressWarnings("all")
-    private static boolean hasException(Throwable e, Class<? extends Throwable>... target) {
+    private static boolean hasException(Throwable e, Class<?>... target) {
         Throwable cause = e;
         while (cause != null) {
-            for (Class<? extends Throwable> aClass : target) {
+            for (Class<?> aClass : target) {
                 if (aClass.isInstance(cause)) {
                     return true;
                 }
