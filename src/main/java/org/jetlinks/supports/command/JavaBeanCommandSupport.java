@@ -299,7 +299,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             this.target,
-            new TraceMethodInvoker(method, invoker),
+            wrapInvoker(method, invoker),
             applyMetadata(method, argTypes, metadata),
             createMetadataHandler(owner, method),
             method);
@@ -420,7 +420,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         return metadata;
     }
 
-    interface MethodInvoker extends BiFunction<Object, Command<Object>, Object> {
+    protected interface MethodInvoker extends BiFunction<Object, Command<Object>, Object> {
 
     }
 
@@ -471,6 +471,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         return new CopyJavaBeanCommandSupport(this, target);
     }
 
+    protected MethodInvoker wrapInvoker(Method method, MethodInvoker invoker) {
+        return new TraceMethodInvoker(method, invoker);
+    }
+
+
     static class CopyJavaBeanCommandSupport extends TemplateCommandSupport {
         private final Object target;
 
@@ -504,7 +509,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             }
             return this
                 .createCommandAsync(commandId)
-                .flatMap(cmd->getCommandMetadata(cmd.with(parameters)));
+                .flatMap(cmd -> getCommandMetadata(cmd.with(parameters)));
         }
 
         @Override
@@ -520,8 +525,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
     }
 
-    static class TraceMethodInvoker implements MethodInvoker {
-        private final static SharedPathString TRACE_TEMPLATE = SharedPathString.of("/java/command/*/*");
+    protected static class TraceMethodInvoker implements MethodInvoker {
+        private final static SharedPathString TRACE_TEMPLATE = SharedPathString.of("/java/command");
         private final Method method;
         private final MethodInvoker invoker;
 
@@ -530,19 +535,24 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             this.invoker = invoker;
         }
 
+        protected SeparatedCharSequence spanPrefix() {
+            return TRACE_TEMPLATE;
+        }
+
         @Override
         public Object apply(Object o, Command<Object> objectCommand) {
             if (TraceHolder.isDisabled()) {
                 return invoker.apply(o, objectCommand);
             }
-            SeparatedCharSequence span = TRACE_TEMPLATE
-                .replace(3,
-                         ClassUtils.getUserClass(o).getSimpleName(), 4, method.getName());
+            SeparatedCharSequence span = spanPrefix()
+                .append(ClassUtils.getUserClass(o).getSimpleName(), method.getName());
             if (Mono.class.isAssignableFrom(method.getReturnType())) {
-                return Mono.defer(() -> (Mono<?>) invoker.apply(o, objectCommand)).as(MonoTracer.create(span));
+                return Mono.defer(() -> (Mono<?>) invoker.apply(o, objectCommand))
+                           .as(MonoTracer.create(span));
             }
             if (Flux.class.isAssignableFrom(method.getReturnType())) {
-                return Flux.defer(() -> (Flux<?>) invoker.apply(o, objectCommand)).as(FluxTracer.create(span));
+                return Flux.defer(() -> (Flux<?>) invoker.apply(o, objectCommand))
+                           .as(FluxTracer.create(span));
             }
             return TraceHolder.traceBlocking(span, (ignore) -> invoker.apply(o, objectCommand));
         }
