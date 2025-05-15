@@ -331,7 +331,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             provider,
             (Class<?>[]) null);
         if (providerMethod == null) {
-            log.warn("outputProvider method [{}] not found for {}", provider, providerMethod);
+            log.warn("outputProvider method [{}] not found", provider);
             return DO_NOTHING_HANDLER;
         }
         MethodDesc desc = new MethodDesc(owner, providerMethod);
