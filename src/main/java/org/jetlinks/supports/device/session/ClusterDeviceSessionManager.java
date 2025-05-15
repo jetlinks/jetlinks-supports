@@ -230,6 +230,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
     static class ErrorHandleService implements Service {
         private final String id;
         private final Service service;
+        private static final Mono<Boolean> defaultAlive =
+            Boolean.getBoolean("jetlinks.session.cluster.alive-when-failed") ?
+                Reactors.ALWAYS_TRUE : Reactors.ALWAYS_FALSE;
 
         private void handleError(Throwable error) {
             log.warn("cluster[{}] session manager is failed", id, error);
@@ -251,7 +254,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                 .isAlive(deviceId)
                 .onErrorResume(err -> {
                     handleError(err);
-                    return Reactors.ALWAYS_FALSE;
+                    return defaultAlive;
                 });
         }
 
@@ -261,7 +264,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                 .checkAlive(deviceId)
                 .onErrorResume(err -> {
                     handleError(err);
-                    return Reactors.ALWAYS_FALSE;
+                    return defaultAlive;
                 });
         }
 
