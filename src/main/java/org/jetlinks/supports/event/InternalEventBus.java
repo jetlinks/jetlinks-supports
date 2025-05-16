@@ -9,6 +9,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hswebframework.web.dict.EnumDict;
+import org.jetlinks.core.event.Cancelable;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
@@ -66,7 +67,7 @@ public class InternalEventBus implements EventBus {
             });
     }
 
-    public Disposable subscribe(Subscription subscription,
+    public Cancelable subscribe(Subscription subscription,
                                 Function<TopicPayload, Mono<Void>> handler) {
 
         Disposable.Composite disposable = Disposables.composite();
@@ -98,7 +99,7 @@ public class InternalEventBus implements EventBus {
 
         }
 
-        return disposable;
+        return disposable::dispose;
     }
 
     protected Disposable subscribeToCluster(SubscriptionInfo info) {
