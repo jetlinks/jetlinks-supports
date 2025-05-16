@@ -107,7 +107,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     }
 
     private void init(Predicate<Method> filter) {
-        Class<?> clazz = ClassUtils.getUserClass(target);
+        Class<?> clazz = ClassUtils.getUserClass(targetType.toClass());
         ReflectionUtils
             .doWithMethods(
                 clazz,
