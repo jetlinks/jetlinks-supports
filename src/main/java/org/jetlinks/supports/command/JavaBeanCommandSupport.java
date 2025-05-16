@@ -74,7 +74,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
     public JavaBeanCommandSupport(Object target, Predicate<Method> filter) {
         this.target = target;
-        this.targetType = ResolvableType.forInstance(target);
+        this.targetType = ResolvableType.forType(ClassUtils.getUserClass(target));
         init(defaultFilter.and(filter));
     }
 
@@ -107,10 +107,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     }
 
     private void init(Predicate<Method> filter) {
-        Class<?> clazz = ClassUtils.getUserClass(targetType.toClass());
         ReflectionUtils
             .doWithMethods(
-                clazz,
+                targetType.toClass(),
                 method -> {
                     if (filter.test(method)) {
                         register(method);
