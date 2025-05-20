@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
 import org.hswebframework.web.aop.MethodInterceptorHolder;
 import org.hswebframework.web.i18n.LocaleUtils;
+import org.jetlinks.core.Wrapper;
 import org.jetlinks.core.command.*;
 import org.jetlinks.core.lang.SeparatedCharSequence;
 import org.jetlinks.core.lang.SharedPathString;
@@ -42,16 +43,90 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
  * 使用java类来实现命令
+ * <p>
+ * 场景1. 使用一个javabean来创建命令支持.
+ * <pre>{@code
+ *
+ *    class MyCommandApiImpl{
+ *        @CommandHandler
+ *        public Mono<Integer> reduce(int l,int r){
+ *            return Mono.just(l+r);
+ *        }
+ *    }
+ *
+ *   static final JavasBeanCommandSupport support = new JavaBeanCommandSupport(new MyCommandApiImpl());
+ *
+ *   // 通过命令的方式调用
+ *   public Mono<Object> callCommand(){
+ *       return support
+ *          .executeToMono("reduce", Map.of("l", 1, "r", 2));
+ *   }
+ * }</pre>
+ *
+ * <p>
+ * 场景2. 使用接口来定义命令支持模版,用于在可能需要频繁创建命令支持时使用.
+ * <pre>{@code
+ *
+ *  static final JavaBeanCommandSupport template =
+ *              JavaBeanCommandSupport.createTemplate(MyCommandApi.class);
+ *
+ *  public CommandSupport createCommand(){
+ *       // 创建实现类
+ *       MyCommandApiImpl impl = new MyCommandApi();
+ *       // 基于实现类创建命令支持
+ *       return template.copyWith(impl);
+ *  }
+ * }</pre>
  *
  * @author zhouhao
+ * @see JavaBeanCommandSupport#createTemplate(Class)
+ * @see JavaBeanCommandSupport#copyWith(Object)
+ * @see JavaBeanCommandSupport#copyHandlerWith(Object)
  * @since 1.2.2
  */
 @Slf4j
 public class JavaBeanCommandSupport extends AbstractCommandSupport {
+
+    /**
+     * 基于一个实例来创建一个命令支持对象,需要在方法上注解{@link org.jetlinks.core.annotation.command.CommandHandler}
+     * 来声明命令处理器。
+     *
+     * @param instance 实例
+     * @return JavaBeanCommandSupport
+     */
+    public static JavaBeanCommandSupport create(Object instance) {
+        return new JavaBeanCommandSupport(instance);
+    }
+
+    /**
+     * 使用指定的类型来创建一个命令支持模版,请缓存创建的模版对象,后续可使用{@link JavaBeanCommandSupport#copyWith(Object)}来创建执行实例.
+     *
+     * @param type 类型
+     * @return JavaBeanCommandSupport
+     * @see JavaBeanCommandSupport#copyWith(Object)
+     * @see JavaBeanCommandSupport#copyHandlerWith(Object)
+     */
+    public static JavaBeanCommandSupport createTemplate(Class<?> type) {
+        return createTemplate(ResolvableType.forType(type));
+    }
+
+    /**
+     * 使用指定的类型来创建一个命令支持模版,请缓存创建的模版对象,后续可使用{@link JavaBeanCommandSupport#copyWith(Object)}来创建执行实例.
+     *
+     * @param type 类型
+     * @return JavaBeanCommandSupport
+     * @see JavaBeanCommandSupport#copyWith(Object)
+     * @see JavaBeanCommandSupport#copyHandlerWith(Object)
+     */
+    public static JavaBeanCommandSupport createTemplate(ResolvableType type) {
+        return new JavaBeanCommandSupport(type);
+    }
+
 
     private static final Predicate<Method> defaultFilter
         = method -> {
@@ -96,14 +171,6 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     JavaBeanCommandSupport(ResolvableType targetType) {
         this(targetType, method -> AnnotatedElementUtils
             .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
-    }
-
-    public static JavaBeanCommandSupport createTemplate(Class<?> type) {
-        return createTemplate(ResolvableType.forType(type));
-    }
-
-    public static JavaBeanCommandSupport createTemplate(ResolvableType type) {
-        return new JavaBeanCommandSupport(type);
     }
 
     private void init(Predicate<Method> filter) {
@@ -420,7 +487,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         return metadata;
     }
 
-    protected interface MethodInvoker extends BiFunction<Object, Command<Object>, Object> {
+    protected interface MethodInvoker extends BiFunction<Object, Command<Object>, Object>, Wrapper {
 
     }
 
@@ -429,7 +496,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         Mono<FunctionMetadata> apply(Object target, Command<?> objectCommand, SimpleFunctionMetadata metadata);
     }
 
-    static class CommandInvoker implements MethodInvoker {
+    static class CommandInvoker implements MethodInvoker, Supplier<Command<Object>> {
         private final Method method;
         private final ResolvableType type;
 
@@ -447,6 +514,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 //copy类型
                 return doInvoke(target, method, createCommand().with(objectCommand));
             }
+        }
+
+        @Override
+        public Command<Object> get() {
+            return createCommand();
         }
 
         @SneakyThrows
@@ -469,6 +541,22 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
      */
     public CommandSupport copyWith(Object target) {
         return new CopyJavaBeanCommandSupport(this, target);
+    }
+
+    /**
+     * 基于新的实现类来复制命令处理器
+     *
+     * @param target 实现类实例
+     * @return 命令处理器列表
+     */
+    public List<CommandHandler<?, ?>> copyHandlerWith(Object target) {
+        return handlers
+            .values()
+            .stream()
+            .filter(MethodCallCommandHandler.class::isInstance)
+            .map(h -> MethodCallCommandHandler.class.cast(h).copy(target))
+            .collect(Collectors.toList());
+
     }
 
     protected MethodInvoker wrapInvoker(Method method, MethodInvoker invoker) {
@@ -517,8 +605,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             JavaBeanCommandSupport parent = template.unwrap(JavaBeanCommandSupport.class);
             //从注册的执行器中获取处理器进行执行
             CommandHandler<?, ?> handler = parent.handlers.get(command.getCommandId());
-            if (handler instanceof MethodCallCommandHandler) {
-                return ((MethodCallCommandHandler) handler)
+            if (handler.isWrapperFor(MethodCallCommandHandler.class)) {
+                return handler
+                    .unwrap(MethodCallCommandHandler.class)
                     .getMetadata0(target, command);
             }
             return super.getCommandMetadata(command);
@@ -556,6 +645,16 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             }
             return TraceHolder.traceBlocking(span, (ignore) -> invoker.apply(o, objectCommand));
         }
+
+        @Override
+        public boolean isWrapperFor(Class<?> type) {
+            return invoker.isWrapperFor(type);
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> type) {
+            return invoker.unwrap(type);
+        }
     }
 
     @AllArgsConstructor
@@ -570,6 +669,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             return invoker.apply(target, command);
         }
 
+        private MethodCallCommandHandler copy(Object target) {
+            return new MethodCallCommandHandler(target, invoker, metadata, metadataHandler, method);
+        }
 
         private Mono<FunctionMetadata> getMetadata0(Object target, Command<?> cmd) {
             return metadataHandler.apply(target, cmd, metadata);
@@ -607,6 +709,11 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         @Override
         @SuppressWarnings("all")
         public Command<Object> createCommand() {
+            if (invoker.isWrapperFor(CommandInvoker.class)) {
+                return invoker
+                    .unwrap(CommandInvoker.class)
+                    .createCommand();
+            }
             if (metadata.getExpand(CommandConstant.responseFlux).orElse(false)) {
                 return (Command) new MethodCallFluxCommand(metadata.getId());
             }
