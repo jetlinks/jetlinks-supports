@@ -8,6 +8,7 @@ import org.springframework.asm.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -69,6 +70,8 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
         try {
             ClassReader classReader = new ClassReader(classStream);
             classReader.accept(this, 0);
+        } catch (IOException e) {
+             log.warn("read class {} error", className, e);
         } finally {
             clazzName.set(null);
         }
@@ -99,7 +102,7 @@ public class MethodDeniedClassVisitor extends ClassVisitor {
     }
 
     public MethodDeniedClassVisitor() {
-        super(Opcodes.ASM7);
+        super(Opcodes.ASM9);
     }
 
 
