@@ -13,6 +13,7 @@ import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.lang.SharedPathString;
 import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.utils.CompositeMap;
+import org.jetlinks.core.utils.TopicUtils;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -55,10 +56,20 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
     @Setter
     private Function<String, StorageFilter> filterFactory;
 
+    private SharedPathString[] notifyTopics = {SharedPathString.of(NOTIFY_TOPIC)};
+
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus) {
 
         this(clusterManager, eventBus, -1);
+    }
+
+    public void setNamespace(String namespace) {
+        notifyTopics = TopicUtils
+            .expand(NOTIFY_TOPIC + "/" + namespace)
+            .stream()
+            .map(SharedPathString::of)
+            .toArray(SharedPathString[]::new);
     }
 
     @SuppressWarnings("all")
@@ -73,7 +84,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
         storageBuilder = id -> {
             return new LocalCacheClusterConfigStorage(
                 id,
-                eventBus,
+                this,
                 clusterManager.createCache(id),
                 ttl,
                 removeHandler);
@@ -102,7 +113,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
         };
         storageBuilder = id -> new LocalCacheClusterConfigStorage(
             id,
-            eventBus,
+            this,
             clusterManager.createCache(id),
             -1,
             removeHandler,
@@ -116,7 +127,7 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
                 Subscription
                     .builder()
                     .subscriberId("event-bus-storage-listener")
-                    .topics(NOTIFY_TOPIC)
+                    .topics(notifyTopics)
                     .justBroker()
                     .build(),
                 (topicPayload -> {
@@ -140,6 +151,19 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
         } catch (Throwable error) {
             log.warn("clear local cache error", error);
         }
+    }
+
+    Mono<Void> doNotify(CacheNotify notify) {
+        if (notifyTopics.length == 1) {
+            return eventBus
+                .publish(notifyTopics[0], notify)
+                .then();
+        }
+
+        return Flux
+            .fromArray(notifyTopics)
+            .flatMap(t -> eventBus.publish(t, notify), notifyTopics.length)
+            .then();
     }
 
     public void refreshAll() {
