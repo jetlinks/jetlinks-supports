@@ -14,6 +14,7 @@ import io.scalecube.services.*;
 import io.scalecube.services.api.Qualifier;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.exceptions.MessageCodecException;
+import io.scalecube.services.exceptions.ServiceUnavailableException;
 import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodRegistry;
 import io.scalecube.services.transport.api.DataCodec;
@@ -109,6 +110,7 @@ public class ScalecubeRpcManager implements RpcManager {
                         && hasException(
                         err,
                         Retryable.class,
+                        ServiceUnavailableException.class,
                         TimeoutException.class,
                         SocketException.class,
                         SocketTimeoutException.class,
