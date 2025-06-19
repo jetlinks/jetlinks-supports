@@ -404,8 +404,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         MethodDesc desc = new MethodDesc(owner, providerMethod);
         ResolvableType returnType = desc.returnType;
 
-        if (!DataType.class.isAssignableFrom(CommandUtils.getCommandResponseDataType(returnType).toClass())) {
-            log.warn("outputProvider method [{}] return type not DataType for {}", provider, method);
+        if (!DataType.class.isAssignableFrom(CommandUtils.getCommandResponseDataType(returnType).toClass()) &&
+            !FunctionMetadata.class.isAssignableFrom(CommandUtils.getCommandResponseDataType(returnType).toClass())) {
+            log.warn("outputProvider method [{}] return type not DataType or FunctionMetadata for {}", provider, method);
             return DO_NOTHING_HANDLER;
         }
 
@@ -417,22 +418,30 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         private final MethodInvoker invoker;
 
         private Mono<FunctionMetadata> convertMetadata(Object data, SimpleFunctionMetadata metadata) {
+            if(data instanceof FunctionMetadata){
+                return Mono.just((FunctionMetadata)data);
+            }
+
             if (data instanceof DataType) {
                 metadata = metadata.copy();
                 metadata.setOutput((DataType) data);
             }
+
             return Mono.just(metadata);
         }
 
         @Override
         public Mono<FunctionMetadata> apply(Object target, Command<?> objectCommand, SimpleFunctionMetadata metadata) {
-            @SuppressWarnings("all")
-            Object object = invoker.apply(target, (Command<Object>) objectCommand);
-            if (object instanceof Publisher) {
-                return Mono.from(((Publisher<?>) object))
-                           .flatMap(data -> convertMetadata(data, metadata));
-            }
-            return convertMetadata(object, metadata);
+           return Mono.defer(()->{
+               @SuppressWarnings("all")
+               Object object = invoker.apply(target, (Command<Object>) objectCommand);
+               if (object instanceof Publisher) {
+                   return Mono.from(((Publisher<?>) object))
+                              .flatMap(data -> convertMetadata(data, metadata));
+               }
+               return convertMetadata(object, metadata);
+              })
+               .as(LocaleUtils::transform);
         }
     }
 
