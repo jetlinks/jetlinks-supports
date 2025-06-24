@@ -8,7 +8,7 @@ import io.scalecube.cluster.membership.MembershipEvent;
 import io.scalecube.cluster.transport.api.Message;
 import io.scalecube.net.Address;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.Reactors;
 import org.springframework.util.StringUtils;
@@ -32,7 +32,6 @@ import java.util.function.Function;
 @Slf4j
 public class ExtendedClusterImpl implements ExtendedCluster {
 
-    private final static String FEATURE_QUALIFIER = "_c_fts_q";
     private final static String FEATURE_FROM = "_c_fts_f";
 
     private final ClusterImpl real;
@@ -49,8 +48,6 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     private long cacheEndWithTime;
 
     private final List<String> localFeatures = new CopyOnWriteArrayList<>();
-
-    private final Map<String, Set<String>> featureMembers = new ConcurrentHashMap<>();
 
     private final Disposable.Composite disposable = Disposables.composite();
 
@@ -82,11 +79,6 @@ public class ExtendedClusterImpl implements ExtendedCluster {
 
         @Override
         public void onGossip(Message gossip) {
-            if (FEATURE_QUALIFIER.equals(gossip.qualifier())) {
-                String from = gossip.header(FEATURE_FROM);
-                member(from).ifPresent(mem -> addFeature(mem, gossip.data()));
-                return;
-            }
             try {
                 if (gossipSink.currentSubscriberCount() > 0) {
                     gossipSink.emitNext(gossip, Reactors.emitFailureHandler());
@@ -101,40 +93,9 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         public void onMembershipEvent(MembershipEvent event) {
             membershipEvents.emitNext(event, Reactors.emitFailureHandler());
             doHandler(event, ClusterMessageHandler::onMembershipEvent);
-            if (event.isRemoved() || event.isLeaving()) {
-                removeFeature(event.member());
-            }
-            //新节点上线,广播自己的feature
-            if (event.isAdded()) {
-                broadcastFeature().subscribe();
-            }
         }
     }
 
-    private void addFeature(Member member, Collection<String> features) {
-        if (CollectionUtils.isEmpty(features)) {
-            return;
-        }
-        log.debug("register cluster [{}] feature:{}", member.alias() == null ? member.id() : member.alias(), features);
-        for (String feature : features) {
-            Set<String> members = featureMembers.computeIfAbsent(feature, (k) -> ConcurrentHashMap.newKeySet());
-            members.add(member.id());
-            if (StringUtils.hasText(member.alias())) {
-                members.add(member.alias());
-            }
-        }
-    }
-
-    private void removeFeature(Member member) {
-        for (Set<String> value : featureMembers.values()) {
-            if (value.remove(member.id())) {
-                log.debug("remove cluster [{}] features", member.alias() == null ? member.id() : member.alias());
-            }
-            if (StringUtils.hasText(member.alias())) {
-                value.remove(member.alias());
-            }
-        }
-    }
 
     private <T> void doHandler(T e, BiConsumer<ClusterMessageHandler, T> consumer) {
         for (ClusterMessageHandler handler : handlers) {
@@ -167,41 +128,15 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         cacheEndWithTime = System.currentTimeMillis() + Duration.ofSeconds(30).toMillis();
         return real
             .start()
-            //广播特性
-            .then(Mono.defer(this::broadcastFeature))
             .then(Flux.fromIterable(startThen)
                       .flatMap(Function.identity())
                       .then(Mono.fromRunnable(startThen::clear)))
-            .then(Mono.fromRunnable(this::startBroadcastFeature))
             .thenReturn(this);
     }
 
     public ExtendedCluster startAwait() {
         start().block();
         return this;
-    }
-
-    private Mono<Void> broadcastFeature() {
-        return this
-            .spreadGossip(Message
-                              .builder()
-                              .qualifier(FEATURE_QUALIFIER)
-                              .header(FEATURE_FROM, member().id())
-                              .data(localFeatures)
-                              .build())
-            .then();
-    }
-
-    private void startBroadcastFeature() {
-        addFeature(member(), localFeatures);
-        disposable.add(
-            Flux.interval(Duration.ofSeconds(10), Duration.ofSeconds(30))
-                .onBackpressureDrop()
-                .concatMap(l -> this
-                    .broadcastFeature()
-                    .onErrorResume(err -> Mono.empty()), 0)
-                .subscribe()
-        );
     }
 
     @Override
@@ -362,47 +297,20 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     @Override
     public boolean isShutdown() {
         return disposable.isDisposed();
-//        CompletableFuture<Void> future = onShutdown().toFuture();
-//        try {
-//            return future.isDone();
-//        } finally {
-//            //cancel future
-//            future.cancel(true);
-//        }
     }
 
     @Override
     public void registerFeatures(Collection<String> feature) {
-        localFeatures.addAll(feature);
+        log.warn("Features unsupported now",new RuntimeException());
     }
 
     @Override
     public List<Member> featureMembers(String feature) {
-        Set<String> members = featureMembers.get(feature);
-        if (CollectionUtils.isEmpty(members)) {
-            return Collections.emptyList();
-        }
-        Collection<Member> other = otherMembers();
-
-        List<Member> supports = new ArrayList<>(other.size() + 1);
-
-        for (Member member : other) {
-            if (members.contains(member.id())) {
-                supports.add(member);
-            }
-        }
-        if (members.contains(member().id())) {
-            supports.add(member());
-        }
-        return supports;
+        return Collections.emptyList();
     }
 
     @Override
     public boolean supportFeature(String member, String featureId) {
-        Set<String> members = featureMembers.get(featureId);
-        if (CollectionUtils.isEmpty(members)) {
-            return false;
-        }
-        return members.contains(member);
+         return false;
     }
 }
