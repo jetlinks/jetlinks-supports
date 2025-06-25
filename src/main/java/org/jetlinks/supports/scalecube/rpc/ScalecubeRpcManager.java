@@ -105,6 +105,8 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private static final RetryBackoffSpec DEFAULT_RETRY = Retry
         .backoff(12, Duration.ofMillis(50))
+        .maxBackoff(Duration.ofSeconds(2))
+        .jitter(0.2)
         .filter(err ->
                     !hasException(err,
                                   JacksonException.class,
