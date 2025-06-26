@@ -403,20 +403,19 @@ public class ScalecubeRpcManager implements RpcManager {
         }
         Disposable.Swap _dispose = Disposables.swap();
         _dispose.update(
-            cluster
-                .send(member, Message
-                    .withData(createEndpoint())
-                    .header(SPREAD_FROM_HEADER, cluster.member().id())
-                    .qualifier(SPREAD_ENDPOINT_QUALIFIER)
-                    .build())
+            Mono.defer(() -> cluster
+                    .send(member, Message
+                        .withData(createEndpoint())
+                        .header(SPREAD_FROM_HEADER, cluster.member().id())
+                        .qualifier(SPREAD_ENDPOINT_QUALIFIER)
+                        .build()))
                 .retryWhen(Retry
                                .fixedDelay(30, Duration.ofSeconds(1))
                                .filter(err -> err.getMessage() == null
                                    || err.getMessage().contains("Connection refused")
                                    || cluster.member(member.id()).isPresent()))
                 .doFinally(ignore -> syncMembers.remove(member, _dispose))
-                .subscribe(ignore -> {
-                           },
+                .subscribe(null,
                            error -> {
                                if (cluster.member(member.id()).isPresent()) {
                                    log.error("Synchronization registration [{}] error", member, error);
@@ -898,7 +897,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                         .deferContextual(ctx -> {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
-                                                .requestOne(toServiceMessage(ctx, methodInfo, request, serialize),returnType)
+                                                .requestOne(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
                                                 .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
@@ -910,7 +909,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                         .deferContextual(ctx -> {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
-                                                .requestMany(toServiceMessage(ctx, methodInfo, request, serialize),returnType)
+                                                .requestMany(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
                                                 .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
