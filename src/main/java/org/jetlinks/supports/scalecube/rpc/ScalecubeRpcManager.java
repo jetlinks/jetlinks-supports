@@ -2,6 +2,7 @@ package org.jetlinks.supports.scalecube.rpc;
 
 import com.fasterxml.jackson.core.JacksonException;
 import io.netty.buffer.ByteBuf;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
 import io.rsocket.exceptions.Retryable;
@@ -822,11 +823,17 @@ public class ScalecubeRpcManager implements RpcManager {
             return builder;
         }
 
+
         private ServiceMessage toServiceMessage(ContextView ctx,
                                                 MethodInfo methodInfo,
                                                 Object request,
                                                 SerializedContext serialized) {
-
+            if (request instanceof ByteBuf) {
+                ByteBuf buf = (ByteBuf) request;
+                // copy 新的 bytebuf,避免上游cancel时buf被提前release.
+                request = buf.copy();
+                ReferenceCountUtil.safeRelease(buf);
+            }
             ServiceMessage.Builder builder = TraceHolder
                 .writeContextTo(ctx, toServiceMessageBuilder(methodInfo, request), (ServiceMessage.Builder::header));
 
@@ -896,6 +903,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
                                                 .oneWay(toServiceMessage(ctx, methodInfo, request, serialize))
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
+
                                                 .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
@@ -907,6 +918,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
                                                 .requestOne(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
+
                                                 .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
@@ -919,6 +934,9 @@ public class ScalecubeRpcManager implements RpcManager {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
                                                 .requestMany(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
                                                 .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
@@ -942,6 +960,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                                             }
                                                             return toServiceMessageBuilder(methodInfo, data).build();
                                                         }), returnType)
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
+
                                                 .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
