@@ -132,6 +132,15 @@ public class ScalecubeRpcManager implements RpcManager {
                              .orElse("unknown"),
                          retrySignal.totalRetriesInARow(),
                          retrySignal.failure());
+            } else {
+                log.info("rpc retries {} : [{}]",
+                         retrySignal
+                             .retryContextView()
+                             .<Method>getOrEmpty(Method.class)
+                             .map(m -> m.getDeclaringClass().getName() + "." + m.getName())
+                             .orElse("unknown"),
+                         retrySignal.totalRetriesInARow(),
+                         retrySignal.failure());
             }
         });
 
