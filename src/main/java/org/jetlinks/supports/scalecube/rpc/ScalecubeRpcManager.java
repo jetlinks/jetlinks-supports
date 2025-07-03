@@ -2,6 +2,7 @@ package org.jetlinks.supports.scalecube.rpc;
 
 import com.fasterxml.jackson.core.JacksonException;
 import io.netty.buffer.ByteBuf;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
 import io.rsocket.exceptions.Retryable;
@@ -816,12 +817,20 @@ public class ScalecubeRpcManager implements RpcManager {
         }
 
         private Mono<ServiceMessage> toServiceMessage(MethodInfo methodInfo, Object request) {
-
-            ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, request);
-
-            return TraceHolder
-                .writeContextTo(builder, (ServiceMessage.Builder::header))
-                .map(ServiceMessage.Builder::build);
+            return Mono
+                .deferContextual((ctx) -> {
+                    Object req = request;
+                    if (req instanceof ByteBuf) {
+                        ByteBuf buf = (ByteBuf) req;
+                        // copy 新的 bytebuf,避免上游cancel时buf被提前release.
+                        req = buf.copy();
+                        ReferenceCountUtil.safeRelease(buf);
+                    }
+                    ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, req);
+                    return Mono.just(
+                        TraceHolder.writeContextTo(ctx, builder, ServiceMessage.Builder::header).build()
+                    );
+                });
 
         }
 
@@ -873,23 +882,24 @@ public class ScalecubeRpcManager implements RpcManager {
 
                             Object request = methodInfo.requestType() == Void.TYPE ? null : params[0];
 
-                            // 参数为ByteBuf,并且没有使用Unreleasable.
-                            if (log.isInfoEnabled()) {
-                                if (request instanceof ByteBuf
-                                    && !request.getClass().getSimpleName().contains("Unreleasable")) {
-                                    log.info("Received ByteBuf request but not Unreleasable: {}", method);
-                                }
-                            }
                             switch (methodInfo.communicationMode()) {
                                 case FIRE_AND_FORGET:
                                     return toServiceMessage(methodInfo, request)
                                         .flatMap(serviceCall::oneWay)
+                                        .doOnDiscard(
+                                            ServiceMessage.class,
+                                            msg -> ReferenceCountUtil.safeRelease(msg.data()))
                                         .subscribeOn(requestScheduler)
                                         .retryWhen(getRetry(method));
 
                                 case REQUEST_RESPONSE:
                                     return toServiceMessage(methodInfo, request)
                                         .flatMap(msg -> serviceCall.requestOne(msg, returnType))
+                                        .doOnDiscard(
+                                            ServiceMessage.class,
+                                            msg -> {
+                                                ReferenceCountUtil.safeRelease(msg.data());
+                                            })
                                         .subscribeOn(requestScheduler)
                                         .transform(asMono(isServiceMessage))
                                         .retryWhen(getRetry(method));
@@ -898,6 +908,9 @@ public class ScalecubeRpcManager implements RpcManager {
 
                                     return toServiceMessage(methodInfo, request)
                                         .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
+                                        .doOnDiscard(
+                                            ServiceMessage.class,
+                                            msg -> ReferenceCountUtil.safeRelease(msg.data()))
                                         .subscribeOn(requestScheduler)
                                         .transform(asFlux(isServiceMessage))
                                         .retryWhen(getRetry(method));
@@ -924,6 +937,9 @@ public class ScalecubeRpcManager implements RpcManager {
                                                     });
                                             }),
                                             returnType)
+                                        .doOnDiscard(
+                                            ServiceMessage.class,
+                                            msg -> ReferenceCountUtil.safeRelease(msg.data()))
                                         .subscribeOn(requestScheduler)
                                         .transform(asFlux(isServiceMessage))
                                         // request channel 不重试.
