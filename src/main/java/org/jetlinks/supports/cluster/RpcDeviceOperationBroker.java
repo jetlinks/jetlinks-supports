@@ -128,10 +128,10 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
                 return rpcManager
                     .getService(deviceGatewayServerId, Service.class)
                     .flatMap(service -> service
-                        .send(buf)
+                        .send(unreleasableBuffer)
                         .then(Reactors.ALWAYS_ONE))
                     .switchIfEmpty(Reactors.ALWAYS_ZERO)
-                    .doFinally(ignore -> ReferenceCountUtil.release(unreleasableBuffer));
+                    .doFinally(ignore -> ReferenceCountUtil.release(buf));
             })
             .reduce(0, Integer::sum);
     }
