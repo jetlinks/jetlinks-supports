@@ -273,6 +273,9 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
             } else {
                 SerializeUtils.writeObject(message, output);
             }
+        } catch (Throwable e) {
+            ReferenceCountUtil.safeRelease(buf);
+            throw e;
         }
         return buf;
     }

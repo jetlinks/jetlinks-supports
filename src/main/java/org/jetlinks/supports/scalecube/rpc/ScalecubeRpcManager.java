@@ -129,6 +129,15 @@ public class ScalecubeRpcManager implements RpcManager {
                              .orElse("unknown"),
                          retrySignal.totalRetriesInARow(),
                          retrySignal.failure());
+            } else {
+                log.info("rpc retries {} : [{}]",
+                         retrySignal
+                             .retryContextView()
+                             .<Method>getOrEmpty(Method.class)
+                             .map(m -> m.getDeclaringClass().getName() + "." + m.getName())
+                             .orElse("unknown"),
+                         retrySignal.totalRetriesInARow(),
+                         retrySignal.failure());
             }
         });
 
@@ -864,6 +873,13 @@ public class ScalecubeRpcManager implements RpcManager {
 
                             Object request = methodInfo.requestType() == Void.TYPE ? null : params[0];
 
+                            // 参数为ByteBuf,并且没有使用Unreleasable.
+                            if (log.isInfoEnabled()) {
+                                if (request instanceof ByteBuf
+                                    && !request.getClass().getSimpleName().contains("Unreleasable")) {
+                                    log.info("Received ByteBuf request but not Unreleasable: {}", method);
+                                }
+                            }
                             switch (methodInfo.communicationMode()) {
                                 case FIRE_AND_FORGET:
                                     return toServiceMessage(methodInfo, request)
@@ -910,7 +926,9 @@ public class ScalecubeRpcManager implements RpcManager {
                                             returnType)
                                         .subscribeOn(requestScheduler)
                                         .transform(asFlux(isServiceMessage))
-                                        .retryWhen(getRetry(method));
+                                        // request channel 不重试.
+//                                        .retryWhen(getRetry(method))
+                                        ;
 
                                 default:
                                     throw new IllegalArgumentException(
