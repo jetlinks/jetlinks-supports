@@ -637,6 +637,15 @@ public class ScalecubeRpcManager implements RpcManager {
         return Qualifier.asString(serviceId, qualifier);
     }
 
+    private void tryRelease(ServiceMessage serviceMessage) {
+        if (ReferenceCountUtil.refCnt(serviceMessage.data()) > 0) {
+            try {
+                ReferenceCountUtil.release(serviceMessage.data());
+            } catch (Throwable e) {
+                log.warn("release service message data [{}] error", serviceMessage, e);
+            }
+        }
+    }
 
     @SafeVarargs
     @SuppressWarnings("all")
@@ -736,11 +745,13 @@ public class ScalecubeRpcManager implements RpcManager {
                 .router((serviceRegistry, request) -> {
                     Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
                     if (refs == null) {
+                        tryRelease(request);
                         return Optional.empty();
                     }
                     for (ServiceReferenceInfo ref : refs) {
                         return Optional.of(ref.reference);
                     }
+                    tryRelease(request);
                     return Optional.empty();
                 })
                 .serviceRegistry(NoneServiceRegistry.INSTANCE)
@@ -886,33 +897,31 @@ public class ScalecubeRpcManager implements RpcManager {
                                 case FIRE_AND_FORGET:
                                     return toServiceMessage(methodInfo, request)
                                         .flatMap(serviceCall::oneWay)
+                                        .subscribeOn(requestScheduler)
                                         .doOnDiscard(
                                             ServiceMessage.class,
-                                            msg -> ReferenceCountUtil.safeRelease(msg.data()))
-                                        .subscribeOn(requestScheduler)
+                                            ScalecubeRpcManager.this::tryRelease)
                                         .retryWhen(getRetry(method));
 
                                 case REQUEST_RESPONSE:
                                     return toServiceMessage(methodInfo, request)
                                         .flatMap(msg -> serviceCall.requestOne(msg, returnType))
-                                        .doOnDiscard(
-                                            ServiceMessage.class,
-                                            msg -> {
-                                                ReferenceCountUtil.safeRelease(msg.data());
-                                            })
                                         .subscribeOn(requestScheduler)
                                         .transform(asMono(isServiceMessage))
+                                        .doOnDiscard(
+                                            ServiceMessage.class,
+                                            ScalecubeRpcManager.this::tryRelease)
                                         .retryWhen(getRetry(method));
 
                                 case REQUEST_STREAM:
 
                                     return toServiceMessage(methodInfo, request)
                                         .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
-                                        .doOnDiscard(
-                                            ServiceMessage.class,
-                                            msg -> ReferenceCountUtil.safeRelease(msg.data()))
                                         .subscribeOn(requestScheduler)
                                         .transform(asFlux(isServiceMessage))
+                                        .doOnDiscard(
+                                            ServiceMessage.class,
+                                            ScalecubeRpcManager.this::tryRelease)
                                         .retryWhen(getRetry(method));
 
                                 case REQUEST_CHANNEL:
@@ -937,11 +946,11 @@ public class ScalecubeRpcManager implements RpcManager {
                                                     });
                                             }),
                                             returnType)
-                                        .doOnDiscard(
-                                            ServiceMessage.class,
-                                            msg -> ReferenceCountUtil.safeRelease(msg.data()))
                                         .subscribeOn(requestScheduler)
                                         .transform(asFlux(isServiceMessage))
+                                        .doOnDiscard(
+                                            ServiceMessage.class,
+                                            ScalecubeRpcManager.this::tryRelease)
                                         // request channel 不重试.
 //                                        .retryWhen(getRetry(method))
                                         ;
