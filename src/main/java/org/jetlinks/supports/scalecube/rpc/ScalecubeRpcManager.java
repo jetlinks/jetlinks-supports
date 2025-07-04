@@ -355,7 +355,6 @@ public class ScalecubeRpcManager implements RpcManager {
                 transport.stop()
             )
             .doOnComplete(() -> {
-                disposable.dispose();
                 serverTransport = null;
                 transport = null;
             })
@@ -743,7 +742,9 @@ public class ScalecubeRpcManager implements RpcManager {
 
             ServiceCall call = serviceCall
                 .router((serviceRegistry, request) -> {
-                    Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
+                    // 获取真实缓存中的服务引用,避免服务重连导致重试时获取不到服务.
+                    ClusterNode node = serverServiceRef.get(this.id);
+                    Set<ServiceReferenceInfo> refs = node == null ? null : node.serviceReferencesByQualifier.get(request.qualifier());
                     if (refs == null) {
                         tryRelease(request);
                         return Optional.empty();
