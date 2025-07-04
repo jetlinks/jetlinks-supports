@@ -644,6 +644,15 @@ public class ScalecubeRpcManager implements RpcManager {
         return Qualifier.asString(serviceId, qualifier);
     }
 
+    private void tryRelease(ServiceMessage serviceMessage) {
+        if (ReferenceCountUtil.refCnt(serviceMessage.data()) > 0) {
+            try {
+                ReferenceCountUtil.release(serviceMessage.data());
+            } catch (Throwable e) {
+                log.warn("release service message data [{}] error", serviceMessage, e);
+            }
+        }
+    }
 
     @SafeVarargs
     @SuppressWarnings("all")
@@ -743,11 +752,13 @@ public class ScalecubeRpcManager implements RpcManager {
                 .router((serviceRegistry, request) -> {
                     Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
                     if (refs == null) {
+                        tryRelease(request);
                         return Optional.empty();
                     }
                     for (ServiceReferenceInfo ref : refs) {
                         return Optional.of(ref.reference);
                     }
+                    tryRelease(request);
                     return Optional.empty();
                 })
                 .serviceRegistry(NoneServiceRegistry.INSTANCE)
@@ -903,11 +914,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
                                                 .oneWay(toServiceMessage(ctx, methodInfo, request, serialize))
+                                                .subscribeOn(requestScheduler)
                                                 .doOnDiscard(
                                                     ServiceMessage.class,
-                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
-
-                                                .subscribeOn(requestScheduler)
+                                                    ScalecubeRpcManager.this::tryRelease)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
                                         });
@@ -918,11 +928,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
                                                 .requestOne(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
+                                                .subscribeOn(requestScheduler)
                                                 .doOnDiscard(
                                                     ServiceMessage.class,
-                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
-
-                                                .subscribeOn(requestScheduler)
+                                                    ScalecubeRpcManager.this::tryRelease)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
                                         })
@@ -934,10 +943,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return serviceCall
                                                 .requestMany(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
+                                                .subscribeOn(requestScheduler)
                                                 .doOnDiscard(
                                                     ServiceMessage.class,
-                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
-                                                .subscribeOn(requestScheduler)
+                                                    ScalecubeRpcManager.this::tryRelease)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
                                         })
@@ -960,12 +969,12 @@ public class ScalecubeRpcManager implements RpcManager {
                                                             }
                                                             return toServiceMessageBuilder(methodInfo, data).build();
                                                         }), returnType)
-                                                .doOnDiscard(
-                                                    ServiceMessage.class,
-                                                    msg -> ReferenceCountUtil.safeRelease(msg.data()))
 
                                                 .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    ScalecubeRpcManager.this::tryRelease)
                                                 .doFinally(ignore -> serialize.dispose());
                                         })
                                         .transform(asFlux(isServiceMessage));
