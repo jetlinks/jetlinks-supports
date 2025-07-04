@@ -363,7 +363,6 @@ public class ScalecubeRpcManager implements RpcManager {
                 transport.stop()
             )
             .doOnComplete(() -> {
-                disposable.dispose();
                 serverTransport = null;
                 transport = null;
             })
@@ -750,7 +749,9 @@ public class ScalecubeRpcManager implements RpcManager {
 
             ServiceCall call = serviceCall
                 .router((serviceRegistry, request) -> {
-                    Set<ServiceReferenceInfo> refs = serviceReferencesByQualifier.get(request.qualifier());
+                    ClusterNode node = ScalecubeRpcManager.this.serverServiceRef.get(this.id);
+                    Set<ServiceReferenceInfo> refs = node == null ? null
+                        : node.serviceReferencesByQualifier.get(request.qualifier());
                     if (refs == null) {
                         tryRelease(request);
                         return Optional.empty();
@@ -834,13 +835,18 @@ public class ScalecubeRpcManager implements RpcManager {
             return builder;
         }
 
+        private Mono<ServiceMessage> toServiceMessage(ContextView ctx,
+                                                      MethodInfo methodInfo,
+                                                      Object request,
+                                                      SerializedContext serialized) {
+            return Mono.fromSupplier(() -> toServiceMessage0(ctx, methodInfo, request, serialized));
+        }
 
-        private ServiceMessage toServiceMessage(ContextView ctx,
-                                                MethodInfo methodInfo,
-                                                Object request,
-                                                SerializedContext serialized) {
-            if (request instanceof ByteBuf) {
-                ByteBuf buf = (ByteBuf) request;
+        private ServiceMessage toServiceMessage0(ContextView ctx,
+                                                 MethodInfo methodInfo,
+                                                 Object request,
+                                                 SerializedContext serialized) {
+            if (request instanceof ByteBuf buf) {
                 // copy 新的 bytebuf,避免上游cancel时buf被提前release.
                 request = buf.copy();
                 ReferenceCountUtil.safeRelease(buf);
@@ -912,12 +918,12 @@ public class ScalecubeRpcManager implements RpcManager {
                                     return Mono
                                         .deferContextual(ctx -> {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
-                                            return serviceCall
-                                                .oneWay(toServiceMessage(ctx, methodInfo, request, serialize))
-                                                .subscribeOn(requestScheduler)
+                                            return toServiceMessage(ctx, methodInfo, request, serialize)
+                                                .flatMap(msg -> serviceCall.oneWay(msg))
                                                 .doOnDiscard(
                                                     ServiceMessage.class,
                                                     ScalecubeRpcManager.this::tryRelease)
+                                                .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
                                         });
@@ -926,12 +932,12 @@ public class ScalecubeRpcManager implements RpcManager {
                                     return Mono
                                         .deferContextual(ctx -> {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
-                                            return serviceCall
-                                                .requestOne(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
-                                                .subscribeOn(requestScheduler)
+                                            return toServiceMessage(ctx, methodInfo, request, serialize)
+                                                .flatMap(msg -> serviceCall.requestOne(msg, returnType))
                                                 .doOnDiscard(
                                                     ServiceMessage.class,
                                                     ScalecubeRpcManager.this::tryRelease)
+                                                .subscribeOn(requestScheduler)
                                                 .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
                                         })
@@ -941,9 +947,8 @@ public class ScalecubeRpcManager implements RpcManager {
                                     return Flux
                                         .deferContextual(ctx -> {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
-                                            return serviceCall
-                                                .requestMany(toServiceMessage(ctx, methodInfo, request, serialize), returnType)
-                                                .subscribeOn(requestScheduler)
+                                            return toServiceMessage(ctx, methodInfo, request, serialize)
+                                                .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
                                                 .doOnDiscard(
                                                     ServiceMessage.class,
                                                     ScalecubeRpcManager.this::tryRelease)
@@ -965,16 +970,15 @@ public class ScalecubeRpcManager implements RpcManager {
                                                         .from((Publisher<?>) request)
                                                         .index((o, data) -> {
                                                             if (o == 0) {
-                                                                return toServiceMessage(ctx, methodInfo, data, serialize);
+                                                                return toServiceMessage0(ctx, methodInfo, data, serialize);
                                                             }
                                                             return toServiceMessageBuilder(methodInfo, data).build();
                                                         }), returnType)
-
                                                 .subscribeOn(requestScheduler)
-                                                .retryWhen(getRetry(method))
                                                 .doOnDiscard(
                                                     ServiceMessage.class,
                                                     ScalecubeRpcManager.this::tryRelease)
+                                                .retryWhen(getRetry(method))
                                                 .doFinally(ignore -> serialize.dispose());
                                         })
                                         .transform(asFlux(isServiceMessage));
