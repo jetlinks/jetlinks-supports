@@ -912,6 +912,9 @@ public class ScalecubeRpcManager implements RpcManager {
                             final boolean isServiceMessage = methodInfo.isReturnTypeServiceMessage();
 
                             Object request = methodInfo.requestType() == Void.TYPE ? null : params[0];
+                            Scheduler requestScheduler =
+                                Schedulers.isInNonBlockingThread() ?
+                                    Schedulers.immediate() : ScalecubeRpcManager.this.requestScheduler;
 
                             switch (methodInfo.communicationMode()) {
                                 case FIRE_AND_FORGET:
