@@ -58,6 +58,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     @Setter
     private Duration sessionCheckInterval = Duration.ofSeconds(30);
 
+    @Getter
+    @Setter
+    private Duration sessionCheckDelay = Duration.ofMinutes(2);
+
     // 检查会话是否存活的并行度
     @Setter
     private int sessionCheckConcurrency = Integer.getInteger("jetlinks.session.check.concurrency",
@@ -88,7 +92,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         Scheduler scheduler = Schedulers.newSingle("device-session-checker");
         disposable.add(scheduler);
         disposable.add(
-            Flux.interval(sessionCheckInterval, scheduler)
+            Flux.interval(sessionCheckDelay,sessionCheckInterval, scheduler)
                 .onBackpressureDrop()
                 .concatMap(time -> executeInterval())
                 .subscribe()
@@ -286,7 +290,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         return null;
                     }
                     //创建新会话
-                    return new DeviceSessionRef(_id, this, creator);
+                    return newDeviceSessionRef(_id, this, creator);
                 } else {
                     if (updater == null) {
                         return old;
@@ -310,7 +314,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                              old.update(computer);
                              return old;
                          } else {
-                             return new DeviceSessionRef(_id, this, computer.apply(Mono.empty()));
+                             return newDeviceSessionRef(_id, this, computer.apply(Mono.empty()));
                          }
                      })
             .ref();
@@ -524,6 +528,14 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             .then();
     }
 
+
+    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref){
+        return new DeviceSessionRef(deviceId,manager,ref);
+    }
+
+    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, DeviceSession ref){
+        return new DeviceSessionRef(deviceId,manager,ref);
+    }
 
     protected static class DeviceSessionRef implements Disposable {
         @SuppressWarnings("rawtypes")
