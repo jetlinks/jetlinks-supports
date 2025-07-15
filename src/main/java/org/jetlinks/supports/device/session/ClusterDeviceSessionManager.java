@@ -325,9 +325,13 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         }
 
         public boolean needSync() {
-            long lastTime = loaded.lastPingTime();
+            DeviceSession session = loaded;
+            if (session == null) {
+                return false;
+            }
+            long lastTime = session.lastPingTime();
             // 持久化了并且上一次同步后变换了
-            return loaded instanceof PersistentSession && LAST_SYNC.getAndSet(this, lastTime) != lastTime;
+            return session instanceof PersistentSession && LAST_SYNC.getAndSet(this, lastTime) != lastTime;
         }
     }
 
