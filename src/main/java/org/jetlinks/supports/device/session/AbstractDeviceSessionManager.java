@@ -290,7 +290,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         return null;
                     }
                     //创建新会话
-                    return new DeviceSessionRef(_id, this, creator);
+                    return newDeviceSessionRef(_id, this, creator);
                 } else {
                     if (updater == null) {
                         return old;
@@ -314,7 +314,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                              old.update(computer);
                              return old;
                          } else {
-                             return new DeviceSessionRef(_id, this, computer.apply(Mono.empty()));
+                             return newDeviceSessionRef(_id, this, computer.apply(Mono.empty()));
                          }
                      })
             .ref();
@@ -528,6 +528,14 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             .then();
     }
 
+
+    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref){
+        return new DeviceSessionRef(deviceId,manager,ref);
+    }
+
+    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, DeviceSession ref){
+        return new DeviceSessionRef(deviceId,manager,ref);
+    }
 
     protected static class DeviceSessionRef implements Disposable {
         @SuppressWarnings("rawtypes")

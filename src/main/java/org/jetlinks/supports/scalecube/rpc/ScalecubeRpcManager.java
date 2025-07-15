@@ -48,6 +48,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.util.context.Context;
+import reactor.util.context.ContextView;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
@@ -344,10 +345,10 @@ public class ScalecubeRpcManager implements RpcManager {
         if (serverTransport == null || transport == null) {
             return Mono.empty();
         }
-        syncJob.dispose();
-        disposable.dispose();
+//        syncJob.dispose();
+//        disposable.dispose();
         serverServiceRef.clear();
-        localRegistrations.clear();
+//        localRegistrations.clear();
         return Flux
             .concatDelayError(
                 doSyncRegistration(),
@@ -743,8 +744,9 @@ public class ScalecubeRpcManager implements RpcManager {
             ServiceCall call = serviceCall
                 .router((serviceRegistry, request) -> {
                     // 获取真实缓存中的服务引用,避免服务重连导致重试时获取不到服务.
-                    ClusterNode node = serverServiceRef.get(this.id);
-                    Set<ServiceReferenceInfo> refs = node == null ? null : node.serviceReferencesByQualifier.get(request.qualifier());
+                    ClusterNode node = ScalecubeRpcManager.this.serverServiceRef.get(this.id);
+                    Set<ServiceReferenceInfo> refs = node == null ? null
+                        : node.serviceReferencesByQualifier.get(request.qualifier());
                     if (refs == null) {
                         tryRelease(request);
                         return Optional.empty();
@@ -828,21 +830,20 @@ public class ScalecubeRpcManager implements RpcManager {
             return builder;
         }
 
-        private Mono<ServiceMessage> toServiceMessage(MethodInfo methodInfo, Object request) {
-            return Mono
-                .deferContextual((ctx) -> {
-                    Object req = request;
-                    if (req instanceof ByteBuf) {
-                        ByteBuf buf = (ByteBuf) req;
-                        // copy 新的 bytebuf,避免上游cancel时buf被提前release.
-                        req = buf.copy();
-                        ReferenceCountUtil.safeRelease(buf);
-                    }
-                    ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, req);
-                    return Mono.just(
-                        TraceHolder.writeContextTo(ctx, builder, ServiceMessage.Builder::header).build()
-                    );
-                });
+        private Mono<ServiceMessage> toServiceMessage(ContextView ctx, MethodInfo methodInfo, Object request) {
+            return Mono.fromSupplier(() -> toServiceMessage0(ctx, methodInfo, request));
+        }
+
+        private ServiceMessage toServiceMessage0(ContextView ctx, MethodInfo methodInfo, Object request) {
+            Object req = request;
+            if (req instanceof ByteBuf) {
+                ByteBuf buf = (ByteBuf) req;
+                // copy 新的 bytebuf,避免上游cancel时buf被提前release.
+                req = buf.copy();
+                ReferenceCountUtil.safeRelease(buf);
+            }
+            ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, req);
+            return TraceHolder.writeContextTo(ctx, builder, ServiceMessage.Builder::header).build();
 
         }
 
@@ -893,68 +894,70 @@ public class ScalecubeRpcManager implements RpcManager {
                             final boolean isServiceMessage = methodInfo.isReturnTypeServiceMessage();
 
                             Object request = methodInfo.requestType() == Void.TYPE ? null : params[0];
-
+                            Scheduler requestScheduler =
+                                Schedulers.isInNonBlockingThread() ?
+                                    Schedulers.immediate() : ScalecubeRpcManager.this.requestScheduler;
                             switch (methodInfo.communicationMode()) {
                                 case FIRE_AND_FORGET:
-                                    return toServiceMessage(methodInfo, request)
-                                        .flatMap(serviceCall::oneWay)
-                                        .subscribeOn(requestScheduler)
-                                        .doOnDiscard(
-                                            ServiceMessage.class,
-                                            ScalecubeRpcManager.this::tryRelease)
-                                        .retryWhen(getRetry(method));
+                                    return Mono
+                                        .deferContextual(ctx -> {
+                                            return toServiceMessage(ctx, methodInfo, request)
+                                                .flatMap(msg -> serviceCall.oneWay(msg))
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    ScalecubeRpcManager.this::tryRelease)
+                                                .subscribeOn(requestScheduler)
+                                                .retryWhen(getRetry(method));
+                                        });
 
                                 case REQUEST_RESPONSE:
-                                    return toServiceMessage(methodInfo, request)
-                                        .flatMap(msg -> serviceCall.requestOne(msg, returnType))
-                                        .subscribeOn(requestScheduler)
-                                        .transform(asMono(isServiceMessage))
-                                        .doOnDiscard(
-                                            ServiceMessage.class,
-                                            ScalecubeRpcManager.this::tryRelease)
-                                        .retryWhen(getRetry(method));
+                                    return Mono
+                                        .deferContextual(ctx -> {
+                                            return toServiceMessage(ctx, methodInfo, request)
+                                                .flatMap(msg -> serviceCall.requestOne(msg, returnType))
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    ScalecubeRpcManager.this::tryRelease)
+                                                .subscribeOn(requestScheduler)
+                                                .retryWhen(getRetry(method)) ;
+                                        })
+                                        .transform(asMono(isServiceMessage));
 
                                 case REQUEST_STREAM:
-
-                                    return toServiceMessage(methodInfo, request)
-                                        .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
-                                        .subscribeOn(requestScheduler)
-                                        .transform(asFlux(isServiceMessage))
-                                        .doOnDiscard(
-                                            ServiceMessage.class,
-                                            ScalecubeRpcManager.this::tryRelease)
-                                        .retryWhen(getRetry(method));
+                                    return Flux
+                                        .deferContextual(ctx -> {
+                                            return toServiceMessage(ctx, methodInfo, request)
+                                                .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    ScalecubeRpcManager.this::tryRelease)
+                                                .retryWhen(getRetry(method));
+                                        })
+                                        .transform(asFlux(isServiceMessage));
 
                                 case REQUEST_CHANNEL:
                                     // this is REQUEST_CHANNEL so it means params[0] must
                                     // be a publisher - its safe to cast.
                                     //noinspection rawtypes
-                                    return serviceCall
-                                        .requestBidirectional(
-                                            Flux.deferContextual(ctx -> {
-                                                return Flux
-                                                    .from((Publisher<?>) request)
-                                                    .index((o, data) -> {
-                                                        if (o == 0) {
-                                                            return TraceHolder
-                                                                .writeContextTo(
-                                                                    ctx,
-                                                                    toServiceMessageBuilder(methodInfo, data),
-                                                                    ServiceMessage.Builder::header)
-                                                                .build();
-                                                        }
-                                                        return toServiceMessageBuilder(methodInfo, data).build();
-                                                    });
-                                            }),
-                                            returnType)
-                                        .subscribeOn(requestScheduler)
-                                        .transform(asFlux(isServiceMessage))
-                                        .doOnDiscard(
-                                            ServiceMessage.class,
-                                            ScalecubeRpcManager.this::tryRelease)
-                                        // request channel 不重试.
-//                                        .retryWhen(getRetry(method))
-                                        ;
+                                    return Flux
+                                        .deferContextual(ctx -> {
+                                            return serviceCall
+                                                .requestBidirectional(
+                                                    Flux
+                                                        .from((Publisher<?>) request)
+                                                        .index((o, data) -> {
+                                                            if (o == 0) {
+                                                                return toServiceMessage0(ctx, methodInfo, data);
+                                                            }
+                                                            return toServiceMessageBuilder(methodInfo, data).build();
+                                                        }), returnType)
+                                                .subscribeOn(requestScheduler)
+                                                .doOnDiscard(
+                                                    ServiceMessage.class,
+                                                    ScalecubeRpcManager.this::tryRelease)
+                                                .retryWhen(getRetry(method));
+                                        })
+                                        .transform(asFlux(isServiceMessage));
 
                                 default:
                                     throw new IllegalArgumentException(

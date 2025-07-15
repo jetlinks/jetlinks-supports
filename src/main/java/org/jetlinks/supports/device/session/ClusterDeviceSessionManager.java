@@ -1,7 +1,6 @@
 package org.jetlinks.supports.device.session;
 
 import com.google.common.collect.Maps;
-import io.scalecube.services.annotations.Service;
 import io.scalecube.services.annotations.ServiceMethod;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -10,15 +9,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.message.DeviceMessage;
-import org.jetlinks.core.message.Message;
 import org.jetlinks.core.message.MessageType;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.ServiceEvent;
 import org.jetlinks.core.server.session.DeviceSession;
+import org.jetlinks.core.server.session.PersistentSession;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.core.utils.SerializeUtils;
 import org.springframework.util.ObjectUtils;
-import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.context.Context;
@@ -28,7 +26,10 @@ import java.io.Externalizable;
 import java.io.IOException;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
+import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
@@ -38,6 +39,21 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
     private final RpcManager rpcManager;
 
     private final Map<String, Service> services = new NonBlockingHashMap<>();
+
+    /**
+     * 集群会话同步间隔
+     */
+    @Getter
+    @Setter
+    private Duration syncInterval = Duration.ZERO;
+
+    /**
+     * 延迟集群会话同步
+     */
+    @Getter
+    @Setter
+    private Duration syncDelay = Duration.ofMinutes(1);
+
 
     public ClusterDeviceSessionManager(RpcManager rpcManager) {
         this.rpcManager = rpcManager;
@@ -65,6 +81,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
         @ServiceMethod
         Flux<DeviceSessionInfo> sessions();
+
+        @ServiceMethod
+        Mono<Void> sync(DeviceSessionInfo info);
 
         @Getter
         @Setter
@@ -191,13 +210,29 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                           (manager, ignore) -> manager.getLocalSessionInfo(),
                           Flux.empty());
         }
+
+        @Override
+        public Mono<Void> sync(DeviceSessionInfo info) {
+            return doWith(info, (manager, session) -> {
+                DeviceSessionRef ref = manager.localSessions.get(session.getDeviceId());
+                if (ref != null) {
+                    DeviceSession loaded = ref.loaded;
+                    if (loaded != null) {
+                        loaded.keepAlive(Math.max(session.getLastCommTime(), loaded.lastPingTime()));
+                    }
+                }
+                return Mono.empty();
+            }, Mono.empty());
+        }
     }
 
     @Override
     public void init() {
         super.init();
 
-        this.rpcManager.registerService(new ServiceImpl(() -> this));
+        disposable.add(
+            this.rpcManager.registerService(new ServiceImpl(() -> this))
+        );
         this.rpcManager
             .getServices(Service.class)
             .subscribe(service -> {
@@ -215,6 +250,85 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                         .subscribe(service -> addService(e.getServerNodeId(), service));
                 }
             });
+
+        // 定时同步会话信息到其他集群节点
+        if (!syncInterval.isZero() && !syncInterval.isNegative()) {
+            disposable.add(
+                Flux.interval(syncDelay, syncInterval)
+                    .onBackpressureDrop()
+                    .concatMap(times -> doSync()
+                        .onErrorResume(err -> {
+                            log.warn("interval sync device session failed", err);
+                            return Mono.empty();
+                        }))
+                    .subscribe()
+            );
+        }
+
+
+    }
+
+    private Mono<Void> doSync(DeviceSessionRef session) {
+        DeviceSession loaded = session.loaded;
+        if (loaded == null) {
+            return Mono.empty();
+        }
+        DeviceSessionInfo info = DeviceSessionInfo.of(rpcManager.currentServerId(), loaded);
+        log.debug("sync device session {} {}", info.getDeviceId(), loaded);
+        return getServices()
+            .flatMap(service -> service.sync(info))
+            .then();
+    }
+
+    protected Mono<Void> doSync() {
+        log.info("start sync device sessions");
+        AtomicLong cnt = new AtomicLong();
+        return Flux
+            .fromIterable(localSessions.values())
+            .filter(ref -> ref instanceof ClusterDeviceSessionRef && ((ClusterDeviceSessionRef) ref).needSync())
+            .flatMap(ref -> {
+                cnt.incrementAndGet();
+                return this
+                    .doSync(ref)
+                    .onErrorResume(err -> {
+                        log.warn("sync device {} session failed ", ref.deviceId, err);
+                        return Mono.empty();
+                    });
+            }, 16)
+            .then(Mono.fromRunnable(() -> {
+                log.info("sync device sessions complete. sessions:{}", cnt);
+            }));
+    }
+
+    @Override
+    protected ClusterDeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref) {
+        return new ClusterDeviceSessionRef(deviceId, manager, ref);
+    }
+
+    @Override
+    protected ClusterDeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, DeviceSession ref) {
+        return new ClusterDeviceSessionRef(deviceId, manager, ref);
+    }
+
+    protected static class ClusterDeviceSessionRef extends DeviceSessionRef {
+        static final AtomicLongFieldUpdater<ClusterDeviceSessionRef> LAST_SYNC =
+            AtomicLongFieldUpdater.newUpdater(ClusterDeviceSessionRef.class, "lastSync");
+
+        private volatile long lastSync;
+
+        public ClusterDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref) {
+            super(deviceId, manager, ref);
+        }
+
+        public ClusterDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, DeviceSession ref) {
+            super(deviceId, manager, ref);
+        }
+
+        public boolean needSync() {
+            long lastTime = loaded.lastPingTime();
+            // 持久化了并且上一次同步后变换了
+            return loaded instanceof PersistentSession && LAST_SYNC.getAndSet(this, lastTime) != lastTime;
+        }
     }
 
     @Override
@@ -306,6 +420,12 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                     handleError(err);
                     return Mono.empty();
                 });
+        }
+
+        @Override
+        public Mono<Void> sync(DeviceSessionInfo info) {
+            return service
+                .sync(info);
         }
     }
 
