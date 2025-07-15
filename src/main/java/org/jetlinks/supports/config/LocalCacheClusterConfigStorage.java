@@ -435,7 +435,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 return reload(loader);
             }
             updateTime();
-            Value cached = this.cached;
+            Value cached = CACHED.get(this);
             if (cached != null && !(ref instanceof Callable)) {
                 // 补偿，在某些极端情况下，await没有正确清理？
                 if (CACHE_LOADING.get(this) == null && AWAIT.get(this) != null) {
