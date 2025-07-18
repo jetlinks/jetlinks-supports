@@ -482,9 +482,13 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         MetadataUtils.resolveAttrs(annotation.expands(), metadata::expand);
 
-        if (!metadata.getExpand(CommandConstant.responseFlux).isPresent()) {
+        if (metadata.getExpand(CommandConstant.responseFlux).isEmpty()) {
             metadata.expand(CommandConstant.responseFlux,
                             Flux.class.isAssignableFrom(method.getReturnType()));
+        }
+        if (metadata.getExpand(CommandConstant.responseReactive).isEmpty()) {
+            metadata.expand(CommandConstant.responseReactive,
+                            Publisher.class.isAssignableFrom(method.getReturnType()));
         }
         //自定义输入参数描述
         if (!Void.class.equals(annotation.inputSpec())) {
