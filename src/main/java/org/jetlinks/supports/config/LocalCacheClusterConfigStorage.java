@@ -59,7 +59,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     private final Map<String, Cache> caches;
     final String id;
-    private final EventBus eventBus;
+    private final EventBusStorageManager manager;
 
     private final ClusterCache<String, Object> clusterCache;
 
@@ -68,25 +68,25 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     Throwable lastError;
 
-    public LocalCacheClusterConfigStorage(String id,
-                                          EventBus eventBus,
-                                          ClusterCache<String, Object> clusterCache,
-                                          long expires,
-                                          Consumer<LocalCacheClusterConfigStorage> doOnClear,
-                                          Map<String, Cache> cacheContainer) {
+    LocalCacheClusterConfigStorage(String id,
+                                   EventBusStorageManager manager,
+                                   ClusterCache<String, Object> clusterCache,
+                                   long expires,
+                                   Consumer<LocalCacheClusterConfigStorage> doOnClear,
+                                   Map<String, Cache> cacheContainer) {
         this.id = id;
-        this.eventBus = eventBus;
+        this.manager = manager;
         this.clusterCache = clusterCache;
         this.expires = expires;
         this.doOnClear = doOnClear;
         this.caches = cacheContainer;
     }
 
-    public LocalCacheClusterConfigStorage(String id, EventBus eventBus,
-                                          ClusterCache<String, Object> clusterCache,
-                                          long expires,
-                                          Consumer<LocalCacheClusterConfigStorage> doOnClear) {
-        this(id, eventBus, clusterCache, expires, doOnClear, new ConcurrentHashMap<>());
+    LocalCacheClusterConfigStorage(String id, EventBusStorageManager manager,
+                                   ClusterCache<String, Object> clusterCache,
+                                   long expires,
+                                   Consumer<LocalCacheClusterConfigStorage> doOnClear) {
+        this(id, manager, clusterCache, expires, doOnClear, new ConcurrentHashMap<>());
     }
 
 
@@ -254,7 +254,16 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         if (CollectionUtils.isEmpty(notify.getKeys())) {
             caches.clear();
         } else {
-            notify.getKeys().forEach(caches::remove);
+            for (String key : notify.getKeys()) {
+                Cache cache = caches.get(key);
+                if (cache == null) {
+                    continue;
+                }
+                // 缓存正在加载中?
+                if (CACHE_LOADING.get(cache) == null) {
+                    caches.remove(key, cache);
+                }
+            }
         }
         if (notify.isClear()) {
             if (doOnClear != null) {
@@ -264,12 +273,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
     Mono<Void> notify(CacheNotify notify) {
-        return Mono
-            .defer(() -> {
-                clearLocalCache(notify);
-                return eventBus.publish(NOTIFY_TOPIC, notify);
-            })
-            .then();
+        return Mono.defer(() -> {
+            clearLocalCache(notify);
+            return manager.doNotify(notify);
+        });
     }
 
     Mono<Void> notifyRemoveKey(String key) {
@@ -428,7 +435,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 return reload(loader);
             }
             updateTime();
-            Value cached = this.cached;
+            Value cached = CACHED.get(this);
             if (cached != null && !(ref instanceof Callable)) {
                 // 补偿，在某些极端情况下，await没有正确清理？
                 if (CACHE_LOADING.get(this) == null && AWAIT.get(this) != null) {

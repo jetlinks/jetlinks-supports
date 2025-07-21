@@ -149,8 +149,9 @@ public class BlockingMessageDecodeContext extends BlockingMessageCodecContext<Me
      */
     public Mono<Void> sendToDeviceReactive(EncodedMessage message) {
         return context
-            .unwrap(ToDeviceMessageContext.class)
-            .sendToDevice(message)
+            .unwrap(FromDeviceMessageContext.class)
+            .getSession()
+            .send(message)
             .then();
     }
 

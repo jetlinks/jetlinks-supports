@@ -1,10 +1,8 @@
 package org.jetlinks.supports.cluster;
 
 import com.google.common.cache.CacheBuilder;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
-import io.netty.buffer.ByteBufInputStream;
-import io.netty.buffer.ByteBufOutputStream;
+import io.netty.buffer.*;
+import io.netty.util.ReferenceCountUtil;
 import io.scalecube.services.annotations.ServiceMethod;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -124,13 +122,16 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
             .from(message)
             .flatMap(msg -> {
                 msg.addHeader(Headers.sendFrom, rpcManager.currentServerId());
+                ByteBuf buf = encode(msg);
+                ByteBuf unreleasableBuffer = Unpooled.unreleasableBuffer(buf);
                 //  addAwaitReplyKey(msg);
                 return rpcManager
                     .getService(deviceGatewayServerId, Service.class)
                     .flatMap(service -> service
-                        .send(encode(msg))
+                        .send(unreleasableBuffer)
                         .then(Reactors.ALWAYS_ONE))
-                    .switchIfEmpty(Reactors.ALWAYS_ZERO);
+                    .switchIfEmpty(Reactors.ALWAYS_ZERO)
+                    .doFinally(ignore -> ReferenceCountUtil.release(buf));
             })
             .reduce(0, Integer::sum);
     }
@@ -229,9 +230,12 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
                 .getServices(Service.class)
                 .map(RpcService::service);
         }
+        ByteBuf buf = encode(reply);
+        ByteBuf unreleasableBuffer = Unpooled.unreleasableBuffer(buf);
         return serviceFlux
-            .flatMap(service -> service.reply(encode(reply)))
-            .then();
+            .flatMap(service -> service.reply(unreleasableBuffer))
+            .then()
+            .doFinally(ignore -> ReferenceCountUtil.release(buf));
     }
 
     @SneakyThrows
@@ -269,6 +273,9 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
             } else {
                 SerializeUtils.writeObject(message, output);
             }
+        } catch (Throwable e) {
+            ReferenceCountUtil.safeRelease(buf);
+            throw e;
         }
         return buf;
     }

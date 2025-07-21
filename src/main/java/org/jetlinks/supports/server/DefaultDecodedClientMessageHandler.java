@@ -10,6 +10,7 @@ import reactor.core.publisher.*;
 import javax.annotation.Nonnull;
 import java.util.function.Function;
 
+@Deprecated
 @Slf4j
 public class DefaultDecodedClientMessageHandler implements DecodedClientMessageHandler {
 

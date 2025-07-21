@@ -70,6 +70,7 @@ public interface ExtendedCluster extends io.scalecube.cluster.Cluster {
      *
      * @param features feature
      */
+    @Deprecated
     void registerFeatures(Collection<String> features);
 
     /**
@@ -78,6 +79,7 @@ public interface ExtendedCluster extends io.scalecube.cluster.Cluster {
      * @param featureId feature
      * @return 节点
      */
+    @Deprecated
     List<Member> featureMembers(String featureId);
 
     /**
@@ -87,5 +89,6 @@ public interface ExtendedCluster extends io.scalecube.cluster.Cluster {
      * @param featureId featureId
      * @return 是否支持
      */
+    @Deprecated
     boolean supportFeature(String member, String featureId);
 }

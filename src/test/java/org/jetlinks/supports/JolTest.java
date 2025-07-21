@@ -2,7 +2,6 @@ package org.jetlinks.supports;
 
 import com.google.common.collect.Maps;
 import org.jetlinks.core.lang.SharedPathString;
-import org.jetlinks.supports.config.LocalCacheClusterConfigStorage;
 import org.openjdk.jol.info.ClassLayout;
 
 import java.util.Collections;
