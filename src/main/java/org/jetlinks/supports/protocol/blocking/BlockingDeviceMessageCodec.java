@@ -2,6 +2,7 @@ package org.jetlinks.supports.protocol.blocking;
 
 import io.netty.util.concurrent.FastThreadLocalThread;
 import org.jetlinks.core.command.CommandSupport;
+import org.jetlinks.core.command.blocking.BlockingCommandSupport;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.message.DeviceMessage;
 import org.jetlinks.core.message.Message;
@@ -118,6 +119,19 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
     protected final CommandSupport getCommandService(String serviceId) {
         return context
             .getService(serviceId, CommandSupport.class)
+            .orElseThrow(() -> new UnsupportedOperationException("unsupported commandService:" + serviceId));
+    }
+
+    /**
+     * 获取命令服务,用于执行平台内部命令,如文件上传等功能. <a href="https://hanta.yuque.com/px7kg1/dev/ew1xvzmlgbzkc0hy#xhJ3I">查看文档</a>
+     *
+     * @param serviceId 服务ID
+     * @return 命令服务
+     */
+    protected final BlockingCommandSupport getCommandServiceNow(String serviceId) {
+        return context
+            .getService(serviceId, CommandSupport.class)
+            .map(BlockingCommandSupport::of)
             .orElseThrow(() -> new UnsupportedOperationException("unsupported commandService:" + serviceId));
     }
 
