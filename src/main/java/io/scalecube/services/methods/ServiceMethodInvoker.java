@@ -156,7 +156,7 @@ public final class ServiceMethodInvoker {
                 message.headers());
         String context = message.header(HEADER_CONTEXT);
         if (context != null) {
-            ctx = ctx.putAll(contextCodec.deserialize(ctx,() -> context).readOnly());
+            ctx = contextCodec.deserialize(ctx,() -> context);
         }
         return ctx;
     }
