@@ -227,7 +227,9 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
                 argTypes[i] = ResolvableType.forMethodParameter(new MethodParameter(method, i), owner);
             }
             String[] discoveredArgName = MethodInterceptorHolder.nameDiscoverer.getParameterNames(method);
-
+            if (argTypes.length > 0 && discoveredArgName == null) {
+                log.warn("无法解析方法参数名,请编译时增加-parameters参数:{}", method);
+            }
             for (int i = 0; i < argNames.length; i++) {
                 Parameter parameter = parameters[i];
                 Schema schemaAnn = parameter.getAnnotation(Schema.class);
@@ -422,8 +424,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         private final MethodInvoker invoker;
 
         private Mono<FunctionMetadata> convertMetadata(Object data, SimpleFunctionMetadata metadata) {
-            if(data instanceof FunctionMetadata){
-                return Mono.just((FunctionMetadata)data);
+            if (data instanceof FunctionMetadata) {
+                return Mono.just((FunctionMetadata) data);
             }
 
             if (data instanceof DataType) {
@@ -436,16 +438,16 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
 
         @Override
         public Mono<FunctionMetadata> apply(Object target, Command<?> objectCommand, SimpleFunctionMetadata metadata) {
-           return Mono.defer(()->{
-               @SuppressWarnings("all")
-               Object object = invoker.apply(target, (Command<Object>) objectCommand);
-               if (object instanceof Publisher) {
-                   return Mono.from(((Publisher<?>) object))
-                              .flatMap(data -> convertMetadata(data, metadata));
-               }
-               return convertMetadata(object, metadata);
-              })
-               .as(LocaleUtils::transform);
+            return Mono.defer(() -> {
+                           @SuppressWarnings("all")
+                           Object object = invoker.apply(target, (Command<Object>) objectCommand);
+                           if (object instanceof Publisher) {
+                               return Mono.from(((Publisher<?>) object))
+                                          .flatMap(data -> convertMetadata(data, metadata));
+                           }
+                           return convertMetadata(object, metadata);
+                       })
+                       .as(LocaleUtils::transform);
         }
     }
 

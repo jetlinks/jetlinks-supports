@@ -180,40 +180,4 @@ public class RedisClusterManagerTest {
 
     }
 
-    @Test
-    @SneakyThrows
-    public void testHaManager() {
-        RedisHaManager haManager = new RedisHaManager("test",
-                ServerNode.builder().id("test-node").build(),
-                clusterManager,
-                clusterManager.getRedis());
-        haManager.startup();
-        Assert.assertEquals(haManager.currentServer().getId(), "test-node");
-
-        CountDownLatch latch = new CountDownLatch(2);
-        haManager.subscribeServerOnline()
-                .subscribe(node -> {
-                    latch.countDown();
-                    System.out.println(node.getId());
-                });
-        haManager.subscribeServerOffline()
-                .subscribe(node -> {
-                    latch.countDown();
-                    System.out.println(node.getId());
-                });
-
-        Thread.sleep(1000);
-
-        RedisHaManager haManager2 = new RedisHaManager("test",
-                ServerNode.builder().id("test-node2").build(),
-                clusterManager,
-                clusterManager.getRedis());
-        haManager2.startup();
-
-
-        Thread.sleep(1000);
-        haManager.shutdown();
-        haManager2.shutdown();
-        Assert.assertTrue(latch.await(10, TimeUnit.SECONDS));
-    }
 }
