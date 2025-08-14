@@ -278,6 +278,10 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
     private void register(Method method) {
         ResolvableType owner = targetType;
         Schema schema = AnnotationUtils.findAnnotation(method, Schema.class);
+
+        ReflectionUtils.makeAccessible(method);
+
+        Object target = this.target;
         String id = schema != null && StringUtils.hasText(schema.name()) ? schema.name() : method.getName();
         String name = id;
         String description = id;
