@@ -11,6 +11,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksGeoPointCodec extends AbstractDataTypeCodec<GeoType> {
 
     @Override

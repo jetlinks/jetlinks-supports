@@ -6,6 +6,7 @@ import org.jetlinks.core.metadata.types.IntType;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksIntCodec extends JetLinksNumberCodec<IntType> {
 
     @Override
