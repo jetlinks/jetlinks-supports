@@ -6,6 +6,7 @@ import org.jetlinks.core.metadata.types.DoubleType;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksDoubleCodec extends JetLinksNumberCodec<DoubleType> {
 
     @Override

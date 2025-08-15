@@ -6,6 +6,7 @@ import org.jetlinks.core.metadata.types.PasswordType;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksPasswordCodec extends AbstractDataTypeCodec<PasswordType> {
 
     @Override

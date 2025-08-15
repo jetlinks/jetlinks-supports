@@ -69,13 +69,7 @@ public class JetLinksEventMetadata implements EventMetadata {
     public DataType getType() {
         if (type == null && jsonObject != null) {
             JSONObject typeJson = jsonObject.getJSONObject("valueType");
-
-            type = Optional.ofNullable(typeJson.getString("type"))
-                           .map(DataTypes::lookup)
-                           .map(Supplier::get)
-                           .orElseGet(UnknownType::new);
-
-            type = JetLinksDataTypeCodecs.decode(type, typeJson);
+            type = DataTypes.fromJson(typeJson).orElseGet(UnknownType::new);
         }
         if (type == null && another != null) {
             type = another.getType();
@@ -89,7 +83,7 @@ public class JetLinksEventMetadata implements EventMetadata {
         jsonObject.put("id", id);
         jsonObject.put("name", name);
         jsonObject.put("description", description);
-        jsonObject.put("valueType", JetLinksDataTypeCodecs.encode(getType()).orElse(null));
+        jsonObject.put("valueType", Optional.ofNullable(getType()).map(DataType::toJson).orElse(null));
         jsonObject.put("expands", expands);
         return jsonObject;
     }
