@@ -210,6 +210,12 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- JSON Schema support -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-jsonSchema</artifactId>
+        </dependency>
+
     </dependencies>
 
     <dependencyManagement>
