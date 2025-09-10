@@ -3,7 +3,6 @@ package org.jetlinks.supports.scalecube.rpc;
 import com.fasterxml.jackson.core.JacksonException;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ThreadLocalRandom;
 import io.rsocket.exceptions.Retryable;
 import io.scalecube.cluster.ClusterMessageHandler;
@@ -27,6 +26,7 @@ import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.hswebframework.web.recycler.Recycler;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jctools.maps.NonBlockingHashSet;
 import org.jetlinks.core.rpc.*;
@@ -78,13 +78,8 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private static final String SPREAD_FROM_HEADER = "rpc_edp_f";
 
-    private static final FastThreadLocal<List<RpcServiceCall<?>>> SHARED =
-        new FastThreadLocal<List<RpcServiceCall<?>>>() {
-            @Override
-            protected List<RpcServiceCall<?>> initialValue() {
-                return new ArrayList<>(2);
-            }
-        };
+    private static final Recycler<List<RpcServiceCall<?>>> SHARED = Recycler.create(
+        () -> new ArrayList<>(2), List::clear, 64);
 
     static final String DEFAULT_SERVICE_ID = "_default";
 
@@ -494,7 +489,7 @@ public class ScalecubeRpcManager implements RpcManager {
                 tags.put(REGISTER_TIME_TAG, String.valueOf(System.currentTimeMillis()));
                 return new ServiceRegistration(createMethodQualifier(service, ref.namespace()), tags, ref.methods());
             })
-            .collect(Collectors.toList());
+            .toList();
 
         localRegistrations.addAll(registrations);
         syncRegistration();
@@ -530,39 +525,39 @@ public class ScalecubeRpcManager implements RpcManager {
         return Mono.defer(() -> selectService0(service, routeKey));
     }
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private <I> Mono<RpcService<I>> selectService0(Class<I> service, Object routeKey) {
-        @SuppressWarnings("all")
-        List<RpcServiceCall<I>> calls = (List) SHARED.get();
-        try {
-            //查找所有的节点
-            for (Map.Entry<String, ClusterNode> entry : serverServiceRef.entrySet()) {
-                entry.getValue().getApiCalls(null, service, calls);
-            }
 
-            int size = calls.size();
-            //没有服务
-            if (size == 0) {
-                return Mono.empty();
-            }
-            //只有一个,直接返回.
-            if (size == 1) {
-                return Mono.just(calls.get(0));
-            }
-            //随机
-            if (routeKey == null) {
-                return Mono.just(calls.get(ThreadLocalRandom.current().nextInt(size)));
-            }
+        return (Mono<RpcService<I>>) SHARED
+            .doWith(service, routeKey,
+                    (calls, _service, _routeKey) -> {
+                        //查找所有的节点
+                        for (Map.Entry<String, ClusterNode> entry : serverServiceRef.entrySet()) {
+                            entry.getValue().getApiCalls(null, _service, (List) calls);
+                        }
 
-            //按Key和服务ID进行hash排序,取第一个.
-            calls.sort(
-                Comparator.comparingLong(call -> hash(call.serverNodeId, routeKey))
-            );
+                        int size = calls.size();
+                        //没有服务
+                        if (size == 0) {
+                            return Mono.empty();
+                        }
+                        //只有一个,直接返回.
+                        if (size == 1) {
+                            return Mono.just(calls.get(0));
+                        }
+                        //随机
+                        if (_routeKey == null) {
+                            return Mono.just(calls.get(ThreadLocalRandom.current().nextInt(size)));
+                        }
 
-            return Mono.just(calls.get(0));
+                        //按Key和服务ID进行hash排序,取第一个.
+                        calls.sort(
+                            Comparator.comparingLong(call -> hash(call.serverNodeId, routeKey))
+                        );
 
-        } finally {
-            calls.clear();
-        }
+                        return Mono.just((RpcService) calls.get(0));
+                    });
+
     }
 
     @Override

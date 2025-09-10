@@ -1,9 +1,9 @@
 package org.jetlinks.supports.scalecube.rpc;
 
-import io.netty.util.concurrent.FastThreadLocal;
 import io.scalecube.services.api.ErrorData;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.exceptions.*;
+import org.hswebframework.web.recycler.Recycler;
 import org.jetlinks.core.utils.ExceptionUtils;
 import org.springframework.util.StringUtils;
 
@@ -18,13 +18,12 @@ import java.util.Optional;
 import static io.scalecube.services.api.ServiceMessage.HEADER_ERROR_TYPE;
 
 public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProviderErrorMapper {
-    static final FastThreadLocal<ByteArrayOutputStream> SHARED_OUT = new FastThreadLocal<ByteArrayOutputStream>() {
-        @Override
-        protected ByteArrayOutputStream initialValue() {
-            return new ByteArrayOutputStream(1024);
-        }
-    };
 
+    static final Recycler<ByteArrayOutputStream> SHARED_OUT = Recycler.create(
+        () -> new ByteArrayOutputStream(1024),
+        ByteArrayOutputStream::reset,
+        64
+    );
 
     private static final int DEFAULT_ERROR_CODE = 500;
 
@@ -47,27 +46,15 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
         String errorMessage = data.getErrorMessage();
         StackTraceElement[] stackTrace = decodeDetail(message.header(ERROR_DETAIL), topTrace);
 
-        Throwable error;
-        switch (errorType) {
-            case BadRequestException.ERROR_TYPE:
-                error = new BadRequestException(errorCode, errorMessage);
-                break;
-            case UnauthorizedException.ERROR_TYPE:
-                error = new UnauthorizedException(errorCode, errorMessage);
-                break;
-            case ForbiddenException.ERROR_TYPE:
-                error = new ForbiddenException(errorCode, errorMessage);
-                break;
-            case ServiceUnavailableException.ERROR_TYPE:
-                error = new ServiceUnavailableException(errorCode, errorMessage);
-                break;
-            case InternalServiceException.ERROR_TYPE:
-                error = new InternalServiceException(errorCode, errorMessage);
-                break;
+        Throwable error = switch (errorType) {
+            case BadRequestException.ERROR_TYPE -> new BadRequestException(errorCode, errorMessage);
+            case UnauthorizedException.ERROR_TYPE -> new UnauthorizedException(errorCode, errorMessage);
+            case ForbiddenException.ERROR_TYPE -> new ForbiddenException(errorCode, errorMessage);
+            case ServiceUnavailableException.ERROR_TYPE -> new ServiceUnavailableException(errorCode, errorMessage);
+            case InternalServiceException.ERROR_TYPE -> new InternalServiceException(errorCode, errorMessage);
             // Handle other types of Service Exceptions here
-            default:
-                error = new InternalServiceException(errorCode, errorMessage);
-        }
+            default -> new InternalServiceException(errorCode, errorMessage);
+        };
         if (stackTrace != null) {
             error.setStackTrace(stackTrace);
         }
@@ -102,28 +89,28 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
         if (stack.length == 0) {
             return "";
         }
-        ByteArrayOutputStream out = SHARED_OUT.get();
-        try (DataOutputStream dataOut = new DataOutputStream(out)) {
-            dataOut.writeInt(stack.length + top.length);
+        return SHARED_OUT
+            .doWith(top, stack, (out, _top, _stack) -> {
+                try (DataOutputStream dataOut = new DataOutputStream(out)) {
+                    dataOut.writeInt(_stack.length + _top.length);
 
-            for (StackTraceElement element : top) {
-                dataOut.writeUTF(element.getClassName());
-                dataOut.writeUTF(element.getMethodName());
-                dataOut.writeUTF(element.getFileName() == null ? "" : element.getFileName());
-                dataOut.writeInt(element.getLineNumber());
-            }
-            for (StackTraceElement element : stack) {
-                dataOut.writeUTF(element.getClassName());
-                dataOut.writeUTF(element.getMethodName());
-                dataOut.writeUTF(element.getFileName() == null ? "" : element.getFileName());
-                dataOut.writeInt(element.getLineNumber());
-            }
-            return Base64.getEncoder().encodeToString(out.toByteArray());
-        } catch (Throwable ignore) {
-            return "";
-        } finally {
-            out.reset();
-        }
+                    for (StackTraceElement element : _top) {
+                        dataOut.writeUTF(element.getClassName());
+                        dataOut.writeUTF(element.getMethodName());
+                        dataOut.writeUTF(element.getFileName() == null ? "" : element.getFileName());
+                        dataOut.writeInt(element.getLineNumber());
+                    }
+                    for (StackTraceElement element : _stack) {
+                        dataOut.writeUTF(element.getClassName());
+                        dataOut.writeUTF(element.getMethodName());
+                        dataOut.writeUTF(element.getFileName() == null ? "" : element.getFileName());
+                        dataOut.writeInt(element.getLineNumber());
+                    }
+                    return Base64.getEncoder().encodeToString(out.toByteArray());
+                } catch (Throwable ignore) {
+                    return "";
+                }
+            });
     }
 
     @Override
