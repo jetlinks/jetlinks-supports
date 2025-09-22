@@ -24,7 +24,9 @@ import reactor.test.StepVerifier;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 public class ScalecubeRpcManagerTest {
     Member node1, node2, node3;
@@ -260,6 +262,27 @@ public class ScalecubeRpcManagerTest {
                 .as(StepVerifier::create)
                 .expectNext("test", "hel", "lo")
                 .verifyComplete();
+    }
+
+    @Test
+    @SneakyThrows
+    public void testSelect() {
+        manager1.registerService("s1", new ServiceImpl("1"));
+        manager2.registerService("s1", new ServiceImpl("1"));
+
+        Thread.sleep(2000);
+
+        manager3
+            .selectService(Service.class,
+                           Collectors.reducing((a, b) -> {
+                               System.out.println(a+"=>"+b);
+                               return a;
+                           }),
+                           Mono.empty())
+            .flatMap(s -> s.upper("test-1"))
+            .as(StepVerifier::create)
+            .expectNext("1TEST-1")
+            .verifyComplete();
     }
 
     @io.scalecube.services.annotations.Service
