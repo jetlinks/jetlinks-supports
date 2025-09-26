@@ -83,6 +83,9 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         Flux<DeviceSessionInfo> sessions();
 
         @ServiceMethod
+        Flux<DeviceSessionInfo> sessions(String deviceId);
+
+        @ServiceMethod
         Mono<Void> sync(DeviceSessionInfo info);
 
         @Getter
@@ -202,6 +205,13 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return doWith(deviceId,
                           AbstractDeviceSessionManager::removeFromCluster,
                           Reactors.ALWAYS_ZERO_LONG);
+        }
+
+        @Override
+        public Flux<DeviceSessionInfo> sessions(String deviceId) {
+            return doWith(deviceId,
+                          AbstractDeviceSessionManager::getLocalDeviceSessionInfo,
+                          Flux.empty());
         }
 
         @Override
@@ -431,6 +441,16 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return service
                 .sync(info);
         }
+
+        @Override
+        public Flux<DeviceSessionInfo> sessions(String deviceId) {
+            return service
+                .sessions(deviceId)
+                .onErrorResume(err -> {
+                    handleError(err);
+                    return Flux.empty();
+                });
+        }
     }
 
 
@@ -509,6 +529,12 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         }
         Service service = services.get(serverId);
         return service == null ? Flux.empty() : service.sessions();
+    }
+
+    @Override
+    protected Flux<DeviceSessionInfo> remoteDeviceSessions(String deviceId) {
+        return getServices()
+            .flatMap(service->service.sessions(deviceId));
     }
 
     private Flux<Service> getServices() {

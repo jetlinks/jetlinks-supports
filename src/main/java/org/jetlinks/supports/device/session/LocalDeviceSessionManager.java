@@ -46,4 +46,9 @@ public class LocalDeviceSessionManager extends AbstractDeviceSessionManager {
     protected Flux<DeviceSessionInfo> remoteSessions(String serverId) {
         return Flux.empty();
     }
+
+    @Override
+    protected Flux<DeviceSessionInfo> remoteDeviceSessions(String deviceId) {
+        return Flux.empty();
+    }
 }
