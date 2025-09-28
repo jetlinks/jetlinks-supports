@@ -124,7 +124,9 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
                 return sessionManager
                     .remove(session.getDeviceId(), false)
                     .then(
-                        doReply(device, ((DisconnectDeviceMessage) message).newReply().success()).then(Reactors.ALWAYS_ONE)
+                        doReply(device, ((DisconnectDeviceMessage) message)
+                            .newReply()
+                            .success()).then(Reactors.ALWAYS_ONE)
                     );
             }
             return retryResume(device, message);
@@ -132,17 +134,16 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
 
         CodecContext context = new CodecContext(device, message, DeviceSession.trace(session));
 
-        Mono<Integer> sender =  Mono
+        Mono<Integer> sender = Mono
             //交给会话处理
             .defer(() -> session.send(context))
             .defaultIfEmpty(false)
             .flatMap(success -> {
-                if (!success) {
-                    // 发送失败了?
-                    return handleUnsupportedMessage(context);
-                } else {
+                if (success || context.alreadyReply || context.alreadySent) {
                     return Reactors.ALWAYS_ONE;
                 }
+                // 发送失败了?
+                return handleUnsupportedMessage(context);
             })
             //发送消息异常
             .onErrorResume(err -> {
@@ -162,7 +163,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
         if (message.getHeaderOrDefault(Headers.async)) {
             return Mono.deferContextual(ctx -> {
                 @SuppressWarnings("all")
-                Disposable disposable =sender
+                Disposable disposable = sender
                     .subscribe(null, null, null, Context.of(ctx));
                 return Reactors.ALWAYS_ONE;
             });
@@ -241,6 +242,10 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
     }
 
     private Mono<Integer> sendToNoSession(DeviceOperator device, DeviceMessage message) {
+        // 指定会话选择逻辑,忽略处理.
+        if (message.getHeaderOrDefault(Headers.sessionSelector) != DeviceSessionSelector.any) {
+            return Reactors.ALWAYS_ZERO;
+        }
         return sessionManager
             //检查整个集群的会话
             .checkAlive(message.getDeviceId(), false)
