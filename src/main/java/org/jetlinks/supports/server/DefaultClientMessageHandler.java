@@ -8,6 +8,7 @@ import org.jetlinks.core.message.codec.Transport;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+@Deprecated
 @AllArgsConstructor
 public class DefaultClientMessageHandler implements ClientMessageHandler {
 
