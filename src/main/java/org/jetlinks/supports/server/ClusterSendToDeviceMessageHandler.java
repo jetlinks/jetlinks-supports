@@ -13,10 +13,7 @@ import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.ToDeviceMessageContext;
 import org.jetlinks.core.message.state.DeviceStateCheckMessage;
 import org.jetlinks.core.server.MessageHandler;
-import org.jetlinks.core.server.session.ChildrenDeviceSession;
-import org.jetlinks.core.server.session.DeviceSession;
-import org.jetlinks.core.server.session.DeviceSessionSelector;
-import org.jetlinks.core.server.session.LostDeviceSession;
+import org.jetlinks.core.server.session.*;
 import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Publisher;
@@ -76,19 +73,6 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
     }
 
     private Mono<Integer> handleMessage(Message msg) {
-//        //异步发送
-//        if (msg.getHeaderOrDefault(Headers.async)) {
-//            return Mono.deferContextual(ctx -> {
-//                @SuppressWarnings("all")
-//                Disposable disposable = handleMessage0(msg)
-//                    .subscribe(null, null, null, Context.of(ctx));
-//                return Reactors.ALWAYS_ONE;
-//            });
-//        }
-        return handleMessage0(msg);
-    }
-
-    private Mono<Integer> handleMessage0(Message msg) {
         if (!(msg instanceof DeviceMessage message)) {
             return Mono.empty();
         }
@@ -110,8 +94,9 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
     @SuppressWarnings("all")
     private Mono<Integer> sendTo(DeviceSession session, DeviceMessage message) {
         DeviceOperator device;
-        //子设备会话都发给网关
-        if (session.isWrapFrom(ChildrenDeviceSession.class)) {
+        // 子设备会话尝试发给网关
+        if (!session.isWrapFrom(MultiGatewayDeviceSession.class)
+            && session.isWrapFrom(ChildrenDeviceSession.class)) {
             return sendToParentSession(session.getOperator(),
                                        session.unwrap(ChildrenDeviceSession.class).getParentDevice(),
                                        message);
@@ -119,6 +104,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
             device = session.getOperator();
         }
 
+        // 设备连接已丢失?
         if (session.isWrapFrom(LostDeviceSession.class)) {
             if (message instanceof DisconnectDeviceMessage) {
                 return sessionManager
@@ -126,7 +112,8 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
                     .then(
                         doReply(device, ((DisconnectDeviceMessage) message)
                             .newReply()
-                            .success()).then(Reactors.ALWAYS_ONE)
+                            .success())
+                            .then(Reactors.ALWAYS_ONE)
                     );
             }
             return retryResume(device, message);
@@ -271,9 +258,9 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
                 .then(Reactors.ALWAYS_ZERO);
         }
         message.addHeader(resumeSession, true);
-        boolean latest = message.getHeaderOrDefault(Headers.sessionSelector) == DeviceSessionSelector.any;
+        boolean any = message.getHeaderOrDefault(Headers.sessionSelector) == DeviceSessionSelector.any;
         //尝试发送给其他节点
-        if (latest && handler instanceof DeviceOperationBroker) {
+        if (any && handler instanceof DeviceOperationBroker) {
             return device
                 .getSelfConfig(DeviceConfigKey.connectionServerId)
                 .flatMap(serverId -> ((DeviceOperationBroker) handler).send(serverId, Mono.just(message)))
@@ -333,13 +320,19 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
         private final DeviceOperator device;
         private final DeviceMessage message;
         private final DeviceSession session;
+        private final CodecContext main;
 
         private volatile boolean alreadyReply = false, alreadySent = false;
 
         CodecContext(DeviceOperator device, DeviceMessage message, DeviceSession session) {
+            this(device, message, session, null);
+        }
+
+        CodecContext(DeviceOperator device, DeviceMessage message, DeviceSession session, CodecContext main) {
             this.device = device;
             this.message = message;
             this.session = session;
+            this.main = main == null ? this : main;
         }
 
         @Nullable
@@ -372,19 +365,19 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
         @Nonnull
         @Override
         public Mono<Void> reply(@Nonnull Publisher<? extends DeviceMessage> replyMessage) {
-            alreadyReply = true;
+            main.alreadyReply = true;
             return Flux
                 .from(replyMessage)
                 //正常处理
                 .map(msg -> decodedClientMessageHandler.handleMessage(device, msg).then())
                 //空流
                 .defaultIfEmpty(Mono.defer(() -> {
-                    alreadyReply = false;
+                    main.alreadyReply = false;
                     return Mono.empty();
                 }))
                 //回复流错误
                 .onErrorResume(err -> {
-                    alreadyReply = false;
+                    main.alreadyReply = false;
                     return Mono.error(err);
                 })
                 .concatMap(Function.identity())
@@ -393,7 +386,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
 
         @Override
         public Mono<Boolean> sendToDevice(@Nonnull EncodedMessage message) {
-            alreadySent = true;
+            main.alreadySent = true;
             //异步请求,只要发送则响应成功
             if (this.message.getHeaderOrDefault(Headers.async)) {
                 return session
@@ -431,7 +424,12 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
 
         @Override
         public ToDeviceMessageContext mutate(Message anotherMessage, DeviceOperator device) {
-            return new CodecContext(device, (DeviceMessage) anotherMessage, session);
+            return new CodecContext(device, (DeviceMessage) anotherMessage, session,this);
+        }
+
+        @Override
+        public ToDeviceMessageContext mutate(DeviceSession session,DeviceMessage message) {
+            return new CodecContext(device, message, session, this);
         }
     }
 

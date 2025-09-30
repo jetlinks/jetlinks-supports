@@ -3,12 +3,12 @@ package org.jetlinks.supports.cluster;
 import com.google.common.cache.CacheBuilder;
 import io.netty.buffer.*;
 import io.netty.util.ReferenceCountUtil;
-import io.scalecube.services.annotations.Service;
 import io.scalecube.services.annotations.ServiceMethod;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.device.DeviceState;
 import org.jetlinks.core.device.DeviceStateInfo;
+import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.message.*;
@@ -33,10 +33,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.time.Duration;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -129,8 +126,9 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
                 .doFinally(ignore -> ReferenceCountUtil.release(buf));
         }
 
+        byte selector = msg.getHeaderOrDefault(Headers.sessionSelector);
         // 发送给全部的节点
-        if (msg.getHeaderOrDefault(Headers.sessionSelector) == DeviceSessionSelector.all) {
+        if (selector == DeviceSessionSelector.all) {
             ByteBuf buf = encode(msg);
             ByteBuf unreleasableBuffer = Unpooled.unreleasableBuffer(buf);
             return Flux
@@ -144,28 +142,63 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
                 .reduce(0, Math::addExact)
                 .doFinally(ignore -> ReferenceCountUtil.release(buf));
         }
+        // 最新的节点
+        else if (selector == DeviceSessionSelector.latest) {
+            return sessionManager
+                .getDeviceSessionInfo(msg.getDeviceId())
+                .reduce(DeviceSessionSelector.SESSION_INFO_LATEST)
+                .flatMap(info -> sendTo(msg, Flux.just(info), Flux::singleOrEmpty))
+                .switchIfEmpty(Reactors.ALWAYS_ZERO);
+        }
+        // 最旧的节点
+        else if (selector == DeviceSessionSelector.oldest) {
+            return sessionManager
+                .getDeviceSessionInfo(msg.getDeviceId())
+                .reduce(DeviceSessionSelector.SESSION_INFO_OLDEST)
+                .flatMap(info -> sendTo(msg, Flux.just(info), Flux::singleOrEmpty))
+                .switchIfEmpty(Reactors.ALWAYS_ZERO);
+        }
+        // hash方式
+        else if (selector == DeviceSessionSelector.hashed) {
+            return sessionManager
+                .getDeviceSessionInfo(msg.getDeviceId())
+                .reduce((DeviceSessionSelector.hashedOperator(DeviceSessionInfo::getServerId, msg)))
+                .flatMap(info -> sendTo(msg, Flux.just(info), Flux::singleOrEmpty))
+                .switchIfEmpty(Reactors.ALWAYS_ZERO);
+        }
+        // minimumLoad
+        else if (selector == DeviceSessionSelector.minimumLoad) {
+            return sessionManager
+                .getDeviceSessionInfo(msg.getDeviceId())
+                .reduce(DeviceSessionSelector.SESSION_INFO_MINIMUM_LOAD)
+                .flatMap(info -> sendTo(msg, Flux.just(info), Flux::singleOrEmpty))
+                .switchIfEmpty(Reactors.ALWAYS_ZERO);
+        }
 
-        // 选择任意一个节点,优先本地
-        return sessionManager
-            .getSession(msg.getDeviceId())
-            .map(session -> doSendToDevice(msg))
-            .defaultIfEmpty(
-                Mono.defer(() -> {
-                    // 发送给指定的节点
-                    ByteBuf buf = encode(msg);
-                    ByteBuf unreleasableBuffer = Unpooled.unreleasableBuffer(buf);
-                    return sessionManager
-                        .getDeviceSessionInfo(msg.getDeviceId())
-                        .concatMap(info -> rpcManager.getService(info.getServerId(), Service.class))
-                        .concatMap(_service -> _service.send(unreleasableBuffer))
-                        .filter(i -> i > 0)
-                        .take(1)
-                        .singleOrEmpty()
-                        .switchIfEmpty(Reactors.ALWAYS_ZERO)
-                        .doFinally(ignore -> ReferenceCountUtil.release(buf));
-                })
-            )
-            .flatMap(Function.identity());
+        // 选择任意一个节点
+        return sendTo(
+            msg,
+            sessionManager.getDeviceSessionInfo(msg.getDeviceId()),
+            flux -> flux.filter(i -> i > 0).take(1).singleOrEmpty());
+    }
+
+    private Mono<Integer> sendTo(DeviceMessage msg, Flux<DeviceSessionInfo> receiver, Function<Flux<Integer>, Mono<Integer>> reducer) {
+        // 找到任意一个会话进行发送
+        ByteBuf buf = encode(msg);
+        ByteBuf unreleasableBuffer = Unpooled.unreleasableBuffer(buf);
+        return receiver
+            .concatMap(info -> {
+                //  于当前同一个节点
+                if (Objects.equals(info.getServerId(), rpcManager.currentServerId())) {
+                    return doSendToDevice(msg);
+                }
+                return rpcManager
+                    .getService(info.getServerId(), Service.class)
+                    .flatMap(_service -> _service.send(unreleasableBuffer));
+            })
+            .as(reducer)
+            .switchIfEmpty(Reactors.ALWAYS_ZERO)
+            .doFinally(ignore -> ReferenceCountUtil.release(buf));
     }
 
     @Override
