@@ -498,7 +498,7 @@ public class InternalEventBus implements EventBus {
         MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
         try {
             mBeanServer.registerMBean(new StandardMBean(new EventBusMBeanImpl(), EventBusMBean.class),
-                                      objectName = new ObjectName("org.jetlinks:type=EventBus,name=ClusterEventBus"));
+                                      objectName = new ObjectName("org.jetlinks:type=EventBus,name=InternalEventBus"));
         } catch (InstanceAlreadyExistsException ignore) {
 
         } catch (Exception e) {
