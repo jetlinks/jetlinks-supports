@@ -305,19 +305,6 @@ public class InternalEventBus implements EventBus {
         return new EventPublisher<>(this, topic, predicate, arg, handler);
     }
 
-    @Service("eventbus")
-    public interface S {
-
-        @ServiceMethod("s")
-        Mono<Void> sub(ByteBuf info);
-
-        @ServiceMethod("u")
-        Mono<Void> unsub(ByteBuf info);
-
-        @ServiceMethod("p")
-        Mono<Long> pub(ByteBuf payload);
-
-    }
 
     @EqualsAndHashCode(
         of = {"id", "subscriber0", "topicRef"},
