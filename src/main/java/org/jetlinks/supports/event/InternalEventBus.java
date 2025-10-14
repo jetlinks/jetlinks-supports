@@ -25,6 +25,7 @@ import org.jetlinks.core.topic.Topic;
 import org.jetlinks.core.topic.TopicView;
 import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.RecyclerUtils;
+import org.jetlinks.core.utils.SerializeUtils;
 import org.jetlinks.core.utils.json.ObjectMappers;
 import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
@@ -46,6 +47,7 @@ import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 @Slf4j
 public class InternalEventBus implements EventBus {
@@ -539,19 +541,23 @@ public class InternalEventBus implements EventBus {
         }
 
         @Override
-        public Set<SubscriptionInfo> getSubscribers(String topic) {
+        public Set<Object> getSubscribers(String topic) {
             return root
                 .getTopic(topic)
                 .map(Topic::getSubscribers)
-                .orElse(Collections.emptySet());
+                .orElse(Collections.emptySet())
+                .stream()
+                .map(SerializeUtils::convertToSafelySerializable)
+                .collect(Collectors.toSet());
         }
 
 
         @Override
-        public TopicView view(String prefix) {
+        public Object view(String prefix) {
             return root
                 .getTopic(prefix)
                 .map(Topic::view)
+                .map(SerializeUtils::convertToSafelySerializable)
                 .orElse(null);
         }
 
@@ -571,10 +577,10 @@ public class InternalEventBus implements EventBus {
 
         long getTotalTopics();
 
-        Set<SubscriptionInfo> getSubscribers(String topic);
+        Set<Object> getSubscribers(String topic);
 
         void cleanup();
 
-        TopicView view(String prefix);
+        Object view(String prefix);
     }
 }
