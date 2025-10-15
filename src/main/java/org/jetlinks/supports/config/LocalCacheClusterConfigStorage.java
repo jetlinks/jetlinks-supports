@@ -380,6 +380,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (null != value) {
                 keys.remove(key);
             }
+            request(1);
         }
 
         @Override
