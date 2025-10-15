@@ -48,7 +48,7 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
     static final AtomicLongFieldUpdater<EventSubscribeFlux> REMAINDER =
         AtomicLongFieldUpdater.newUpdater(EventSubscribeFlux.class,
                                           "remainder");
-
+    private Attr.RunStyle runStyle;
     private LocalSubscriber subscriber;
     private CoreSubscriber<? super T> actual;
     private volatile Queue<TopicPayload> buffer;
@@ -73,6 +73,7 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
                 return;
             }
             this.actual = actual;
+            this.runStyle = Scannable.from(actual).scan(Attr.RUN_STYLE);
             this.subscriber = new LocalSubscriber(parent, subscription, this);
         }
         //release memory
@@ -95,7 +96,7 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
     }
 
     private void tryCreateBuffer() {
-        if (requested < Integer.MAX_VALUE) {
+        if (requested < Integer.MAX_VALUE || this.runStyle != Attr.RunStyle.ASYNC) {
             if (buffer == null) {
                 synchronized (this) {
                     if (buffer == null) {
@@ -256,6 +257,7 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
         if (key == Attr.BUFFERED) return buffer == null ? 0 : buffer.size();
         if (key == Attr.REQUESTED_FROM_DOWNSTREAM) return requested;
         if (key == Attr.CANCELLED) return cancelled;
+        if (key == Attr.RUN_STYLE) return Attr.RunStyle.ASYNC;
 
         return null;
     }
