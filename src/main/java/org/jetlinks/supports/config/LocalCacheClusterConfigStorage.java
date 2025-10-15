@@ -18,6 +18,7 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.ConcurrentReferenceHashMap;
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
+import reactor.core.Scannable;
 import reactor.core.publisher.*;
 import reactor.util.context.Context;
 
@@ -344,7 +345,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
     @AllArgsConstructor
-    class MultiCacheLoader extends BaseSubscriber<Map.Entry<String, Object>> {
+    class MultiCacheLoader extends BaseSubscriber<Map.Entry<String, Object>> implements Scannable {
         private final Set<String> keys;
         private final Map<String, Integer> versions;
         private final Map<String, Object> container;
@@ -380,6 +381,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (null != value) {
                 keys.remove(key);
             }
+            request(1);
         }
 
         @Override
@@ -401,6 +403,17 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             }
             actual.onNext(wrapper);
             actual.onComplete();
+        }
+
+        @Override
+        public Object scanUnsafe(@Nonnull Attr key) {
+            if (key == Attr.RUN_STYLE) {
+                return Attr.RunStyle.SYNC;
+            }
+            if (key == Attr.ACTUAL) {
+                return actual;
+            }
+            return null;
         }
     }
 
