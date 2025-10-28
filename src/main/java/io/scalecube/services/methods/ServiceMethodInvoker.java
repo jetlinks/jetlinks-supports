@@ -124,9 +124,7 @@ public final class ServiceMethodInvoker {
                             .flatMapMany(authData -> flux
                                 .map(this::toRequest)
                                 .transform(this::invoke)
-                                .contextWrite(context -> enhanceContext(authData, context)))
-                            //trace
-                            .contextWrite(TraceHolder.readToContext(s.getContextView(), first.headers()))
+                                .contextWrite(context -> decodeContext(enhanceContext(authData, context),first)))
                             //response
                             .map(response -> toResponse(response, first.qualifier(), first.dataFormat()))
                             //error
