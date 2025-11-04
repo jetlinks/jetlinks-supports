@@ -52,15 +52,15 @@ public final class ServiceMessageCodec {
             this.dataCodecs = defaultCodecs;
         } else {
             this.dataCodecs =
-                    dataCodecs.stream()
-                              .collect(
-                                      collectingAndThen(
-                                              toMap(DataCodec::contentType, identity(), (c1, c2) -> c2),
-                                              usersCodec -> {
-                                                  Map<String, DataCodec> buffer = new HashMap<>(defaultCodecs);
-                                                  buffer.putAll(usersCodec);
-                                                  return Collections.unmodifiableMap(buffer);
-                                              }));
+                dataCodecs.stream()
+                          .collect(
+                              collectingAndThen(
+                                  toMap(DataCodec::contentType, identity(), (c1, c2) -> c2),
+                                  usersCodec -> {
+                                      Map<String, DataCodec> buffer = new HashMap<>(defaultCodecs);
+                                      buffer.putAll(usersCodec);
+                                      return Collections.unmodifiableMap(buffer);
+                                  }));
         }
     }
 
@@ -74,8 +74,8 @@ public final class ServiceMessageCodec {
      * @throws MessageCodecException when encoding cannot be done.
      */
     public <T> T encodeAndTransform(
-            ServiceMessage message, BiFunction<ByteBuf, ByteBuf, T> transformer)
-            throws MessageCodecException {
+        ServiceMessage message, BiFunction<ByteBuf, ByteBuf, T> transformer)
+        throws MessageCodecException {
         ByteBuf dataBuffer = Unpooled.EMPTY_BUFFER;
         ByteBuf headersBuffer = Unpooled.EMPTY_BUFFER;
 
@@ -89,7 +89,7 @@ public final class ServiceMessageCodec {
             } catch (Throwable ex) {
                 ReferenceCountUtil.safestRelease(dataBuffer);
                 LOGGER.error(
-                        "Failed to encode service message data on: {}, cause: {}", message, ex.toString());
+                    "Failed to encode service message data on: {}, cause: {}", message, ex.toString());
                 throw new MessageCodecException("Failed to encode service message data", ex);
             }
         }
@@ -102,7 +102,7 @@ public final class ServiceMessageCodec {
                 ReferenceCountUtil.safestRelease(headersBuffer);
                 ReferenceCountUtil.safestRelease(dataBuffer); // release data buf as well
                 LOGGER.error(
-                        "Failed to encode service message headers on: {}, cause: {}", message, ex.toString());
+                    "Failed to encode service message headers on: {}, cause: {}", message, ex.toString());
                 throw new MessageCodecException("Failed to encode service message headers", ex);
             }
         }
@@ -119,7 +119,7 @@ public final class ServiceMessageCodec {
      * @throws MessageCodecException when decode fails
      */
     public ServiceMessage decode(ByteBuf dataBuffer, ByteBuf headersBuffer)
-            throws MessageCodecException {
+        throws MessageCodecException {
         ServiceMessage.Builder builder = ServiceMessage.builder();
 
         if (dataBuffer.isReadable()) {
@@ -147,11 +147,11 @@ public final class ServiceMessageCodec {
      * @throws MessageCodecException when decode fails
      */
     public static ServiceMessage decodeData(ServiceMessage message, Type dataType)
-            throws MessageCodecException {
+        throws MessageCodecException {
         if (dataType == null
-                || !message.hasData(ByteBuf.class)
-                || ((ByteBuf) message.data()).readableBytes() == 0
-                || ByteBuf.class == dataType) {
+            || (!message.hasData(ByteBuf.class)
+            || ((ByteBuf) message.data()).readableBytes() == 0
+            || ByteBuf.class == dataType) && !message.isError()) {
             return message;
         }
 
