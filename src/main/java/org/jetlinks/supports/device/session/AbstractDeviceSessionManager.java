@@ -13,6 +13,7 @@ import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
 import org.springframework.util.ObjectUtils;
+import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
@@ -85,6 +86,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     protected abstract Flux<DeviceSessionInfo> remoteSessions(String serverId);
 
+    protected abstract Flux<DeviceSessionInfo> remoteDeviceSessions(String deviceId);
+
     protected Sinks.Many<DeviceSession> closeSink = Reactors.createMany();
     private volatile long closeWip = 0;
 
@@ -92,7 +95,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         Scheduler scheduler = Schedulers.newSingle("device-session-checker");
         disposable.add(scheduler);
         disposable.add(
-            Flux.interval(sessionCheckDelay,sessionCheckInterval, scheduler)
+            Flux.interval(sessionCheckDelay, sessionCheckInterval, scheduler)
                 .onBackpressureDrop()
                 .concatMap(time -> executeInterval())
                 .subscribe()
@@ -262,6 +265,28 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         return Flux.concat(
             getLocalSessionInfo(),
             remoteSessions(null));
+    }
+
+    @Override
+    public Flux<DeviceSessionInfo> getDeviceSessionInfo(String deviceId) {
+        if (StringUtils.hasText(deviceId)) {
+            return Flux.concat(
+                getLocalDeviceSessionInfo(deviceId),
+                remoteDeviceSessions(deviceId));
+        }
+        return Flux.empty();
+    }
+
+    protected Flux<DeviceSessionInfo> getLocalDeviceSessionInfo(String deviceId) {
+        DeviceSessionRef ref = localSessions.get(deviceId);
+        if (ref == null) {
+            return Flux.empty();
+        }
+        DeviceSession session = ref.loaded;
+        if (session == null) {
+            return Flux.empty();
+        }
+        return Flux.just(DeviceSessionInfo.of(getCurrentServerId(), session));
     }
 
     @Override
@@ -529,12 +554,12 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
 
-    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref){
-        return new DeviceSessionRef(deviceId,manager,ref);
+    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, Mono<DeviceSession> ref) {
+        return new DeviceSessionRef(deviceId, manager, ref);
     }
 
-    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, DeviceSession ref){
-        return new DeviceSessionRef(deviceId,manager,ref);
+    protected DeviceSessionRef newDeviceSessionRef(String deviceId, AbstractDeviceSessionManager manager, DeviceSession ref) {
+        return new DeviceSessionRef(deviceId, manager, ref);
     }
 
     protected static class DeviceSessionRef implements Disposable {
