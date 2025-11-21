@@ -9,6 +9,7 @@ import java.util.Map;
 
 import static java.util.Optional.ofNullable;
 
+@Deprecated
 public abstract class JetLinksNumberCodec<T extends NumberType<?>> extends AbstractDataTypeCodec<T>{
     @Override
     public abstract String getTypeId();
