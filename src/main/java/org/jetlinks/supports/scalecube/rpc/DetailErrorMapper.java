@@ -4,6 +4,7 @@ import io.scalecube.services.api.ErrorData;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.exceptions.*;
 import org.hswebframework.web.recycler.Recycler;
+import org.jetlinks.core.utils.ExceptionSerializer;
 import org.jetlinks.core.utils.ExceptionUtils;
 import org.springframework.util.StringUtils;
 
@@ -29,6 +30,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
 
     public static final DetailErrorMapper INSTANCE = new DetailErrorMapper();
     public static final String ERROR_DETAIL = "errorDetail";
+    public static final String ERROR_INFO = "errorInfo";
 
 
     StackTraceElement[] topTrace = new StackTraceElement[0];
@@ -44,6 +46,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
         int errorType = message.errorType();
         int errorCode = data.getErrorCode();
         String errorMessage = data.getErrorMessage();
+
         StackTraceElement[] stackTrace = decodeDetail(message.header(ERROR_DETAIL), topTrace);
 
         Throwable error = switch (errorType) {
@@ -53,7 +56,10 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
             case ServiceUnavailableException.ERROR_TYPE -> new ServiceUnavailableException(errorCode, errorMessage);
             case InternalServiceException.ERROR_TYPE -> new InternalServiceException(errorCode, errorMessage);
             // Handle other types of Service Exceptions here
-            default -> new InternalServiceException(errorCode, errorMessage);
+            default -> {
+                Throwable decode = decodeInfo(message.header(ERROR_INFO));
+                yield decode == null ? new InternalServiceException(errorCode, errorMessage) : decode;
+            }
         };
         if (stackTrace != null) {
             error.setStackTrace(stackTrace);
@@ -61,6 +67,32 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
         return error;
 
     }
+
+
+    public static Throwable decodeInfo(String e) {
+        if (StringUtils.hasText(e)) {
+            try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(Base64.getDecoder().decode(e)))) {
+                return ExceptionSerializer.deserialize(input, false);
+            } catch (Throwable err) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    public static String encodeInfo(Throwable error) {
+        return SHARED_OUT
+            .doWith(error, (out, _error) -> {
+                try (DataOutputStream dataOut = new DataOutputStream(out)) {
+                    ExceptionSerializer.serialize(_error, dataOut, false);
+                    dataOut.flush();
+                    return Base64.getEncoder().encodeToString(out.toByteArray());
+                } catch (Throwable ignore) {
+                    return "";
+                }
+            });
+    }
+
 
     public static StackTraceElement[] decodeDetail(String e, StackTraceElement... top) {
         if (!StringUtils.hasText(e)) {
@@ -106,6 +138,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
                         dataOut.writeUTF(element.getFileName() == null ? "" : element.getFileName());
                         dataOut.writeInt(element.getLineNumber());
                     }
+                    dataOut.flush();
                     return Base64.getEncoder().encodeToString(out.toByteArray());
                 } catch (Throwable ignore) {
                     return "";
@@ -139,6 +172,7 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
             .builder()
             .qualifier(qualifier)
             .header(HEADER_ERROR_TYPE, String.valueOf(errorType))
+            .header(ERROR_INFO, encodeInfo(throwable))
             .header(ERROR_DETAIL, createDetail(topTrace, throwable))
             .data(new ErrorData(errorCode, errorMessage))
             .build();
