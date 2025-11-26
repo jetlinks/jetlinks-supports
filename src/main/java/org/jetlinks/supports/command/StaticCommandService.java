@@ -6,9 +6,12 @@ import org.jetlinks.core.command.CommandSupport;
 import org.jetlinks.core.command.service.CommandService;
 import org.jetlinks.core.command.service.CommandServiceSupport;
 import org.jetlinks.core.command.service.ServiceDescription;
+import org.jetlinks.core.utils.MetadataUtils;
 import org.springframework.core.ResolvableType;
 import reactor.core.publisher.Mono;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -68,28 +71,38 @@ public class StaticCommandService extends AnnotationCommandSupport implements Co
         this.others = others;
     }
 
+    protected Module wrapModule(Module origin, Class<?> type) {
+        Map<String, Object> metadata = origin.getMetadata() == null ? new HashMap<>() : new HashMap<>(origin.getMetadata());
+        MetadataUtils.parseExpands(type).forEach(metadata::putIfAbsent);
+
+        ModuleInfo info = ModuleInfo.of(origin);
+        info.setMetadata(Collections.unmodifiableMap(metadata));
+        return info;
+
+    }
 
     public void registerTemplate(Module module, Class<?> commandSupport) {
         synchronized (this) {
-            modules.put(module.getId(), new ModuleRef(module, JavaBeanCommandSupport.createTemplate(commandSupport)));
+            modules.put(module.getId(), new ModuleRef(wrapModule(module, commandSupport),
+                                                      JavaBeanCommandSupport.createTemplate(commandSupport)));
         }
     }
 
     public void registerTemplate(Module module, ResolvableType type) {
         synchronized (this) {
-            modules.put(module.getId(), new ModuleRef(module, JavaBeanCommandSupport.createTemplate(type)));
+            modules.put(module.getId(), new ModuleRef(wrapModule(module, type.toClass()), JavaBeanCommandSupport.createTemplate(type)));
         }
     }
 
     public void register(Module module, Object commandSupport) {
         synchronized (this) {
-            modules.put(module.getId(), new ModuleRef(module, new JavaBeanCommandSupport(commandSupport)));
+            modules.put(module.getId(), new ModuleRef(wrapModule(module, commandSupport.getClass()), new JavaBeanCommandSupport(commandSupport)));
         }
     }
 
     public void register(Module module, CommandSupport commandSupport) {
         synchronized (this) {
-            modules.put(module.getId(), new ModuleRef(module, commandSupport));
+            modules.put(module.getId(), new ModuleRef(wrapModule(module, commandSupport.getClass()), commandSupport));
         }
     }
 

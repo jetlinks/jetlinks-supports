@@ -141,14 +141,16 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         if (ObjectUtils.isEmpty(deviceId)) {
             return Mono.empty();
         }
-        DeviceSessionRef ref = localSessions.get(deviceId);
-        if (ref == null || ref.isDisposed()) {
-            return Mono.empty();
-        }
-        if (unregisterWhenNotAlive) {
-            return ref.checkSessionAlive();
-        }
-        return ref.ref();
+        return Mono.defer(() -> {
+            DeviceSessionRef ref = localSessions.get(deviceId);
+            if (ref == null || ref.isDisposed()) {
+                return Mono.empty();
+            }
+            if (unregisterWhenNotAlive) {
+                return ref.checkSessionAlive();
+            }
+            return ref.ref();
+        });
     }
 
     @Override
