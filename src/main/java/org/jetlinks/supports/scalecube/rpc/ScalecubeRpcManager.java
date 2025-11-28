@@ -95,7 +95,7 @@ public class ScalecubeRpcManager implements RpcManager {
 
     private final DetailErrorMapper errorMapper = new DetailErrorMapper();
 
-    private static final RetryBackoffSpec DEFAULT_RETRY = Retry
+    static final RetryBackoffSpec DEFAULT_RETRY = Retry
         .backoff(12, Duration.ofMillis(50))
         .maxBackoff(Duration.ofSeconds(2))
         .jitter(0.2)
@@ -114,6 +114,8 @@ public class ScalecubeRpcManager implements RpcManager {
                         io.netty.handler.timeout.TimeoutException.class,
                         IOException.class
                     ))
+        .scheduler(Schedulers.parallel())
+        .onRetryExhaustedThrow((spec,signal)-> signal.failure())
         .doBeforeRetry(retrySignal -> {
             if (retrySignal.totalRetriesInARow() > 3) {
                 log.warn("rpc retries {} : [{}]",

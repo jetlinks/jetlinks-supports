@@ -21,17 +21,46 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import reactor.tools.agent.ReactorDebugAgent;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.Locale;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 public class ScalecubeRpcManagerTest {
     Member node1, node2, node3;
     ScalecubeRpcManager manager1, manager2, manager3;
 
+
+    @SneakyThrows
+    public static void main(String[] args) {
+
+        ReactorDebugAgent.init();
+        ReactorDebugAgent.processExistingClasses();
+
+        try {
+            Mono.defer(() -> {
+                    return Mono
+                        .delay(Duration.ofMillis(1))
+                        .thenReturn(1)
+                        .flatMap(i -> {
+                            return Mono.error(new TimeoutException());
+                        })
+                        .onErrorResume(Mono::error);
+                })
+                .retryWhen(ScalecubeRpcManager.DEFAULT_RETRY)
+                .block();
+        }catch (Throwable e){
+            e.printStackTrace();
+        }
+
+        System.in.read();
+
+
+    }
 
     @Before
     public void init() {
@@ -275,7 +304,7 @@ public class ScalecubeRpcManagerTest {
         manager3
             .selectService(Service.class,
                            Collectors.reducing((a, b) -> {
-                               System.out.println(a+"=>"+b);
+                               System.out.println(a + "=>" + b);
                                return a;
                            }),
                            Mono.empty())
@@ -332,4 +361,5 @@ public class ScalecubeRpcManagerTest {
                              Unpooled.wrappedBuffer("lo".getBytes()));
         }
     }
+
 }
