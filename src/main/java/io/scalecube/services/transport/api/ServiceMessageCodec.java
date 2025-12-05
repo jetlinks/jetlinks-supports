@@ -147,11 +147,11 @@ public final class ServiceMessageCodec {
      * @throws MessageCodecException when decode fails
      */
     public static ServiceMessage decodeData(ServiceMessage message, Type dataType)
-            throws MessageCodecException {
+        throws MessageCodecException {
         if (dataType == null
-                || !message.hasData(ByteBuf.class)
-                || ((ByteBuf) message.data()).readableBytes() == 0
-                || ByteBuf.class == dataType) {
+            || (!message.hasData(ByteBuf.class)
+            || ((ByteBuf) message.data()).readableBytes() == 0
+            || ByteBuf.class == dataType) && !message.isError()) {
             return message;
         }
 

@@ -5,8 +5,10 @@ import io.scalecube.services.ServiceInfo;
 import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodInvoker;
 import io.scalecube.services.methods.ServiceMethodRegistry;
+import lombok.Setter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.ResolvableType;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 
@@ -43,7 +45,18 @@ class RpcServiceMethodRegistry implements ServiceMethodRegistry {
                            // validate method
                            Reflect.validateMethodOrThrow(method);
                            String serviceName = ScalecubeRpcManager.createMethodQualifier(serviceId, Reflect.serviceName(serviceInterface));
-
+                           Class<?> requestType = Reflect.requestType(method);
+                           if (Object.class == requestType) {
+                               // 接口泛型?
+                               requestType = ResolvableType
+                                   .forMethodParameter(method,
+                                                       0,
+                                                       ResolvableType
+                                                           .forInstance(serviceInfo.serviceInstance())
+                                                           .toClass())
+                                   .getGeneric(0)
+                                   .toClass();
+                           }
                            MethodInfo methodInfo =
                                new MethodInfo(
                                    serviceName,
@@ -52,7 +65,7 @@ class RpcServiceMethodRegistry implements ServiceMethodRegistry {
                                    Reflect.isReturnTypeServiceMessage(method),
                                    Reflect.communicationMode(method),
                                    method.getParameterCount(),
-                                   Reflect.requestType(method),
+                                   requestType,
                                    Reflect.isRequestTypeServiceMessage(method),
                                    Reflect.isSecured(method));
 
