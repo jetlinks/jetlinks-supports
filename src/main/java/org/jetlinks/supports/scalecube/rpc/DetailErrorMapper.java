@@ -49,18 +49,19 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
 
         StackTraceElement[] stackTrace = decodeDetail(message.header(ERROR_DETAIL), topTrace);
 
-        Throwable error = switch (errorType) {
-            case BadRequestException.ERROR_TYPE -> new BadRequestException(errorCode, errorMessage);
-            case UnauthorizedException.ERROR_TYPE -> new UnauthorizedException(errorCode, errorMessage);
-            case ForbiddenException.ERROR_TYPE -> new ForbiddenException(errorCode, errorMessage);
-            case ServiceUnavailableException.ERROR_TYPE -> new ServiceUnavailableException(errorCode, errorMessage);
-            case InternalServiceException.ERROR_TYPE -> new InternalServiceException(errorCode, errorMessage);
-            // Handle other types of Service Exceptions here
-            default -> {
-                Throwable decode = decodeInfo(message.header(ERROR_INFO));
-                yield decode == null ? new InternalServiceException(errorCode, errorMessage) : decode;
-            }
-        };
+        Throwable error = decodeInfo(message.header(ERROR_INFO));
+        if (error == null) {
+            error = switch (errorType) {
+                case BadRequestException.ERROR_TYPE -> new BadRequestException(errorCode, errorMessage);
+                case UnauthorizedException.ERROR_TYPE -> new UnauthorizedException(errorCode, errorMessage);
+                case ForbiddenException.ERROR_TYPE -> new ForbiddenException(errorCode, errorMessage);
+                case ServiceUnavailableException.ERROR_TYPE -> new ServiceUnavailableException(errorCode, errorMessage);
+                case InternalServiceException.ERROR_TYPE -> new InternalServiceException(errorCode, errorMessage);
+                // Handle other types of Service Exceptions here
+                default -> new InternalServiceException(errorCode, errorMessage);
+            };
+        }
+
         if (stackTrace != null) {
             error.setStackTrace(stackTrace);
         }
