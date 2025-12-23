@@ -12,6 +12,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksDateCodec extends AbstractDataTypeCodec<DateTimeType> {
 
     @Override
