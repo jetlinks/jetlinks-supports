@@ -1,6 +1,7 @@
 package org.jetlinks.supports.event;
 
 import jakarta.annotation.Nonnull;
+import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.event.Subscription;
 import org.jetlinks.core.event.TopicPayload;
 import org.reactivestreams.Subscriber;
@@ -11,6 +12,9 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Operators;
 import reactor.util.concurrent.Queues;
+import reactor.util.context.ContextView;
+import reactor.util.function.Tuple2;
+import reactor.util.function.Tuples;
 
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -21,10 +25,11 @@ import java.util.function.Function;
 
 import static org.jetlinks.supports.event.InternalEventBus.*;
 
+@Slf4j
 class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subscription, Scannable,
     BiFunction<SubscriptionInfo, TopicPayload, Mono<Void>> {
     private Subscription subscription;
-    private final Function<TopicPayload, T> converter;
+    private final BiFunction<ContextView, TopicPayload, T> converter;
     private final InternalEventBus parent;
     private final Consumer<TopicPayload> dropListener;
 
@@ -51,11 +56,11 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
     private Attr.RunStyle runStyle;
     private LocalSubscriber subscriber;
     private CoreSubscriber<? super T> actual;
-    private volatile Queue<TopicPayload> buffer;
+    private volatile Queue<Tuple2<ContextView, TopicPayload>> buffer;
 
     EventSubscribeFlux(Subscription subscription,
                        InternalEventBus parent,
-                       Function<TopicPayload, T> converter) {
+                       BiFunction<ContextView, TopicPayload, T> converter) {
         this.subscription = subscription;
         this.dropListener = subscription.getDropListener();
         this.parent = parent;
@@ -84,8 +89,10 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
 
     @Override
     public Mono<Void> apply(SubscriptionInfo info, TopicPayload payload) {
-        next(info, payload);
-        return Mono.empty();
+        return Mono.deferContextual(ctx -> {
+            next(ctx, info, payload);
+            return Mono.empty();
+        });
     }
 
     void dropped(TopicPayload payload) {
@@ -107,14 +114,14 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
         }
     }
 
-    void next(SubscriptionInfo info, TopicPayload payload) {
+    void next(ContextView ctx, SubscriptionInfo info, TopicPayload payload) {
         tryCreateBuffer();
 
-        Queue<TopicPayload> buffer = this.buffer;
+        Queue<Tuple2<ContextView, TopicPayload>> buffer = this.buffer;
         if (buffer != null) {
             //不丢弃数据
             if (remainder == Long.MAX_VALUE) {
-                if (!buffer.offer(payload)) {
+                if (!buffer.offer(Tuples.of(ctx, payload))) {
                     info.dropped(payload);
                     dropped(payload);
                 }
@@ -125,7 +132,7 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
                     dropped(payload);
                     REMAINDER.decrementAndGet(this);
                 } else {
-                    if (!buffer.offer(payload)) {
+                    if (!buffer.offer(Tuples.of(ctx, payload))) {
                         info.dropped(payload);
                         dropped(payload);
                         REMAINDER.decrementAndGet(this);
@@ -134,24 +141,34 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
             }
             drain();
         } else {
-            next0(payload);
+            next0(ctx, payload);
         }
     }
 
-    private void next0(TopicPayload payload) {
-        T result = converter.apply(payload);
-        if (result != null) {
-            actual.onNext(result);
-        } else {
+    private boolean next0(ContextView ctx, TopicPayload payload) {
+        try {
+            T result = converter.apply(ctx, payload);
+            if (result != null) {
+                actual.onNext(result);
+                return true;
+            } else {
+                Operators.onDiscard(payload, actual.currentContext());
+                dropped(payload);
+                return false;
+            }
+        } catch (Throwable err) {
+            log.warn("handle event {} message failed", payload.getTopic(), err);
             Operators.onDiscard(payload, actual.currentContext());
             dropped(payload);
+            return false;
         }
+
     }
 
     @SuppressWarnings("all")
     void drain() {
         //还没有数据产生或者请求了Long.MAX_VALUE
-        Queue<TopicPayload> buffer = this.buffer;
+        Queue<Tuple2<ContextView, TopicPayload>> buffer = this.buffer;
         if (buffer == null) {
             return;
         }
@@ -170,7 +187,7 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
             while (r != e) {
                 boolean d = cancelled;
 
-                TopicPayload t = buffer.poll();
+                Tuple2<ContextView, TopicPayload> t = buffer.poll();
                 boolean empty = t == null;
 
                 if (checkTerminated(d, a)) {
@@ -181,9 +198,9 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
                     break;
                 }
 
-                next0(t);
-
-                e++;
+                if (next0(t.getT1(), t.getT2())) {
+                    e++;
+                }
             }
 
             if (r == e) {
@@ -217,8 +234,8 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
         return false;
     }
 
-    private Queue<TopicPayload> newBuffer() {
-        return Queues.<TopicPayload>unboundedMultiproducer().get();
+    private Queue<Tuple2<ContextView, TopicPayload>> newBuffer() {
+        return Queues.<Tuple2<ContextView, TopicPayload>>unboundedMultiproducer().get();
     }
 
     @Override
@@ -237,12 +254,12 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
             }
             cancelled = true;
         }
-        Queue<TopicPayload> buffer = this.buffer;
+        Queue<Tuple2<ContextView, TopicPayload>> buffer = this.buffer;
         if (buffer != null) {
-            for (TopicPayload payload;
+            for (Tuple2<ContextView, TopicPayload> payload;
                  (payload = buffer.poll()) != null; ) {
                 Operators.onDiscard(payload, actual.currentContext());
-                dropped(payload);
+                dropped(payload.getT2());
             }
         }
         if (null != subscriber) {
@@ -255,9 +272,9 @@ class EventSubscribeFlux<T> extends Flux<T> implements org.reactivestreams.Subsc
     public Object scanUnsafe(@Nonnull Attr key) {
         if (key == Attr.ACTUAL) return actual;
         if (key == Attr.BUFFERED) return buffer == null ? 0 : buffer.size();
+        if (key == Attr.LARGE_BUFFERED) return buffer == null ? 0L : (long) buffer.size();
         if (key == Attr.REQUESTED_FROM_DOWNSTREAM) return requested;
         if (key == Attr.CANCELLED) return cancelled;
-        if (key == Attr.RUN_STYLE) return Attr.RunStyle.ASYNC;
 
         return null;
     }

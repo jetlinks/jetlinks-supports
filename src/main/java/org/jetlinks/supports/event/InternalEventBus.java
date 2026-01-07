@@ -105,7 +105,10 @@ public class InternalEventBus implements EventBus {
 
     @Override
     public Flux<TopicPayload> subscribe(Subscription subscription) {
-        return new EventSubscribeFlux<>(subscription, this, Function.identity());
+        return new EventSubscribeFlux<>(
+            subscription,
+            this,
+            ((contextView, topicPayload) -> topicPayload));
     }
 
     @Override
@@ -113,7 +116,7 @@ public class InternalEventBus implements EventBus {
         return new EventSubscribeFlux<>(
             subscription,
             this,
-            payload -> {
+            (ctx, payload) -> {
                 try {
                     return payload.decode(type);
                 } catch (Throwable e) {
@@ -121,6 +124,11 @@ public class InternalEventBus implements EventBus {
                 }
                 return null;
             });
+    }
+
+    @Override
+    public <T> Flux<T> subscribe(Subscription subscription, BiFunction<ContextView, TopicPayload, T> mapper) {
+        return new EventSubscribeFlux<>(subscription, this, mapper);
     }
 
     @Override
@@ -379,9 +387,10 @@ public class InternalEventBus implements EventBus {
             return topic == null ? topicRef.getTopic() : topic.toString();
         }
 
-        public boolean isCluster(){
+        public boolean isCluster() {
             return false;
         }
+
         public String serverId() {
             // fixme 企业版支持集群
             return "default";
