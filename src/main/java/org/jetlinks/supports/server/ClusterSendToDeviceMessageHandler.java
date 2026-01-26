@@ -127,9 +127,15 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
                         doReply(device, ((DisconnectDeviceMessage) message).newReply().success())
                     );
             }
-            return retryResume(device, message);
+            if (!message.getHeaderOrDefault(Headers.ignoreSessionResume)) {
+                return retryResume(device, message);
+            }
         }
 
+        return send0(device, session, message);
+    }
+
+    private Mono<Void> send0(DeviceOperator device, DeviceSession session, DeviceMessage message) {
         CodecContext context = new CodecContext(device, message, DeviceSession.trace(session));
 
         return Mono
@@ -151,7 +157,6 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
                 return Mono.empty();
             })
             .then(Mono.defer(() -> handleMessageSent(context)));
-
     }
 
     private Mono<Void> handleMessageSent(CodecContext context) {
@@ -172,7 +177,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
 
     private Mono<Void> handleUnsupportedMessage(CodecContext context) {
         // 已经发送给了设备,则认为已经处理
-        if(context.alreadySent){
+        if (context.alreadySent) {
             return Mono.empty();
         }
         if (!context.alreadyReply) {
@@ -302,7 +307,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
         private final DeviceMessage message;
         private final DeviceSession session;
 
-        private volatile boolean alreadyReply = false,alreadySent = false;
+        private volatile boolean alreadyReply = false, alreadySent = false;
 
         CodecContext(DeviceOperator device, DeviceMessage message, DeviceSession session) {
             this.device = device;
