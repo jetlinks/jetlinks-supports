@@ -115,7 +115,7 @@ public class ScalecubeRpcManager implements RpcManager {
                         IOException.class
                     ))
         .scheduler(Schedulers.parallel())
-        .onRetryExhaustedThrow((spec,signal)-> signal.failure())
+        .onRetryExhaustedThrow((spec, signal) -> signal.failure())
         .doBeforeRetry(retrySignal -> {
             if (retrySignal.totalRetriesInARow() > 3) {
                 log.warn("rpc retries {} : [{}]",
@@ -305,7 +305,7 @@ public class ScalecubeRpcManager implements RpcManager {
     @Override
     public Flux<RpcService<?>> getServices() {
         return Flux
-            .fromIterable(serverServiceRef.values())
+            .defer(() -> Flux.fromIterable(serverServiceRef.values()))
             .flatMapIterable(node -> node.serviceInstances.values())
             .flatMapIterable(ServiceInstances::getAllCalls);
     }

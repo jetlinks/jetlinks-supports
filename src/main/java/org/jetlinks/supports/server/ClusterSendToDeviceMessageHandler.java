@@ -5,6 +5,8 @@ import org.jetlinks.core.device.DeviceConfigKey;
 import org.jetlinks.core.device.DeviceOperationBroker;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceRegistry;
+import org.jetlinks.core.device.identity.Identity;
+import org.jetlinks.core.device.identity.DeviceIdentityManager;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.exception.DeviceOperationException;
@@ -42,6 +44,8 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
     private final DeviceRegistry registry;
 
     private final DecodedClientMessageHandler decodedClientMessageHandler;
+
+    private DeviceIdentityManager identityManager;
 
     public ClusterSendToDeviceMessageHandler(DeviceSessionManager sessionManager,
                                              MessageHandler handler,
@@ -324,6 +328,11 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
         @Override
         public Mono<DeviceOperator> getDevice(String deviceId) {
             return registry.getDevice(deviceId);
+        }
+
+        @Override
+        public Mono<DeviceOperator> getDevice(Identity identity) {
+            return registry.getDevice(identity);
         }
 
         @Override
