@@ -4,10 +4,11 @@ import io.netty.util.concurrent.FastThreadLocalThread;
 import lombok.RequiredArgsConstructor;
 import org.jetlinks.core.defaults.BlockingDeviceOperator;
 import org.jetlinks.core.device.DeviceOperator;
-import org.jetlinks.core.device.identity.Identity;
+import org.jetlinks.core.device.DevicePrincipal;
 import org.jetlinks.core.message.codec.MessageCodecContext;
 import org.jetlinks.core.monitor.Monitor;
 import org.jetlinks.core.monitor.logger.Logger;
+import org.jetlinks.core.principal.Principal;
 import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
@@ -60,12 +61,15 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
     /**
      * 根据设备身份信息获取设备操作接口
      *
-     * @param identity Identity
      * @return 设备操作接口
      */
     @Nullable
-    public BlockingDeviceOperator getDevice(Identity identity) {
-        return wrapBlocking(await(context.getDevice(identity)));
+    public BlockingDevicePrincipal resolveDevice(Principal principal) {
+        DevicePrincipal devicePrincipal = await(context.resolveDevice(principal));
+        return new BlockingDevicePrincipal(
+            wrapBlocking(devicePrincipal.getDevice()),
+            devicePrincipal
+        );
     }
 
 

@@ -1,12 +1,8 @@
 package org.jetlinks.supports.server;
 
 import lombok.extern.slf4j.Slf4j;
-import org.jetlinks.core.device.DeviceConfigKey;
-import org.jetlinks.core.device.DeviceOperationBroker;
-import org.jetlinks.core.device.DeviceOperator;
-import org.jetlinks.core.device.DeviceRegistry;
-import org.jetlinks.core.device.identity.Identity;
-import org.jetlinks.core.device.identity.DeviceIdentityManager;
+import org.jetlinks.core.device.*;
+import org.jetlinks.core.principal.Identity;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.enums.ErrorCode;
 import org.jetlinks.core.exception.DeviceOperationException;
@@ -14,6 +10,7 @@ import org.jetlinks.core.message.*;
 import org.jetlinks.core.message.codec.EncodedMessage;
 import org.jetlinks.core.message.codec.ToDeviceMessageContext;
 import org.jetlinks.core.message.state.DeviceStateCheckMessage;
+import org.jetlinks.core.principal.Principal;
 import org.jetlinks.core.server.MessageHandler;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
@@ -45,7 +42,7 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
 
     private final DecodedClientMessageHandler decodedClientMessageHandler;
 
-    private DeviceIdentityManager identityManager;
+    private DevicePrincipalManager identityManager;
 
     public ClusterSendToDeviceMessageHandler(DeviceSessionManager sessionManager,
                                              MessageHandler handler,
@@ -331,8 +328,8 @@ public class ClusterSendToDeviceMessageHandler implements Function<Message, Mono
         }
 
         @Override
-        public Mono<DeviceOperator> getDevice(Identity identity) {
-            return registry.getDevice(identity);
+        public Mono<DevicePrincipal> resolveDevice(Principal principal) {
+            return registry.resolveDevice(principal);
         }
 
         @Override
