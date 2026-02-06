@@ -17,8 +17,8 @@ public class BlockingDevicePrincipal implements DevicePrincipal {
     }
 
     @Override
-    public boolean isAuthorized() {
-        return principal.isAuthorized();
+    public boolean isVerified() {
+        return principal.isVerified();
     }
 
     @Override

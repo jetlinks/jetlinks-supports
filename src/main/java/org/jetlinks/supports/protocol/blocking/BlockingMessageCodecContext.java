@@ -59,7 +59,7 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
     }
 
     /**
-     * 根据设备身份信息获取设备操作接口
+     * 根据设备身份信息解析设备操作接口
      *
      * @return 设备操作接口
      */
