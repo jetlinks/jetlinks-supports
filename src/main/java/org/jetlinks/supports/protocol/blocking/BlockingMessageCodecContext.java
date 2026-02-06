@@ -66,7 +66,7 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
     @Nullable
     public BlockingDevicePrincipal resolveDevice(Principal principal) {
         DevicePrincipal devicePrincipal = await(context.resolveDevice(principal));
-        return new BlockingDevicePrincipal(
+        return devicePrincipal == null ? null : new BlockingDevicePrincipal(
             wrapBlocking(devicePrincipal.getDevice()),
             devicePrincipal
         );
