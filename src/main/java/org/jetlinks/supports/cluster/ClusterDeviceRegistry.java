@@ -12,6 +12,8 @@ import org.jetlinks.core.config.ConfigStorageManager;
 import org.jetlinks.core.defaults.DefaultDeviceOperator;
 import org.jetlinks.core.defaults.DefaultDeviceProductOperator;
 import org.jetlinks.core.device.*;
+import org.jetlinks.core.device.DevicePrincipalManager;
+import org.jetlinks.core.principal.Principal;
 import org.jetlinks.core.message.interceptor.DeviceMessageSenderInterceptor;
 import org.jetlinks.core.things.ThingRpcSupportChain;
 import org.jetlinks.supports.config.ClusterConfigStorageManager;
@@ -51,6 +53,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     @Setter
     private ThingRpcSupportChain rpcChain;
+
+    @Setter
+    private DevicePrincipalManager principalManager;
 
     @Deprecated
     public ClusterDeviceRegistry(ProtocolSupports supports,
@@ -190,6 +195,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         if (rpcChain != null) {
             device.setRpcChain(rpcChain);
         }
+        if (principalManager != null) {
+            device.setPrincipalManager(principalManager);
+        }
         return device;
     }
 
@@ -327,6 +335,14 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                     .flatMap(ConfigStorage::clear)
             )
             .then();
+    }
+
+    @Override
+    public Mono<DevicePrincipal> resolveDevice(Principal query) {
+        if (principalManager != null) {
+            return principalManager.resolveDevicePrincipal(query);
+        }
+        return DeviceRegistry.super.resolveDevice(query);
     }
 
     public void addInterceptor(DeviceMessageSenderInterceptor interceptor) {

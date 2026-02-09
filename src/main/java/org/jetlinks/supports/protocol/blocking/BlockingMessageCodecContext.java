@@ -4,9 +4,11 @@ import io.netty.util.concurrent.FastThreadLocalThread;
 import lombok.RequiredArgsConstructor;
 import org.jetlinks.core.defaults.BlockingDeviceOperator;
 import org.jetlinks.core.device.DeviceOperator;
+import org.jetlinks.core.device.DevicePrincipal;
 import org.jetlinks.core.message.codec.MessageCodecContext;
 import org.jetlinks.core.monitor.Monitor;
 import org.jetlinks.core.monitor.logger.Logger;
+import org.jetlinks.core.principal.Principal;
 import org.jetlinks.core.utils.Reactors;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
@@ -55,6 +57,21 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
     public BlockingDeviceOperator getDevice(String deviceId) {
         return wrapBlocking(await(context.getDevice(deviceId)));
     }
+
+    /**
+     * 根据设备身份信息解析设备操作接口
+     *
+     * @return 设备操作接口
+     */
+    @Nullable
+    public BlockingDevicePrincipal resolveDevice(Principal principal) {
+        DevicePrincipal devicePrincipal = await(context.resolveDevice(principal));
+        return devicePrincipal == null ? null : new BlockingDevicePrincipal(
+            wrapBlocking(devicePrincipal.getDevice()),
+            devicePrincipal
+        );
+    }
+
 
     /**
      * 响应式获取指定设备ID的设备操作接口
@@ -201,7 +218,7 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
 
             PENDING.set(this, subscriber);
             Thread thread = Thread.currentThread();
-            if (Schedulers.isNonBlockingThread(thread)||
+            if (Schedulers.isNonBlockingThread(thread) ||
                 thread instanceof FastThreadLocalThread) {
                 task.subscribe(subscriber);
             } else {
