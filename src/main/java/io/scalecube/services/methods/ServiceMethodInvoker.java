@@ -1,8 +1,5 @@
 package io.scalecube.services.methods;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.handler.codec.base64.Base64;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.auth.Authenticator;
 import io.scalecube.services.auth.PrincipalMapper;
@@ -12,7 +9,10 @@ import io.scalecube.services.exceptions.ServiceProviderErrorMapper;
 import io.scalecube.services.exceptions.UnauthorizedException;
 import io.scalecube.services.transport.api.ServiceMessageDataDecoder;
 import lombok.Setter;
+import org.jetlinks.core.lang.SharedPathString;
 import org.jetlinks.core.rpc.ContextCodec;
+import org.jetlinks.core.trace.FluxTracer;
+import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.trace.TraceHolder;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
@@ -24,7 +24,6 @@ import reactor.util.context.ContextView;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
@@ -46,7 +45,7 @@ public final class ServiceMethodInvoker {
     private final PrincipalMapper<Object, Object> principalMapper;
     @Setter
     private ContextCodec contextCodec = ContextCodec.DEFAULT;
-
+    private final SharedPathString traceSpan;
     /**
      * Constructs a service method invoker out of real service object instance and method info.
      *
@@ -73,6 +72,7 @@ public final class ServiceMethodInvoker {
         this.dataDecoder = Objects.requireNonNull(dataDecoder, "dataDecoder");
         this.authenticator = authenticator;
         this.principalMapper = principalMapper;
+        this.traceSpan = SharedPathString.of("/_rpc/" + methodInfo.qualifier());
     }
 
     /**
@@ -85,6 +85,7 @@ public final class ServiceMethodInvoker {
         return Mono.deferContextual(context -> authenticate(message, context))
                    .flatMap(authData -> deferWithContextOne(message, authData))
                    .map(response -> toResponse(response, message.qualifier(), message.dataFormat()))
+                   .as(MonoTracer.create(this.traceSpan))
                    .onErrorResume(
                        throwable -> Mono.just(errorMapper.toMessage(message.qualifier(), throwable)));
     }
@@ -99,6 +100,7 @@ public final class ServiceMethodInvoker {
         return Mono.deferContextual(context -> authenticate(message, context))
                    .flatMapMany(authData -> deferWithContextMany(message, authData))
                    .map(response -> toResponse(response, message.qualifier(), message.dataFormat()))
+                   .as(FluxTracer.create(this.traceSpan))
                    .onErrorResume(
                        throwable -> Flux.just(errorMapper.toMessage(message.qualifier(), throwable)));
     }
@@ -124,13 +126,14 @@ public final class ServiceMethodInvoker {
                             .flatMapMany(authData -> flux
                                 .map(this::toRequest)
                                 .transform(this::invoke)
-                                .contextWrite(context -> decodeContext(enhanceContext(authData, context),first)))
+                                .contextWrite(context -> decodeContext(enhanceContext(authData, context), first)))
                             //response
                             .map(response -> toResponse(response, first.qualifier(), first.dataFormat()))
+                            .as(FluxTracer.create(this.traceSpan))
                             //error
                             .onErrorResume(throwable -> Flux.just(errorMapper.toMessage(first.qualifier(), throwable)));
                     }
-                    return flux.then(Mono.empty());
+                    return flux.as(FluxTracer.create(this.traceSpan)).then(Mono.empty());
                 }));
 //        return Flux.from(publisher)
 //                   .switchOnFirst(
@@ -154,7 +157,7 @@ public final class ServiceMethodInvoker {
                 message.headers());
         String context = message.header(HEADER_CONTEXT);
         if (context != null) {
-            ctx = contextCodec.deserialize(ctx,() -> context);
+            ctx = contextCodec.deserialize(ctx, () -> context);
         }
         return ctx;
     }
