@@ -11,6 +11,7 @@ import io.scalecube.transport.netty.tcp.TcpTransportFactory;
 import lombok.AllArgsConstructor;
 import lombok.SneakyThrows;
 import org.hswebframework.web.exception.BusinessException;
+import org.hswebframework.web.exception.I18nSupportException;
 import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.supports.scalecube.ExtendedCluster;
 import org.jetlinks.supports.scalecube.ExtendedClusterImpl;
@@ -312,6 +313,62 @@ public class ScalecubeRpcManagerTest {
             .as(StepVerifier::create)
             .expectNext("1TEST-1")
             .verifyComplete();
+    }
+
+    /**
+     * 递归调用测试：node1 -> node2 -> node3 -> node1 -> ...，验证 maxCallDepth 最大递归次数限制。
+     * 不设业务层 step 终止条件，依赖 ScalecubeRpcManager 的 maxCallDepth 在超过时抛出异常。
+     */
+    @Test
+    @SneakyThrows
+    public void testRecursiveChainCallMaxDepthLimit() {
+        int maxDepth = 3;
+        manager1.setMaxCallDepth(maxDepth);
+        manager2.setMaxCallDepth(maxDepth);
+        manager3.setMaxCallDepth(maxDepth);
+
+        manager1.registerService("chain", new ChainServiceImpl(manager1, "node2", "node1"));
+        manager2.registerService("chain", new ChainServiceImpl(manager2, "node3", "node2"));
+        manager3.registerService("chain", new ChainServiceImpl(manager3, "node1", "node3"));
+
+        Thread.sleep(2000);
+
+        manager3
+            .getService("node1", "chain", ChainService.class)
+            .flatMap(ChainService::chainCall)
+            .as(StepVerifier::create)
+            .expectErrorMatches(err -> err instanceof I18nSupportException
+                && "error.out_of_max_call_depth".equals(((I18nSupportException) err).getI18nCode()))
+            .verify();
+    }
+
+    /**
+     * 用于递归/链式调用测试的接口：node1 -> node2 -> node3 -> node1
+     */
+    @io.scalecube.services.annotations.Service
+    public interface ChainService {
+
+        @ServiceMethod
+        Mono<String> chainCall();
+    }
+
+    /**
+     * 链式调用实现：始终调用下一节点，不设业务层终止条件，由框架 maxCallDepth 限制截断。
+     */
+    @AllArgsConstructor
+    public static class ChainServiceImpl implements ChainService {
+
+        private final ScalecubeRpcManager manager;
+        private final String nextNodeAlias;
+        private final String myAlias;
+
+        @Override
+        public Mono<String> chainCall() {
+            return manager
+                .getService(nextNodeAlias, "chain", ChainService.class)
+                .flatMap(ChainService::chainCall)
+                .map(nextResult -> myAlias + "->" + nextResult);
+        }
     }
 
     @io.scalecube.services.annotations.Service

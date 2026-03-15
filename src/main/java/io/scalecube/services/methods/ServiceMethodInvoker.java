@@ -14,6 +14,7 @@ import org.jetlinks.core.rpc.ContextCodec;
 import org.jetlinks.core.trace.FluxTracer;
 import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.trace.TraceHolder;
+import org.jetlinks.supports.scalecube.rpc.ScalecubeRpcManager;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +31,7 @@ import java.util.StringJoiner;
 
 import static io.scalecube.services.auth.Authenticator.AUTH_CONTEXT_KEY;
 import static io.scalecube.services.auth.Authenticator.NULL_AUTH_CONTEXT;
+import static org.jetlinks.supports.scalecube.rpc.ScalecubeRpcManager.HEADER_CALL_DEPTH;
 import static org.jetlinks.supports.scalecube.rpc.ScalecubeRpcManager.HEADER_CONTEXT;
 
 public final class ServiceMethodInvoker {
@@ -46,6 +48,7 @@ public final class ServiceMethodInvoker {
     @Setter
     private ContextCodec contextCodec = ContextCodec.DEFAULT;
     private final SharedPathString traceSpan;
+
     /**
      * Constructs a service method invoker out of real service object instance and method info.
      *
@@ -159,6 +162,12 @@ public final class ServiceMethodInvoker {
         if (context != null) {
             ctx = contextCodec.deserialize(ctx, () -> context);
         }
+        // 调用深度
+        String depth = message.header(HEADER_CALL_DEPTH);
+        if (depth != null) {
+            ctx = ctx.put(ScalecubeRpcManager.CONTEXT_CALL_DEPTH_KEY, depth);
+        }
+
         return ctx;
     }
 

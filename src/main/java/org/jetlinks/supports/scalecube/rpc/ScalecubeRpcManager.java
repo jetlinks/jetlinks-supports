@@ -23,6 +23,7 @@ import io.scalecube.services.transport.api.ServiceMessageDataDecoder;
 import io.scalecube.services.transport.api.ServiceTransport;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
+import org.hswebframework.web.exception.I18nSupportException;
 import org.hswebframework.web.recycler.Recycler;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jctools.maps.NonBlockingHashSet;
@@ -84,6 +85,9 @@ public class ScalecubeRpcManager implements RpcManager {
     static final String REGISTER_TIME_TAG = "_regtime";
 
     public static final String HEADER_CONTEXT = ".ctx";
+    public static final String HEADER_CALL_DEPTH = ".depth";
+
+    public static final Object CONTEXT_CALL_DEPTH_KEY = ScalecubeRpcManager.class.getName() + ".depth";
 
     private ExtendedCluster cluster;
 
@@ -94,6 +98,10 @@ public class ScalecubeRpcManager implements RpcManager {
     private Scheduler requestScheduler = Schedulers.parallel();
 
     private final DetailErrorMapper errorMapper = new DetailErrorMapper();
+
+    @Getter
+    @Setter
+    private int maxCallDepth = 256;
 
     static final RetryBackoffSpec DEFAULT_RETRY = Retry
         .backoff(12, Duration.ofMillis(50))
@@ -911,6 +919,25 @@ public class ScalecubeRpcManager implements RpcManager {
             String sctx = serialized.getContext();
             if (sctx != null) {
                 builder = builder.header(HEADER_CONTEXT, sctx);
+            }
+            if (maxCallDepth > 0) {
+                //调用深度
+                Object depth = ctx.<Object>getOrDefault(CONTEXT_CALL_DEPTH_KEY, 0);
+                if (depth instanceof String str) {
+                    depth = Integer.parseInt(str) + 1;
+                    if ((int) depth > maxCallDepth) {
+                        throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
+                            .withSource(methodInfo.qualifier());
+                    }
+                    builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(depth));
+                } else if (depth instanceof Number number) {
+                    int _depth = number.intValue() + 1;
+                    if (_depth > maxCallDepth) {
+                        throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
+                            .withSource(methodInfo.qualifier());
+                    }
+                    builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(_depth));
+                }
             }
 
             return TraceHolder
