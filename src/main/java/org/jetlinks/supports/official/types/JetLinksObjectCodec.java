@@ -15,6 +15,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksObjectCodec extends AbstractDataTypeCodec<ObjectType> {
 
     @Override
