@@ -176,8 +176,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
     private void updateValue(Cache cache, int version, Object value) {
-        if (cache != null && CACHE_VERSION.get(cache) == version) {
-            cache.setValue(version, value);
+        if (cache != null) {
+            cache.updateValue(version, value == null ? null : Value.simple(value));
         }
     }
 
@@ -377,7 +377,9 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 val = value;
             }
             //设置最新的值,防止并发更新导致不一致
-            container.put(key, val);
+            if (val != null) {
+                container.put(key, val);
+            }
             if (null != value) {
                 keys.remove(key);
             }
@@ -398,10 +400,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     int version = versions.getOrDefault(needLoadKey, cache.version);
                     updateValue(cache, version, null);
                     //设置最新的值,防止并发更新导致不一致
-                    container.put(needLoadKey, cache.getCachedValue());
+                    Object val = cache.getCachedValue();
+                    if (val != null) {
+                        container.put(needLoadKey, val);
+                    }
                 }
             }
-            actual.onNext(wrapper);
+            actual.onNext(Values.of(container));
             actual.onComplete();
         }
 
@@ -489,8 +494,19 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         boolean updateValue(int version, Value value) {
             Value cached = CACHED.get(this);
+            int currentVersion = this.version;
+            if (currentVersion > version) {
+                if (log.isDebugEnabled()) {
+                    log.debug(
+                        "local cache [id=`{},`key=`{}` value={}] version not match, expect:<= {},actual:{}",
+                        id, key, value == null ? null : value.get(), version, currentVersion
+                    );
+                }
+                CACHE_REF.set(this, null);
+                return false;
+            }
 
-            if (CACHE_VERSION.compareAndSet(this, version, version + 1)) {
+            if (CACHE_VERSION.compareAndSet(this, currentVersion, version + 1)) {
                 if (value != null) {
                     value = tryShare(key, value);
                     if (CACHED.compareAndSet(this, cached, value)) {
