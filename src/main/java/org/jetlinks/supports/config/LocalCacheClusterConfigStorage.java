@@ -31,8 +31,6 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-import static org.jetlinks.supports.config.EventBusStorageManager.NOTIFY_TOPIC;
-
 @Slf4j
 public class LocalCacheClusterConfigStorage implements ConfigStorage {
     @SuppressWarnings("all")
@@ -133,7 +131,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     public Mono<Values> getConfigs(Collection<String> keys) {
         int hits = 0;
         Map<String, Object> loaded = Maps.newHashMapWithExpectedSize(keys.size());
-        //获取一级缓存
+        //获取二级缓存中加载的配置
+        Map<String, Cache> cacheLoaded = null;
         for (String key : keys) {
             Cache local = getOrCreateCache(key);
             Value cached = local.getCached();
@@ -141,43 +140,33 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 //命中一级缓存
                 hits++;
                 loaded.put(key, cached.get());
+            } else {
+                if (cacheLoaded == null) {
+                    cacheLoaded = Maps.newHashMapWithExpectedSize(keys.size() - hits);
+                }
+                cacheLoaded.put(key, local);
             }
         }
         Values wrap = Values.of(Maps.filterValues(loaded, Objects::nonNull));
         //全部来自一级缓存则直接返回
-        if (hits == keys.size()) {
+        if (hits == keys.size() || cacheLoaded == null) {
             return Mono.just(wrap);
         }
 
         //需要从二级缓存中加载的配置
-        Set<String> needLoadKeys = new HashSet<>(keys);
-        needLoadKeys.removeAll(loaded.keySet());
-        if (needLoadKeys.isEmpty()) {
-            return Mono.just(wrap);
-        }
-
-        //当前版本信息
-        Map<String, Integer> versions = Maps.newHashMapWithExpectedSize(needLoadKeys.size());
-        for (String needLoadKey : needLoadKeys) {
-            Cache cache = caches.get(needLoadKey);
-            if (cache != null) {
-                versions.put(needLoadKey, cache.version);
-            }
-        }
+        Set<String> needLoadKeys = cacheLoaded.keySet();
 
         return new MultiCacheLoaderMono(
             clusterCache.get(needLoadKeys),
-            needLoadKeys,
-            versions,
-            loaded,
-            wrap
+            cacheLoaded,
+            loaded
         );
 
     }
 
     private void updateValue(Cache cache, int version, Object value) {
-        if (cache != null && CACHE_VERSION.get(cache) == version) {
-            cache.setValue(version, value);
+        if (cache != null) {
+            cache.updateValue(version, value == null ? null : Value.simple(value));
         }
     }
 
@@ -330,15 +319,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     @AllArgsConstructor
     class MultiCacheLoaderMono extends Mono<Values> {
         private final Flux<? extends Map.Entry<String, Object>> source;
-        private final Set<String> keys;
-        private final Map<String, Integer> versions;
+        private final Map<String, Cache> keys;
         private final Map<String, Object> container;
-        private final Values wrapper;
 
         @Override
         public void subscribe(@Nonnull CoreSubscriber<? super Values> actual) {
             source.subscribe(
-                new MultiCacheLoader(keys, versions, container, actual, wrapper)
+                new MultiCacheLoader(keys, container, actual)
             );
         }
 
@@ -346,11 +333,9 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @AllArgsConstructor
     class MultiCacheLoader extends BaseSubscriber<Map.Entry<String, Object>> implements Scannable {
-        private final Set<String> keys;
-        private final Map<String, Integer> versions;
+        private final Map<String, Cache> keys;
         private final Map<String, Object> container;
         private final CoreSubscriber<? super Values> actual;
-        private final Values wrapper;
 
         @Override
         protected void hookOnSubscribe(@Nonnull Subscription subscription) {
@@ -368,18 +353,19 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             String key = entry.getKey();
             Object value = entry.getValue();
             //加载到一级缓存中
-            Cache cache = getOrCreateCache(key);
-            int version = versions.getOrDefault(key, cache.version);
-            updateValue(cache, version, value);
+            Cache cache = keys.remove(key);
+            if (cache == null) {
+                cache = getOrCreateCache(key);
+            }
+            cache.setValue(cache.version, value);
             Object val = cache.getCachedValue();
             //最新值为null?可能是并发读写.版本不一致,还未成功加载值,直接使用获取到的值.
             if (val == null) {
                 val = value;
             }
             //设置最新的值,防止并发更新导致不一致
-            container.put(key, val);
-            if (null != value) {
-                keys.remove(key);
+            if (val != null) {
+                container.put(key, val);
             }
             request(1);
         }
@@ -393,15 +379,18 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         protected void hookOnComplete() {
             //还有配置没加载出来,说明这些配置不存在，则全部设置为null
             if (!keys.isEmpty()) {
-                for (String needLoadKey : keys) {
-                    Cache cache = getOrCreateCache(needLoadKey);
-                    int version = versions.getOrDefault(needLoadKey, cache.version);
-                    updateValue(cache, version, null);
+                for (Map.Entry<String, Cache> entry : keys.entrySet()) {
+                    String needLoadKey = entry.getKey();
+                    Cache cache = entry.getValue();
+                    cache.setValue(cache.version, null);
                     //设置最新的值,防止并发更新导致不一致
-                    container.put(needLoadKey, cache.getCachedValue());
+                    Object val = cache.getCachedValue();
+                    if (val != null) {
+                        container.put(needLoadKey, val);
+                    }
                 }
             }
-            actual.onNext(wrapper);
+            actual.onNext(Values.of(container));
             actual.onComplete();
         }
 
@@ -489,17 +478,26 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         boolean updateValue(int version, Value value) {
             Value cached = CACHED.get(this);
+            int currentVersion = this.version;
+            if (currentVersion > version) {
+                if (log.isDebugEnabled()) {
+                    log.debug(
+                        "local cache [id=`{},`key=`{}` value={}] version not match, expect:<= {},actual:{}",
+                        id, key, value == null ? null : value.get(), version, currentVersion
+                    );
+                }
+                CACHE_REF.compareAndSet(this, Mono.justOrEmpty(cached), null);
+                return false;
+            }
 
-            if (CACHE_VERSION.compareAndSet(this, version, version + 1)) {
+            if (CACHE_VERSION.compareAndSet(this, currentVersion, version + 1)) {
                 if (value != null) {
                     value = tryShare(key, value);
-                    if (CACHED.compareAndSet(this, cached, value)) {
-                        CACHE_REF.set(this, Mono.just(value));
-                    }
+                    CACHED.set(this, value);
+                    CACHE_REF.set(this, Mono.just(value));
                 } else {
-                    if (CACHED.compareAndSet(this, cached, NULL)) {
-                        CACHE_REF.set(this, Mono.empty());
-                    }
+                    CACHED.set(this, NULL);
+                    CACHE_REF.set(this, Mono.empty());
                 }
                 return true;
             } else {
@@ -509,7 +507,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                         id, key, value == null ? null : value.get(), version, this.version
                     );
                 }
-                CACHE_REF.set(this, null);
+                CACHE_REF.compareAndSet(this, Mono.justOrEmpty(cached), null);
                 return false;
             }
         }
@@ -532,8 +530,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 if (await != null) {
                     return await.asMono();
                 }
-                await = Sinks.one();
-                if (AWAIT.compareAndSet(this, null, await)) {
+                if (AWAIT.compareAndSet(this, null, await = Sinks.one())) {
                     @SuppressWarnings("all")
                     Mono<Value> ref = await.asMono();
                     CACHE_REF.set(this, ref);
@@ -630,9 +627,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             @Override
             protected void hookOnComplete() {
                 Sinks.One<Value> await = await();
-
-                if (!hasValue && await != null && loadingVersion == CACHE_VERSION.get(Cache.this)) {
+                if (await == null) {
+                    return;
+                }
+                if (!hasValue && loadingVersion == CACHE_VERSION.get(Cache.this)) {
                     setValue(await, this, loadingVersion, null);
+                } else {
+                    Cache.this.dispose(await, this, CACHED.get(Cache.this));
                 }
             }
 
