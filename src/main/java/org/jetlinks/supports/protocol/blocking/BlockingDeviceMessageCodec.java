@@ -1,6 +1,8 @@
 package org.jetlinks.supports.protocol.blocking;
 
 import io.netty.util.concurrent.FastThreadLocalThread;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import org.jetlinks.core.command.CommandSupport;
 import org.jetlinks.core.command.blocking.BlockingCommandSupport;
 import org.jetlinks.core.device.DeviceOperator;
@@ -17,14 +19,20 @@ import org.jetlinks.core.monitor.tracer.Tracer;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.core.things.BlockingThingsDataManager;
 import org.jetlinks.core.things.ThingsDataManager;
+import org.jetlinks.core.trace.MonoTracer;
+import org.jetlinks.core.trace.TraceHolder;
 import org.jetlinks.core.utils.Reactors;
+import org.jetlinks.supports.context.ReactorContextHelper;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import javax.annotation.Nonnull;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.function.Supplier;
 
 /**
  * 阻塞式的设备消息编解码器,可通过阻塞的方式操作对应的API.
@@ -185,25 +193,23 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
         return Flux.deferContextual((ctx) -> {
             DeviceOperator device = context.getDevice();
             Monitor monitor = device == null ? this.context.getMonitor() : this.context.getMonitor(device.getDeviceId());
+
+            Supplier<Mono<Message>> task =
+                () -> {
+                    BlockingMessageDecodeContext decodeContext =
+                        new BlockingMessageDecodeContext(monitor, context, getBlockingTimeout(), ctx);
+                    upstream(decodeContext);
+                    return decodeContext.runAsync();
+                };
+
             //在非阻塞线程中,需要使用单独的调度器来执行.
             //在java21中,建议开启虚拟线程调度器. -Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true
             if (isInNonBlocking()) {
                 return Mono
-                    .fromCallable(() -> {
-                        BlockingMessageDecodeContext decodeContext =
-                            new BlockingMessageDecodeContext(monitor, context, getBlockingTimeout(), ctx);
-
-                        upstream(decodeContext);
-                        return decodeContext;
-                    })
-                    .<Message>flatMap(BlockingMessageCodecContext::runAsync)
+                    .defer(ReactorContextHelper.wrapBlocking(ctx, task))
                     .subscribeOn(Schedulers.boundedElastic());
             } else {
-                BlockingMessageDecodeContext decodeContext =
-                    new BlockingMessageDecodeContext(monitor, context, getBlockingTimeout(), ctx);
-
-                upstream(decodeContext);
-                return decodeContext.runAsync();
+                return task.get();
             }
         });
 
@@ -215,23 +221,22 @@ public abstract class BlockingDeviceMessageCodec implements DeviceMessageCodec {
         return Flux.deferContextual((ctx) -> {
             DeviceOperator device = context.getDevice();
             Monitor monitor = device == null ? this.context.getMonitor() : this.context.getMonitor(device.getDeviceId());
-            //在非阻塞线程中,需要使用单独的调度器来执行.
-            //在java21中,建议开启虚拟线程调度器. -Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true
-            if (isInNonBlocking()) {
-                return Mono
-                    .fromCallable(() -> {
-                        BlockingMessageEncodeContext encodeContext =
-                            new BlockingMessageEncodeContext(monitor, context, getBlockingTimeout(), ctx);
-                        downstream(encodeContext);
-                        return encodeContext;
-                    })
-                    .<EncodedMessage>flatMap(BlockingMessageCodecContext::runAsync)
-                    .subscribeOn(Schedulers.boundedElastic());
-            } else {
+
+            Supplier<Mono<EncodedMessage>> task = () -> {
                 BlockingMessageEncodeContext encodeContext =
                     new BlockingMessageEncodeContext(monitor, context, getBlockingTimeout(), ctx);
                 downstream(encodeContext);
                 return encodeContext.runAsync();
+            };
+
+            //在非阻塞线程中,需要使用单独的调度器来执行.
+            //在java21中,建议开启虚拟线程调度器. -Dreactor.schedulers.defaultBoundedElasticOnVirtualThreads=true
+            if (isInNonBlocking()) {
+                return Mono
+                    .defer(ReactorContextHelper.wrapBlocking(ctx, task))
+                    .subscribeOn(Schedulers.boundedElastic());
+            } else {
+                return task.get();
             }
         });
     }

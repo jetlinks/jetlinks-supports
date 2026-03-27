@@ -6,6 +6,7 @@ import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.supports.event.InternalEventBus;
 import org.junit.Test;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -17,7 +18,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -55,13 +58,13 @@ public class LocalCacheClusterConfigStorageTest {
 
         // First call to load into local cache
         storage.getConfigs(Arrays.asList("id", "name"))
-            .as(StepVerifier::create)
-            .expectNextMatches(values -> {
-                assertEquals("id-value", values.getValue("id").map(Value::asString).orElse(null));
-                assertEquals("name-value", values.getValue("name").map(Value::asString).orElse(null));
-                return true;
-            })
-            .verifyComplete();
+               .as(StepVerifier::create)
+               .expectNextMatches(values -> {
+                   assertEquals("id-value", values.getValue("id").map(Value::asString).orElse(null));
+                   assertEquals("name-value", values.getValue("name").map(Value::asString).orElse(null));
+                   return true;
+               })
+               .verifyComplete();
 
         // 验证并发更新情况
         Flux.range(0, 1000)
@@ -76,15 +79,15 @@ public class LocalCacheClusterConfigStorageTest {
 
                 // 模拟另一个线程在后台并发更新
                 return storage.setConfigs(currentData)
-                    .then(storage.getConfigs(Arrays.asList("id", "name")))
-                    .doOnNext(values -> {
-                        String id = values.getValue("id").map(Value::asString).orElse("");
-                        String name = values.getValue("name").map(Value::asString).orElse("");
-                        // 如果获取到的 ID 包含 "name-"，说明发生了混淆
-                        if (id.startsWith("name-") || name.startsWith("id-")) {
-                           throw new RuntimeException("Confusion detected! id=" + id + ", name=" + name);
-                        }
-                    });
+                              .then(storage.getConfigs(Arrays.asList("id", "name")))
+                              .doOnNext(values -> {
+                                  String id = values.getValue("id").map(Value::asString).orElse("");
+                                  String name = values.getValue("name").map(Value::asString).orElse("");
+                                  // 如果获取到的 ID 包含 "name-"，说明发生了混淆
+                                  if (id.startsWith("name-") || name.startsWith("id-")) {
+                                      throw new RuntimeException("Confusion detected! id=" + id + ", name=" + name);
+                                  }
+                              });
             })
             .sequential()
             .as(StepVerifier::create)
@@ -136,6 +139,7 @@ public class LocalCacheClusterConfigStorageTest {
         assertEquals("same-value", v2.asString());
         assertNotSame(v1, v2);
     }
+
     @Test
     @SuppressWarnings("unchecked")
     public void testAwaitLeakOnCompleteMismatch() {
@@ -163,7 +167,10 @@ public class LocalCacheClusterConfigStorageTest {
         when(clusterCache.put(anyString(), any())).thenReturn(Mono.just(true));
 
         // 等待 Loader(0) 启动
-        try { Thread.sleep(50); } catch (InterruptedException ignore) {}
+        try {
+            Thread.sleep(50);
+        } catch (InterruptedException ignore) {
+        }
 
         // 2. 触发 version 变更。这会增加版本号并清空 version=0 对应的 await。
         // 但 Loader(0) 内部仍然持有 version=0，并在 100ms 后完成。
@@ -171,10 +178,13 @@ public class LocalCacheClusterConfigStorageTest {
 
         // 3. 验证之前的 result (Loader(0)) 是否能正确完成。
         // 在修复前，它会因为 version mismatch 而既不完成也不报错，导致 StepVerifier 超时。
+        // 现在修复后，因为 setConfig 触发了 setValue(version, value)，这会 emitValue("value") 到 await。
+        // 所以这里应该收到 "value" 而不是直接 Complete。
         StepVerifier.create(result)
-            .expectSubscription()
-            .expectComplete()
-            .verify(Duration.ofMillis(500));
+                    .expectSubscription()
+                    .expectNextMatches(v -> "value".equals(v.asString()))
+                    .expectComplete()
+                    .verify(Duration.ofMillis(500));
     }
 
     @Test
@@ -199,8 +209,8 @@ public class LocalCacheClusterConfigStorageTest {
         Mono<Value> result = storage.getConfig("test_key");
 
         StepVerifier.create(result)
-            .expectError(RuntimeException.class)
-            .verify(Duration.ofMillis(500));
+                    .expectError(RuntimeException.class)
+                    .verify(Duration.ofMillis(500));
     }
 
     @Test
@@ -267,10 +277,10 @@ public class LocalCacheClusterConfigStorageTest {
         // 验证再次获取能拿到新值（如果 clusterCache 有值的话）
         when(clusterCache.get(key)).thenReturn(Mono.just("new_value"));
         storage.getConfig(key)
-            .map(Value::asString)
-            .as(StepVerifier::create)
-            .expectNext("new_value")
-            .verifyComplete();
+               .map(Value::asString)
+               .as(StepVerifier::create)
+               .expectNext("new_value")
+               .verifyComplete();
     }
 
     @Test
@@ -298,12 +308,12 @@ public class LocalCacheClusterConfigStorageTest {
             .flatMap(i -> {
                 String key = "key-" + (i % 10);
                 return storage.getConfig(key)
-                    .doOnNext(v -> {
-                        if (!v.asString().equals("value-" + key)) {
-                            errorCount.incrementAndGet();
-                        }
-                    })
-                    .then(Mono.fromRunnable(storage::cleanup));
+                              .doOnNext(v -> {
+                                  if (!v.asString().equals("value-" + key)) {
+                                      errorCount.incrementAndGet();
+                                  }
+                              })
+                              .then(Mono.fromRunnable(storage::cleanup));
             })
             .sequential()
             .collectList()
@@ -334,28 +344,77 @@ public class LocalCacheClusterConfigStorageTest {
         AtomicInteger errorCount = new AtomicInteger();
         // 模拟各种混合并发操作
         IntStream.range(0, 5000)
-            .parallel()
-            .forEach(i -> {
-                String key = "key-" + (i % 50);
-                double rand = Math.random();
-                Mono<?> op;
-                if (rand < 0.4) {
-                    // 这里不能用 when(clusterCache.get(key)).thenReturn(...) 因为并发下 Mockito 会乱
-                    // 已经在上面通用设置了
-                    op = storage.getConfig(key);
-                } else if (rand < 0.7) {
-                    op = storage.setConfig(key, "v-" + i);
-                } else if (rand < 0.9) {
-                    op = storage.remove(key);
-                } else {
-                    op = storage.getConfigs(Arrays.asList("key-1", "key-2", "key-3"));
-                }
-                op.doOnError(err -> {
-                    log.error("Error in concurrent op: {}", err.getMessage(), err);
-                    errorCount.incrementAndGet();
-                }).subscribe();
-            });
+                 .parallel()
+                 .forEach(i -> {
+                     String key = "key-" + (i % 50);
+                     double rand = Math.random();
+                     Mono<?> op;
+                     if (rand < 0.4) {
+                         // 这里不能用 when(clusterCache.get(key)).thenReturn(...) 因为并发下 Mockito 会乱
+                         // 已经在上面通用设置了
+                         op = storage.getConfig(key);
+                     } else if (rand < 0.7) {
+                         op = storage.setConfig(key, "v-" + i);
+                     } else if (rand < 0.9) {
+                         op = storage.remove(key);
+                     } else {
+                         op = storage.getConfigs(Arrays.asList("key-1", "key-2", "key-3"));
+                     }
+                     op.doOnError(err -> {
+                         log.error("Error in concurrent op: {}", err.getMessage(), err);
+                         errorCount.incrementAndGet();
+                     }).subscribe();
+                 });
 
         assertEquals(0, errorCount.get());
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testLateResponseOverride() {
+        ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
+        EventBusStorageManager manager = mock(EventBusStorageManager.class);
+        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        when(clusterCache.put(anyString(), any())).thenReturn(Mono.just(true));
+
+        LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
+            "test", manager, clusterCache, -1, null
+        );
+
+        String key = "late-key";
+        Sinks.One<Object> lateSink = Sinks.one();
+        AtomicReference<Object> valueRef = new AtomicReference<>();
+
+        // 模拟第一次读取，响应滞后
+        when(clusterCache.get(key)).thenAnswer(inv -> {
+            Object val = valueRef.get();
+            return val == null ? lateSink.asMono() : Mono.just(val);
+        });
+        when(clusterCache.put(eq(key), any())).thenAnswer(inv -> {
+            valueRef.set(inv.getArgument(1));
+            return Mono.just(true);
+        });
+
+        // 触发读取
+        storage.getConfig(key).subscribe();
+
+        // 模拟第二次更新，直接写入新值 "new-value"
+        storage.setConfig(key, "new-value").block();
+
+        Schedulers
+            .parallel()
+            .schedule(() -> {
+
+                // 模拟滞后的响应返回了 "old-value"
+                lateSink.emitValue("old-value", Sinks.EmitFailureHandler.FAIL_FAST);
+
+            }, 1, TimeUnit.SECONDS);
+        // 验证当前本地缓存已经是 "new-value"
+        assertEquals("new-value", storage.getConfig(key).block().asString());
+
+        // 再次获取，看是否被覆盖成了 "old-value"
+        Value finalValue = storage.getConfig(key).block();
+        assertEquals("new-value", finalValue.asString());
+    }
+
 }

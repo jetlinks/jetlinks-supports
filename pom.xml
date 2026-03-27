@@ -216,6 +216,11 @@
             <artifactId>jackson-module-jsonSchema</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>context-propagation</artifactId>
+        </dependency>
+
     </dependencies>
 
     <dependencyManagement>

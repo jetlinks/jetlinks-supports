@@ -15,6 +15,7 @@ import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Operators;
 import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Schedulers;
 import reactor.util.concurrent.Queues;
@@ -177,7 +178,7 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
         public void subscribe(@Nonnull CoreSubscriber<? super V> actual) {
             synchronized (this) {
                 if (this.actual != null) {
-                    actual.onError(Exceptions.duplicateOnSubscribeException());
+                    Operators.error(actual, Exceptions.duplicateOnSubscribeException());
                     return;
                 }
                 this.actual = actual;

@@ -203,7 +203,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             return;
         }
         Cache cache = caches.get(key);
-        if (cache != null && cache.loading == null) {
+        if (cache != null) {
             cache.setValue(cache.version, value);
         }
     }
@@ -469,7 +469,15 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
 
         boolean setValue(int version, Object value) {
-            return setValue(await(), CACHE_LOADING.get(this), version, value);
+            Sinks.One<Value> await = await();
+            Disposable loading = CACHE_LOADING.get(this);
+            // 外部更新，如果当前正在加载，则尝试取消加载。
+            if (loading != null) {
+                if (CACHE_LOADING.compareAndSet(this, loading, null)) {
+                    loading.dispose();
+                }
+            }
+            return setValue(await, null, version, value);
         }
 
         boolean setValue(Sinks.One<Value> await, Disposable loading, int version, Object value) {
