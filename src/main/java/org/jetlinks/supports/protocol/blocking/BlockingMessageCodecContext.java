@@ -10,6 +10,7 @@ import org.jetlinks.core.monitor.Monitor;
 import org.jetlinks.core.monitor.logger.Logger;
 import org.jetlinks.core.principal.Principal;
 import org.jetlinks.core.utils.Reactors;
+import org.jetlinks.supports.context.ReactorContextHelper;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
@@ -226,7 +227,10 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
                 //在阻塞线程中,使用单独的调度器来执行.
                 Schedulers
                     .parallel()
-                    .schedule(() -> task.subscribe(subscriber));
+                    .schedule(ReactorContextHelper
+                                  .wrapBlocking(
+                                      actual.currentContext(),
+                                      () -> task.subscribe(subscriber)));
             }
 
         }
