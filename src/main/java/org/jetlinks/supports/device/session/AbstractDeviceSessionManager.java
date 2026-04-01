@@ -11,7 +11,10 @@ import org.jetlinks.core.device.session.DeviceSessionInfo;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
+import org.jetlinks.core.trace.DeviceTracer;
+import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.utils.Reactors;
+import org.jetlinks.core.utils.json.ObjectMappers;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
@@ -381,6 +384,7 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
 
     private Mono<Void> closeSession0(DeviceSession session) {
         long now = System.currentTimeMillis();
+        DeviceSessionInfo info = DeviceSessionInfo.of(getCurrentServerId(), session);
         try {
             session.close();
         } catch (Throwable ignore) {
@@ -410,7 +414,12 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                         );
                 }
             })
-            .doAfterTerminate(() -> CLOSE_WIP.decrementAndGet(this));
+            .doAfterTerminate(() -> CLOSE_WIP.decrementAndGet(this))
+            .as(MonoTracer.create(
+                DeviceTracer.SpanName.sessionClosed(session.getDeviceId()),
+                span -> span.setAttributeLazy(
+                    DeviceTracer.SpanKey.session,
+                    () -> ObjectMappers.toJsonString(info))));
     }
 
     protected long getCloseWip() {
@@ -785,6 +794,12 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
                     .switchIfEmpty(Mono.fromRunnable(this::loadEmpty))
                     .timeout(manager.sessionLoadTimeout,
                              Mono.error(() -> new TimeoutException("device [" + deviceId + "] session load timeout")))
+                    // 创建会话
+                    .as(MonoTracer.create(
+                        DeviceTracer.SpanName.sessionCreated(deviceId),
+                        (span,s) -> span.setAttributeLazy(
+                            DeviceTracer.SpanKey.session,
+                            () -> ObjectMappers.toJsonString(DeviceSessionInfo.of(manager.getCurrentServerId(),s)))))
                     .subscribe(
                         loaded -> {
                             afterLoaded(loaded);
