@@ -74,6 +74,17 @@ class BlockingMessageCodecContext<T extends MessageCodecContext> {
         );
     }
 
+    /**
+     * 响应式解析设备
+     *
+     * @param principal Principal
+     * @return DevicePrincipal
+     */
+    @Nonnull
+    public Mono<DevicePrincipal> resolveDeviceAsync(Principal principal) {
+        return context.resolveDevice(principal);
+    }
+
 
     /**
      * 响应式获取指定设备ID的设备操作接口
