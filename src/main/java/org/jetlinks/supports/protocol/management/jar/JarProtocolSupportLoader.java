@@ -19,6 +19,7 @@ import reactor.core.scheduler.Schedulers;
 import java.io.File;
 import java.io.InputStream;
 import java.net.URL;
+import java.nio.file.Paths;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -80,7 +81,11 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                     URL url;
 
                     if (!location.contains("://")) {
-                        url = new File(location).toURI().toURL();
+                        url = new URL("jar:" + Paths.get(location).toUri().toURL() + "!/");
+                    } else if (location.startsWith("file:")) {
+                        url = new URL("jar:" + new File(new URL(location).toURI()).toURI().toURL() + "!/");
+                    } else if (location.startsWith("jar:file:")) {
+                        url = new URL(location);
                     } else {
                         url = new URL("jar:" + location + "!/");
                     }
@@ -125,6 +130,7 @@ public class JarProtocolSupportLoader implements ProtocolSupportLoaderProvider {
                     }
                     return supportProvider.create(context);
                 } catch (Throwable e) {
+                    log.error("load protocol support error : {}", e.getMessage(), e);
                     return Mono.error(e);
                 }
             })

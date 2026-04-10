@@ -8,6 +8,7 @@ import org.jetlinks.supports.protocol.management.ProtocolSupportDefinition;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.net.URL;
 import java.util.*;
 
 public class JarProtocolSupportLoaderTest {
@@ -47,7 +48,8 @@ public class JarProtocolSupportLoaderTest {
     public void test() {
         JarProtocolSupportLoader loader = new JarProtocolSupportLoader();
         loader.setServiceContext(context);
-        String location = this.getClass().getResource("/protocol-test-1.0-SNAPSHOT.jar").getPath();
+        URL url = this.getClass().getResource("/protocol-test-1.0-SNAPSHOT.jar");
+        String location = url.getFile();
 
         Map<String, Object> config = new HashMap<>();
         config.put("location", location);
@@ -59,10 +61,7 @@ public class JarProtocolSupportLoaderTest {
                 .build())
                 .block();
 
-
-
         Assert.assertNotNull(support);
         Assert.assertEquals(support.getId(), "test");
-
     }
 }
