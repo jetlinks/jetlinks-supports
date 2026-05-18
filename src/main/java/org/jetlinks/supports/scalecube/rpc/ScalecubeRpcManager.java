@@ -3,7 +3,6 @@ package org.jetlinks.supports.scalecube.rpc;
 import com.fasterxml.jackson.core.JacksonException;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.internal.ThreadLocalRandom;
 import io.rsocket.exceptions.Retryable;
 import io.scalecube.cluster.ClusterMessageHandler;
 import io.scalecube.cluster.Member;
@@ -61,6 +60,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.*;
@@ -395,7 +395,7 @@ public class ScalecubeRpcManager implements RpcManager {
         }
     }
 
-    private ServiceEndpoint createEndpoint() {
+    ServiceEndpoint createEndpoint() {
         return ServiceEndpoint
             .builder()
             .id(id)
@@ -594,16 +594,21 @@ public class ScalecubeRpcManager implements RpcManager {
         return selector.finisher().apply(container);
     }
 
+    private <I> RpcService<I> selectRandomService0(Class<I> service) {
+        RandomServiceSelector<RpcService<I>> selector = new RandomServiceSelector<>();
+        for (Map.Entry<String, ClusterNode> entry : serverServiceRef.entrySet()) {
+            entry
+                .getValue()
+                .getApiCalls(null, service, selector, (random, rpcService) -> random.onNext(rpcService));
+        }
+        return selector.selected;
+    }
+
 
     @Override
     public <I> Mono<RpcService<I>> selectService(Class<I> service, Object routeKey) {
         if (routeKey == null) {
-            return Mono
-                .fromSupplier(() -> this
-                    .selectService0(
-                        service,
-                        Collectors.minBy(Comparator.comparingLong(s -> ThreadLocalRandom.current().nextInt())))
-                    .orElse(null));
+            return Mono.fromSupplier(() -> this.selectRandomService0(service));
         }
         return Mono
             .fromSupplier(() -> this
@@ -661,10 +666,18 @@ public class ScalecubeRpcManager implements RpcManager {
         return retry;
     }
 
-    private void memberLeave(Member member) {
+    void memberLeave(Member member) {
         String id = member.alias() == null ? member.id() : member.alias();
-        ClusterNode ref = serverServiceRef.remove(id);
-        if (null != ref) {
+        ClusterNode ref = serverServiceRef.get(id);
+        if (ref == null) {
+            return;
+        }
+        Member currentMember = ref.member;
+        if (currentMember != null && !Objects.equals(currentMember.id(), member.id())) {
+            log.debug("ignore stale service endpoint removal [{}], current member is [{}]", member, currentMember);
+            return;
+        }
+        if (serverServiceRef.remove(id, ref)) {
             fireEvent(ref.services.values(), id, ServiceEvent.Type.removed);
             ref.dispose();
         }
@@ -682,13 +695,30 @@ public class ScalecubeRpcManager implements RpcManager {
         }
     }
 
-    private void handleServiceEndpoint(Member member, ServiceEndpoint endpoint) {
+    void handleServiceEndpoint(Member member, ServiceEndpoint endpoint) {
         if (cluster.member().id().equals(member.id())) {
             return;
         }
         String id = member.alias() == null ? member.id() : member.alias();
 
-        ClusterNode references = serverServiceRef.computeIfAbsent(id, ignore -> new ClusterNode());
+        ClusterNode references = serverServiceRef.get(id);
+        if (references != null) {
+            Member currentMember = references.member;
+            if (currentMember != null && !Objects.equals(currentMember.id(), member.id())) {
+                ClusterNode replaced = new ClusterNode();
+                replaced.id = id;
+                serverServiceRef.put(id, replaced);
+                fireEvent(references.services.values(), id, ServiceEvent.Type.removed);
+                references.dispose();
+                references = replaced;
+            }
+        }
+        if (references == null) {
+            ClusterNode created = new ClusterNode();
+            created.id = id;
+            ClusterNode previous = serverServiceRef.putIfAbsent(id, created);
+            references = previous == null ? created : previous;
+        }
         references.id = id;
         references.member = member;
         references.rpcAddress = endpoint.address();
@@ -767,6 +797,7 @@ public class ScalecubeRpcManager implements RpcManager {
                 if (removed.remove(registration.namespace()) == null) {
                     added.put(registration.namespace(), registration);
                 }
+                services.put(registration.namespace(), registration);
 
                 for (ServiceMethodDefinition method : registration.methods()) {
                     ServiceReference ref = new ServiceReference(method, registration, endpoint);
@@ -784,7 +815,6 @@ public class ScalecubeRpcManager implements RpcManager {
             }
 
             removed.forEach((k, v) -> services.remove(k));
-            services.putAll(added);
 
             fireEvent(added.values(), id, ServiceEvent.Type.added);
             fireEvent(removed.values(), id, ServiceEvent.Type.removed);
@@ -796,9 +826,11 @@ public class ScalecubeRpcManager implements RpcManager {
                 .tags()
                 .getOrDefault(SERVICE_ID_TAG, DEFAULT_SERVICE_ID);
 
-            return serviceReferencesByQualifier
-                .computeIfAbsent(qualifier, key -> new NonBlockingHashSet<>())
-                .add(new ServiceReferenceInfo(id, serviceReference));
+            Set<ServiceReferenceInfo> references = serviceReferencesByQualifier
+                .computeIfAbsent(qualifier, key -> new NonBlockingHashSet<>());
+            references.remove(new ServiceReferenceInfo(id, null));
+            references.add(new ServiceReferenceInfo(id, serviceReference));
+            return true;
         }
 
         private <I> RpcServiceCall<I> createApiCall(String serviceId, Class<I> clazz) {
@@ -1201,6 +1233,17 @@ public class ScalecubeRpcManager implements RpcManager {
         @Override
         public String toString() {
             return name + "@" + serverNodeId;
+        }
+    }
+
+    static class RandomServiceSelector<T> {
+        private long size;
+        private T selected;
+
+        private void onNext(T candidate) {
+            if (ThreadLocalRandom.current().nextLong(++size) == 0) {
+                selected = candidate;
+            }
         }
     }
 

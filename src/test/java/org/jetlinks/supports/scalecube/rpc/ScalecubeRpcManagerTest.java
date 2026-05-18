@@ -26,12 +26,12 @@ import reactor.tools.agent.ReactorDebugAgent;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Comparator;
 import java.util.Locale;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 public class ScalecubeRpcManagerTest {
+    ExtendedCluster cluster1, cluster2, cluster3;
     Member node1, node2, node3;
     ScalecubeRpcManager manager1, manager2, manager3;
 
@@ -63,54 +63,58 @@ public class ScalecubeRpcManagerTest {
 
     }
 
+    private ExtendedCluster startCluster(String alias, ExtendedCluster seed) {
+        ClusterConfig config = ClusterConfig
+            .defaultConfig()
+            .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
+            .memberAlias(alias);
+        if (seed != null) {
+            config = config.membership(conf -> conf.seedMembers(seed.address()));
+        }
+        return new ExtendedClusterImpl(config).startAwait();
+    }
+
+    private ScalecubeRpcManager startManager(ExtendedCluster cluster) {
+        ScalecubeRpcManager manager = new ScalecubeRpcManager(cluster, RSocketServiceTransport::new);
+        manager.startAwait();
+        return manager;
+    }
+
     @Before
     public void init() {
-        ExtendedCluster cluster = new ExtendedClusterImpl(
-            ClusterConfig
-                .defaultConfig()
-                .memberAlias("node1")
-                .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
-        ).startAwait();
-        node1 = cluster.member();
+        cluster1 = startCluster("node1", null);
+        node1 = cluster1.member();
+        manager1 = startManager(cluster1);
 
-        {
-            manager1 = new ScalecubeRpcManager(cluster, RSocketServiceTransport::new);
-            manager1.startAwait();
+        cluster2 = startCluster("node2", cluster1);
+        node2 = cluster2.member();
+        manager2 = startManager(cluster2);
 
-        }
-
-        {
-            ExtendedCluster cluster2 = new ExtendedClusterImpl(
-                ClusterConfig
-                    .defaultConfig()
-                    .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
-                    .memberAlias("node2")
-                    .membership(conf -> conf.seedMembers(cluster.address()))
-            ).startAwait();
-            manager2 = new ScalecubeRpcManager(cluster2, RSocketServiceTransport::new);
-            manager2.startAwait();
-            node2 = cluster2.member();
-        }
-
-        {
-            ExtendedCluster cluster3 = new ExtendedClusterImpl(
-                ClusterConfig
-                    .defaultConfig()
-                    .transport(conf -> conf.transportFactory(new TcpTransportFactory()))
-                    .membership(conf -> conf.seedMembers(cluster.address()))
-                    .memberAlias("node3")
-            ).startAwait();
-            node3 = cluster3.member();
-            manager3 = new ScalecubeRpcManager(cluster3, RSocketServiceTransport::new);
-            manager3.startAwait();
-        }
+        cluster3 = startCluster("node3", cluster1);
+        node3 = cluster3.member();
+        manager3 = startManager(cluster3);
     }
 
     @After
     public void shutdown() {
-        manager3.stopAwait();
-        manager2.stopAwait();
-        manager1.stopAwait();
+        if (manager3 != null) {
+            manager3.stopAwait();
+        }
+        if (manager2 != null) {
+            manager2.stopAwait();
+        }
+        if (manager1 != null) {
+            manager1.stopAwait();
+        }
+        if (cluster3 != null && !cluster3.isShutdown()) {
+            cluster3.shutdown();
+        }
+        if (cluster2 != null && !cluster2.isShutdown()) {
+            cluster2.shutdown();
+        }
+        if (cluster1 != null && !cluster1.isShutdown()) {
+            cluster1.shutdown();
+        }
     }
 
     @Test
@@ -313,6 +317,95 @@ public class ScalecubeRpcManagerTest {
             .as(StepVerifier::create)
             .expectNext("1TEST-1")
             .verifyComplete();
+    }
+
+    @Test
+    @SneakyThrows
+    public void testSelectServiceWithoutRouteKey() {
+        manager1.registerService("s1", new ServiceImpl("1"));
+        manager2.registerService("s1", new ServiceImpl("2"));
+
+        Thread.sleep(2000);
+
+        manager3.selectService(Service.class)
+                .flatMap(service -> service.service().upper("test"))
+                .as(StepVerifier::create)
+                .expectNextMatches(result -> "1TEST".equals(result) || "2TEST".equals(result))
+                .verifyComplete();
+    }
+
+    @Test
+    @SneakyThrows
+    public void testNodeRestartShouldRecoverRouteWithoutGatewayRestart() {
+        manager2.registerService("s1", new ServiceImpl("2"));
+
+        Thread.sleep(2000);
+
+        manager3.getService(node2.alias(), "s1", Service.class)
+                .flatMap(service -> service.upper("test"))
+                .as(StepVerifier::create)
+                .expectNext("2TEST")
+                .verifyComplete();
+
+        manager2.stopAwait();
+        cluster2.shutdown();
+
+        Thread.sleep(2000);
+
+        manager3.getService(node2.alias(), "s1", Service.class)
+                .as(StepVerifier::create)
+                .verifyComplete();
+
+        cluster2 = startCluster("node2", cluster1);
+        node2 = cluster2.member();
+        manager2 = startManager(cluster2);
+        manager2.registerService("s1", new ServiceImpl("2-1"));
+
+        Thread.sleep(2000);
+
+        manager3.getService(node2.alias(), "s1", Service.class)
+                .flatMap(service -> service.upper("test"))
+                .as(StepVerifier::create)
+                .expectNext("2-1TEST")
+                .verifyComplete();
+    }
+
+    @Test
+    @SneakyThrows
+    public void testAliasReuseShouldRefreshServiceReferenceAndIgnoreStaleLeave() {
+        manager2.registerService("s1", new ServiceImpl("old"));
+
+        Thread.sleep(2000);
+
+        manager3.getService(node2.alias(), "s1", Service.class)
+                .flatMap(service -> service.upper("test"))
+                .as(StepVerifier::create)
+                .expectNext("oldTEST")
+                .verifyComplete();
+
+        ExtendedCluster replacementCluster = startCluster("node2", null);
+        ScalecubeRpcManager replacementManager = startManager(replacementCluster);
+        try {
+            replacementManager.registerService("s1", new ServiceImpl("new"));
+            manager3.handleServiceEndpoint(replacementCluster.member(), replacementManager.createEndpoint());
+
+            manager3.getService(node2.alias(), "s1", Service.class)
+                    .flatMap(service -> service.upper("test"))
+                    .as(StepVerifier::create)
+                    .expectNext("newTEST")
+                    .verifyComplete();
+
+            manager3.memberLeave(node2);
+
+            manager3.getService(node2.alias(), "s1", Service.class)
+                    .flatMap(service -> service.upper("test"))
+                    .as(StepVerifier::create)
+                    .expectNext("newTEST")
+                    .verifyComplete();
+        } finally {
+            replacementManager.stopAwait();
+            replacementCluster.shutdown();
+        }
     }
 
     /**
