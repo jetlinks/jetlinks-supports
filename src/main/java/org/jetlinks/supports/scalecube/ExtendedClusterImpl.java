@@ -211,7 +211,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         if (TraceHolder.isEnabled()) {
             return TraceHolder
                 .writeContextTo(Message.with(request), Message.Builder::header)
-                .flatMap(msg -> real.requestResponse(address, request));
+                .flatMap(msg -> real.requestResponse(address, msg.build()));
         }
         return real.requestResponse(address, request);
     }
@@ -224,7 +224,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         if (TraceHolder.isEnabled()) {
             return TraceHolder
                 .writeContextTo(Message.with(request), Message.Builder::header)
-                .flatMap(msg -> real.requestResponse(member, request));
+                .flatMap(msg -> real.requestResponse(member, msg.build()));
         }
         return real.requestResponse(member, request);
     }
@@ -234,7 +234,7 @@ public class ExtendedClusterImpl implements ExtendedCluster {
         if (TraceHolder.isEnabled()) {
             return TraceHolder
                 .writeContextTo(Message.with(message), Message.Builder::header)
-                .flatMap(msg -> real.spreadGossip(message));
+                .flatMap(msg -> real.spreadGossip(msg.build()));
         }
         return real.spreadGossip(message);
     }
@@ -277,8 +277,13 @@ public class ExtendedClusterImpl implements ExtendedCluster {
     @Override
     public <T> Mono<Void> updateMetadata(T metadata) {
         if (!started) {
-            startThen.add(real.updateMetadata(metadata));
-            return null;
+            Sinks.One<Void> sink = Sinks.one();
+            startThen.add(
+                real.updateMetadata(metadata)
+                    .doOnSuccess(ignore -> sink.emitEmpty(Reactors.emitFailureHandler()))
+                    .doOnError(err -> sink.emitError(err, Reactors.emitFailureHandler()))
+            );
+            return sink.asMono();
         }
         return real.updateMetadata(metadata);
     }
