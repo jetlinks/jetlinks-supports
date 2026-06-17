@@ -479,7 +479,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
         //命令描述
         if (StringUtils.hasText(annotation.description())) {
-            metadata.setDescription(annotation.description());
+            metadata.setDescription(LocaleUtils.resolveMessage(annotation.description(), annotation.description()));
         }
 
         MetadataUtils
