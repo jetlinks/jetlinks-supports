@@ -14,8 +14,13 @@ import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
+import java.util.AbstractMap;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +34,125 @@ import static org.mockito.Mockito.*;
 
 @Slf4j
 public class LocalCacheClusterConfigStorageTest {
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testGetConfigsPositiveHitDoesNotReload() {
+        Map<String, Object> backend = new HashMap<>();
+        backend.put("id", "device-1");
+        backend.put("name", "demo");
+        ClusterCache<String, Object> clusterCache = createClusterCache(backend);
+        LocalCacheClusterConfigStorage storage = createStorage(clusterCache);
+        List<String> keys = Arrays.asList("id", "name");
+
+        Values first = storage.getConfigs(keys).block();
+        Values second = storage.getConfigs(keys).block();
+
+        assertNotNull(first);
+        assertNotNull(second);
+        assertEquals(backend, first.getAllValues());
+        assertEquals(backend, second.getAllValues());
+        verify(clusterCache, times(1)).get(anyCollection());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testGetConfigsNegativeHitDoesNotReload() {
+        ClusterCache<String, Object> clusterCache = createClusterCache(Collections.emptyMap());
+        LocalCacheClusterConfigStorage storage = createStorage(clusterCache);
+        List<String> keys = Arrays.asList("missing-1", "missing-2");
+
+        Values first = storage.getConfigs(keys).block();
+        Values second = storage.getConfigs(keys).block();
+
+        assertNotNull(first);
+        assertNotNull(second);
+        assertTrue(first.isEmpty());
+        assertTrue(second.isEmpty());
+        assertTrue(first.getAllValues().isEmpty());
+        assertTrue(second.getAllValues().isEmpty());
+        verify(clusterCache, times(1)).get(anyCollection());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testGetConfigsMixedHitDoesNotExposeNegativeCache() {
+        Map<String, Object> backend = new HashMap<>();
+        backend.put("id", "device-1");
+        backend.put("name", "demo");
+        ClusterCache<String, Object> clusterCache = createClusterCache(backend);
+        LocalCacheClusterConfigStorage storage = createStorage(clusterCache);
+        List<String> keys = Arrays.asList("id", "missing-1", "name", "missing-2");
+
+        Values first = storage.getConfigs(keys).block();
+        Values second = storage.getConfigs(keys).block();
+
+        assertNotNull(first);
+        assertNotNull(second);
+        assertEquals(backend, first.getAllValues());
+        assertEquals(backend, second.getAllValues());
+        assertFalse(first.getAllValues().containsKey("missing-1"));
+        assertFalse(second.getAllValues().containsKey("missing-2"));
+        verify(clusterCache, times(1)).get(anyCollection());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testGetConfigsReloadsOnlyExpiredKey() {
+        Map<String, Object> backend = new HashMap<>();
+        backend.put("id", "device-1");
+        backend.put("name", "demo");
+        backend.put("productId", "product-1");
+        List<List<String>> requests = new ArrayList<>();
+        ClusterCache<String, Object> clusterCache = createClusterCache(backend, requests);
+        LocalCacheClusterConfigStorage storage = createStorage(clusterCache);
+        List<String> keys = Arrays.asList("id", "name", "productId");
+
+        assertEquals(backend, storage.getConfigs(keys).block().getAllValues());
+        storage.clearLocalCache(CacheNotify.expires("test", Collections.singleton("name")));
+        assertEquals(backend, storage.getConfigs(keys).block().getAllValues());
+
+        verify(clusterCache, times(2)).get(anyCollection());
+        assertEquals(keys.size(), requests.get(0).size());
+        assertTrue(requests.get(0).containsAll(keys));
+        assertEquals(Collections.singletonList("name"), requests.get(1));
+    }
+
+    private static LocalCacheClusterConfigStorage createStorage(ClusterCache<String, Object> clusterCache) {
+        EventBusStorageManager manager = mock(EventBusStorageManager.class);
+        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        return new LocalCacheClusterConfigStorage(
+            "test",
+            manager,
+            clusterCache,
+            -1,
+            null,
+            new ConcurrentHashMap<>()
+        );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ClusterCache<String, Object> createClusterCache(Map<String, Object> backend) {
+        return createClusterCache(backend, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ClusterCache<String, Object> createClusterCache(Map<String, Object> backend,
+                                                                    List<List<String>> requests) {
+        ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
+        when(clusterCache.get(anyCollection())).thenAnswer(invocation -> {
+            Collection<String> requested = invocation.getArgument(0);
+            List<String> snapshot = new ArrayList<>(requested);
+            if (requests != null) {
+                requests.add(snapshot);
+            }
+            return Flux
+                .fromIterable(snapshot)
+                .filter(backend::containsKey)
+                .map(key -> new AbstractMap.SimpleImmutableEntry<>(key, backend.get(key)));
+        });
+        return clusterCache;
+    }
 
     @Test
     @SuppressWarnings("unchecked")
