@@ -56,6 +56,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     public static final Value NULL = Value.simple(null);
 
+    private static final Values EMPTY_VALUES = Values.of(Collections.emptyMap());
+
+    private static final Mono<Values> EMPTY_VALUES_MONO = Mono.just(EMPTY_VALUES);
+
     private final Map<String, Cache> caches;
     final String id;
     private final EventBusStorageManager manager;
@@ -112,8 +116,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
     private Cache getOrCreateCache(String key) {
-        return caches
-            .computeIfAbsent(key, this::createCache);
+        Cache cache = caches.get(key);
+        if (cache != null) {
+            return cache;
+        }
+        return caches.computeIfAbsent(key, this::createCache);
     }
 
     @Override
@@ -129,8 +136,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
-        int hits = 0;
-        Map<String, Object> loaded = Maps.newHashMapWithExpectedSize(keys.size());
+        int remaining = keys.size();
+        Map<String, Object> loaded = null;
         //获取二级缓存中加载的配置
         Map<String, Cache> cacheLoaded = null;
         for (String key : keys) {
@@ -138,19 +145,29 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             Value cached = local.getCached();
             if (cached != null) {
                 //命中一级缓存
-                hits++;
-                loaded.put(key, cached.get());
+                Object value = cached.get();
+                if (value != null) {
+                    if (loaded == null) {
+                        loaded = Maps.newHashMapWithExpectedSize(keys.size());
+                    }
+                    loaded.put(key, value);
+                }
             } else {
                 if (cacheLoaded == null) {
-                    cacheLoaded = Maps.newHashMapWithExpectedSize(keys.size() - hits);
+                    cacheLoaded = Maps.newHashMapWithExpectedSize(remaining);
                 }
                 cacheLoaded.put(key, local);
             }
+            remaining--;
         }
-        Values wrap = Values.of(Maps.filterValues(loaded, Objects::nonNull));
         //全部来自一级缓存则直接返回
-        if (hits == keys.size() || cacheLoaded == null) {
-            return Mono.just(wrap);
+        if (cacheLoaded == null) {
+            return loaded == null
+                ? EMPTY_VALUES_MONO
+                : Mono.just(Values.of(loaded));
+        }
+        if (loaded == null) {
+            loaded = Maps.newHashMapWithExpectedSize(cacheLoaded.size());
         }
 
         //需要从二级缓存中加载的配置
@@ -390,7 +407,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     }
                 }
             }
-            actual.onNext(Values.of(container));
+            actual.onNext(container.isEmpty() ? EMPTY_VALUES : Values.of(container));
             actual.onComplete();
         }
 
