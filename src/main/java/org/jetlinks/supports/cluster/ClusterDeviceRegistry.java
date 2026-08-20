@@ -16,6 +16,7 @@ import org.jetlinks.core.device.DevicePrincipalManager;
 import org.jetlinks.core.principal.Principal;
 import org.jetlinks.core.message.interceptor.DeviceMessageSenderInterceptor;
 import org.jetlinks.core.things.ThingRpcSupportChain;
+import org.jetlinks.supports.device.DefaultDeviceModuleThingProvider;
 import org.jetlinks.supports.config.ClusterConfigStorageManager;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
@@ -57,6 +58,11 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     @Setter
     private DevicePrincipalManager principalManager;
 
+    @Setter
+    private DeviceModuleThingProvider moduleThingProvider;
+
+    private final DeviceModuleThingProvider defaultModuleThingProvider;
+
     @Deprecated
     public ClusterDeviceRegistry(ProtocolSupports supports,
                                  ClusterManager clusterManager,
@@ -78,6 +84,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.manager = storageManager;
         this.operatorCache = cache;
         this.clusterManager = clusterManager;
+        this.defaultModuleThingProvider = new DefaultDeviceModuleThingProvider(storageManager);
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -91,6 +98,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.manager = new ClusterConfigStorageManager(clusterManager);
         this.operatorCache = cache;
         this.clusterManager = clusterManager;
+        this.defaultModuleThingProvider = new DefaultDeviceModuleThingProvider(this.manager);
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -198,6 +206,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         if (principalManager != null) {
             device.setPrincipalManager(principalManager);
         }
+        device.setModuleThingProvider(moduleThingProvider == null ? defaultModuleThingProvider : moduleThingProvider);
         return device;
     }
 
@@ -358,6 +367,17 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             this.rpcChain = chain;
         } else {
             this.rpcChain = this.rpcChain.composite(Collections.singleton(chain));
+        }
+    }
+
+    public void addModuleThingProvider(DeviceModuleThingProvider provider) {
+        if (this.moduleThingProvider == null) {
+            this.moduleThingProvider = provider;
+        } else {
+            DeviceModuleThingProvider old = this.moduleThingProvider;
+            this.moduleThingProvider = (device, code) -> old
+                .getModuleThings(device, code)
+                .switchIfEmpty(provider.getModuleThings(device, code));
         }
     }
 }
