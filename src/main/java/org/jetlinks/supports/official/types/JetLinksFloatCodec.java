@@ -6,6 +6,7 @@ import org.jetlinks.core.metadata.types.FloatType;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksFloatCodec extends JetLinksNumberCodec<FloatType> {
 
     @Override

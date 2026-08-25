@@ -10,7 +10,6 @@ import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.core.metadata.types.UnknownType;
 
 import java.util.*;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -105,10 +104,7 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         if (output == null && jsonObject != null) {
             output = Optional
                 .ofNullable(jsonObject.getJSONObject("output"))
-                .flatMap(conf -> Optional
-                    .ofNullable(DataTypes.lookup(String.valueOf(conf.getOrDefault("type", "id"))))
-                    .map(Supplier::get)
-                    .map(type -> JetLinksDataTypeCodecs.decode(type, conf)))
+                .flatMap(DataTypes::fromJson)
                 .orElseGet(UnknownType::new);
         }
         if (output == null && another != null) {
@@ -140,9 +136,10 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
         json.put("description", description);
         json.put("async", async);
         json.put("inputs", getInputs().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        JetLinksDataTypeCodecs
-            .encode(getOutput())
-            .ifPresent(ot -> json.put("output", ot));
+        Optional
+          .ofNullable(getOutput())
+          .map(DataType::toJson)
+          .ifPresent(ot -> json.put("output", ot));
         json.put("expands", expands);
 
         return json;

@@ -6,6 +6,7 @@ import org.jetlinks.core.metadata.types.StringType;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksStringCodec extends AbstractDataTypeCodec<StringType> {
 
     @Override

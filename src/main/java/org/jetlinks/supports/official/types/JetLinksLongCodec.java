@@ -6,6 +6,7 @@ import org.jetlinks.core.metadata.types.LongType;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksLongCodec extends JetLinksNumberCodec<LongType> {
 
     @Override

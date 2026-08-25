@@ -8,6 +8,7 @@ import java.util.Map;
 
 import static java.util.Optional.ofNullable;
 
+@Deprecated
 public abstract class AbstractDataTypeCodec<T extends DataType> implements DataTypeCodec<T> {
 
     @Override
