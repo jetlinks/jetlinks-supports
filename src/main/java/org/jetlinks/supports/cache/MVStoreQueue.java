@@ -86,11 +86,8 @@ class MVStoreQueue<T> implements FileQueue<T> {
             store = MVStoreUtils.open(
                 storageFile.toFile(),
                 name,
-                builder -> builder
-                    .cacheSize(16)
-                    .autoCommitBufferSize(32 * 1024)
-                    .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e)))
-                    .compress(),
+                builder -> applyStoreOptions(builder, options, 16, 32 * 1024)
+                    .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e))),
                 store -> {
                     Object type = options.get("valueType");
                     MVMap.Builder<Long, T> mapBuilder = new MVMap.Builder<>();
@@ -108,6 +105,47 @@ class MVStoreQueue<T> implements FileQueue<T> {
             loadLock.writeLock().unlock();
             loading.set(false);
         }
+    }
+
+    static MVStore.Builder applyStoreOptions(MVStore.Builder builder,
+                                            Map<String, Object> options,
+                                            int defaultCacheSize,
+                                            int defaultAutoCommitBufferSize) {
+        builder.cacheSize(storeIntOption(options, "cacheSize", "jetlinks.filequeue.cache-size", defaultCacheSize));
+        builder.autoCommitBufferSize(storeIntOption(
+            options,
+            "autoCommitBufferSize",
+            "jetlinks.filequeue.auto-commit-buffer-size",
+            defaultAutoCommitBufferSize));
+        if (storeBooleanOption(options, "compress", "jetlinks.filequeue.compress", true)) {
+            builder.compress();
+        }
+        return builder;
+    }
+
+    private static int storeIntOption(Map<String, Object> options,
+                                      String key,
+                                      String property,
+                                      int defaultValue) {
+        Object value = storeOption(options, key, property);
+        return value == null ? defaultValue : ConverterUtils.convert(value, Integer.class);
+    }
+
+    private static boolean storeBooleanOption(Map<String, Object> options,
+                                              String key,
+                                              String property,
+                                              boolean defaultValue) {
+        Object value = storeOption(options, key, property);
+        return value == null ? defaultValue : ConverterUtils.convert(value, Boolean.class);
+    }
+
+    private static Object storeOption(Map<String, Object> options, String key, String property) {
+        Object value = options == null ? null : options.get(key);
+        if (value != null) {
+            return value;
+        }
+        String fromProperty = System.getProperty(property);
+        return fromProperty == null || fromProperty.isEmpty() ? null : fromProperty;
     }
 
     @SneakyThrows
@@ -274,10 +312,7 @@ class MVStoreQueue<T> implements FileQueue<T> {
     }
 
     private void doAdd0(T value) {
-        T old;
-        do {
-            old = mvMap.putIfAbsent(INDEX.incrementAndGet(this), value);
-        } while (old != null);
+        mvMap.put(INDEX.incrementAndGet(this), value);
     }
 
     @Override
@@ -362,6 +397,73 @@ class MVStoreQueue<T> implements FileQueue<T> {
         }
         return removed;
 
+    }
+
+    @Override
+    public int poll(int size, Collection<? super T> container) {
+        if (size <= 0 || closed) {
+            return 0;
+        }
+        pollLock.lock();
+        try {
+            return operationInStore(() -> pollMap(size, container, true));
+        } finally {
+            pollLock.unlock();
+        }
+    }
+
+    @Override
+    public int pollLast(int size, Collection<? super T> container) {
+        if (size <= 0 || closed) {
+            return 0;
+        }
+        pollLock.lock();
+        try {
+            return operationInStore(() -> pollMap(size, container, false));
+        } finally {
+            pollLock.unlock();
+        }
+    }
+
+    int pollTo0(int size, Collection<? super T> container) {
+        if (size <= 0) {
+            return 0;
+        }
+        pollLock.lock();
+        try {
+            return pollMap(size, container, true);
+        } finally {
+            pollLock.unlock();
+        }
+    }
+
+    int pollLastTo0(int size, Collection<? super T> container) {
+        if (size <= 0) {
+            return 0;
+        }
+        pollLock.lock();
+        try {
+            return pollMap(size, container, false);
+        } finally {
+            pollLock.unlock();
+        }
+    }
+
+    private int pollMap(int size, Collection<? super T> container, boolean fifo) {
+        int n = 0;
+        while (n < size) {
+            Long key = fifo ? mvMap.firstKey() : mvMap.lastKey();
+            if (key == null) {
+                break;
+            }
+            T value = mvMap.remove(key);
+            if (value == null) {
+                break;
+            }
+            container.add(value);
+            n++;
+        }
+        return n;
     }
 
     @Override

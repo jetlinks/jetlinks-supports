@@ -32,6 +32,7 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
     private MVStore store;
 
     private final AtomicInteger inc = new AtomicInteger();
+    private final AtomicInteger pollCursor = new AtomicInteger();
     private final FastThreadLocal<Integer> QUEUE_HOLDER;
 
     private final List<MVStoreQueue<T>> queues;
@@ -76,9 +77,7 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
             store = MVStoreUtils.open(
                 filePath.resolve(name).toFile(),
                 name,
-                builder -> builder
-                    .cacheSize(64)
-                    .autoCommitBufferSize(64 * 1024)
+                builder -> MVStoreQueue.applyStoreOptions(builder, options, 64, 64 * 1024)
                     .backgroundExceptionHandler(((t, e) -> log.warn("{} UncaughtException", name, e))),
                 store -> {
                     queues.clear();
@@ -155,30 +154,12 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public T removeFirst() {
-        return operationInStore(() -> {
-            T temp;
-            for (MVStoreQueue<T> queue : queues) {
-                temp = queue.removeFirst();
-                if (temp != null) {
-                    return temp;
-                }
-            }
-            return null;
-        });
+        return operationInStore(() -> pollOne(true));
     }
 
     @Override
     public T removeLast() {
-        return operationInStore(() -> {
-            T temp;
-            for (MVStoreQueue<T> queue : queues) {
-                temp = queue.removeLast();
-                if (temp != null) {
-                    return temp;
-                }
-            }
-            return null;
-        });
+        return operationInStore(() -> pollOne(false));
     }
 
     @Override
@@ -194,7 +175,14 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public boolean isEmpty() {
-        return size() == 0;
+        return operationInStore(() -> {
+            for (MVStoreQueue<T> shard : queues) {
+                if (!shard.isEmpty()) {
+                    return false;
+                }
+            }
+            return true;
+        });
     }
 
     @Override
@@ -278,66 +266,130 @@ class ConcurrencyMVStoreQueue<T> implements FileQueue<T> {
 
     @Override
     public T remove() {
-        for (MVStoreQueue<T> queue : queues) {
-            T temp = queue.poll();
-            if (temp != null) {
-                return temp;
-            }
+        T temp = poll();
+        if (temp == null) {
+            throw new NoSuchElementException("No such element in file " + store.getFileStore().getFileName());
         }
-        throw new NoSuchElementException("No such element in file " + store.getFileStore().getFileName());
+        return temp;
     }
 
     @Override
     public T poll() {
-        return operationInStore(() -> {
-            T poll = queues
-                .get(QUEUE_HOLDER.get())
-                .poll();
-            if (poll == null) {
-                for (MVStoreQueue<T> queue : queues) {
-                    poll = queue.poll();
-                    if (poll != null) {
-                        return poll;
-                    }
-                }
-            }
-            return poll;
-        });
+        return operationInStore(() -> pollOne(true));
+    }
+
+    @Override
+    public int poll(int size, Collection<? super T> container) {
+        if (size <= 0) {
+            return 0;
+        }
+        return operationInStore(() -> pollShardsFair(size, container, true));
+    }
+
+    @Override
+    public int pollLast(int size, Collection<? super T> container) {
+        if (size <= 0) {
+            return 0;
+        }
+        return operationInStore(() -> pollShardsFair(size, container, false));
     }
 
     @Override
     public T element() {
         return operationInStore(() -> {
-            T poll = queues
-                .get(QUEUE_HOLDER.get())
-                .element();
-            if (poll == null) {
-                for (MVStoreQueue<T> queue : queues) {
-                    poll = queue.element();
-                    if (poll != null) {
-                        return poll;
-                    }
-                }
+            T data = peekFromCursor();
+            if (data == null) {
+                throw new NoSuchElementException("No such element in file " + store.getFileStore().getFileName());
             }
-            return poll;
+            return data;
         });
     }
 
     @Override
     public T peek() {
-        return operationInStore(() -> {
-            T poll = queues
-                .get(QUEUE_HOLDER.get())
-                .peek();
-            if (poll == null) {
-                for (MVStoreQueue<T> queue : queues) {
-                    poll = queue.peek();
-                    if (poll != null) {
-                        return poll;
-                    }
+        return operationInStore(this::peekFromCursor);
+    }
+
+    /**
+     * Read path must not use {@link #QUEUE_HOLDER}: that FastThreadLocal is write affinity.
+     * A sticky-first poll leaves other shards unread when the preferred shard already has a full batch.
+     */
+    private int nextPollStart(int shards) {
+        if (shards <= 1) {
+            return 0;
+        }
+        return Math.floorMod(pollCursor.getAndIncrement(), shards);
+    }
+
+    private int currentPollStart(int shards) {
+        if (shards <= 1) {
+            return 0;
+        }
+        return Math.floorMod(pollCursor.get(), shards);
+    }
+
+    private static int shardIndex(int start, int offset, int shards) {
+        return shards <= 1 ? 0 : (start + offset) % shards;
+    }
+
+    private T pollOne(boolean fifo) {
+        int shards = queues.size();
+        int start = nextPollStart(shards);
+        for (int k = 0; k < shards; k++) {
+            MVStoreQueue<T> shard = queues.get(shardIndex(start, k, shards));
+            T value = fifo ? shard.poll() : shard.removeLast();
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private int pollShardsFair(int size, Collection<? super T> container, boolean fifo) {
+        int shards = queues.size();
+        if (shards == 0) {
+            return 0;
+        }
+        int start = nextPollStart(shards);
+        int n = 0;
+        for (int k = 0; k < shards; k++) {
+            int remainingShards = shards - k;
+            int remaining = size - n;
+            int share = (remaining + remainingShards - 1) / remainingShards;
+            n += pollShard(shardIndex(start, k, shards), share, container, fifo);
+            if (n >= size) {
+                return n;
+            }
+        }
+        if (n < size) {
+            for (int k = 0; k < shards; k++) {
+                n += pollShard(shardIndex(start, k, shards), size - n, container, fifo);
+                if (n >= size) {
+                    return n;
                 }
             }
-            return poll;
-        });
+        }
+        return n;
+    }
+
+    private int pollShard(int index, int share, Collection<? super T> container, boolean fifo) {
+        MVStoreQueue<T> shard = queues.get(index);
+        return fifo ? shard.pollTo0(share, container) : shard.pollLastTo0(share, container);
+    }
+
+    private T peekFromCursor() {
+        int shards = queues.size();
+        int start = currentPollStart(shards);
+        for (int k = 0; k < shards; k++) {
+            MVStoreQueue<T> shard = queues.get(shardIndex(start, k, shards));
+            if (shard.isEmpty()) {
+                continue;
+            }
+            T value = shard.peek();
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 }

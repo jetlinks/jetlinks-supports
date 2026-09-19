@@ -161,7 +161,6 @@ public class MVStoreUtils {
                 .fileName(file.getAbsolutePath())
                 //64MB
                 .autoCommitBufferSize(64 * 1024)
-                .compress()
                 .keysPerPage(1024)
                 .cacheSize(64);
             builder = customizer.apply(builder);
