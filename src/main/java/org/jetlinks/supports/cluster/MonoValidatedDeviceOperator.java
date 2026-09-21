@@ -107,15 +107,17 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
             if (!Operators.validate(count) || !STATE.compareAndSet(this, FRESH, REQUESTED)) {
                 return;
             }
-            long version = owner.invalidationVersion;
-            if (owner.validatedVersion == version && owner.invalidationVersion == version) {
-                if (STATE.compareAndSet(this, REQUESTED, TERMINATED)) {
+            long version;
+            synchronized (owner) {
+                version = owner.invalidationVersion;
+                if (owner.validatedVersion == version
+                    && STATE.compareAndSet(this, REQUESTED, TERMINATED)) {
                     actual.onNext(owner.device);
                     actual.onComplete();
+                    return;
                 }
-            } else {
-                owner.validation(version).subscribe(this);
             }
+            owner.validation(version).subscribe(this);
         }
 
         @Override
@@ -176,7 +178,9 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
     }
 
     void invalidate() {
-        INVALIDATION_VERSION.incrementAndGet(this);
+        synchronized (this) {
+            INVALIDATION_VERSION.incrementAndGet(this);
+        }
     }
 
     boolean isValidated() {

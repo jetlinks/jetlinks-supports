@@ -29,7 +29,7 @@
 
 ## 结果
 
-- 新增 `MonoValidatedDeviceOperator`：首次订阅沿用 Reactor 原生链完成存在性校验，校验版本有效时使用 `Operators.scalarSubscription` 返回。
+- 新增 `MonoValidatedDeviceOperator`：首次订阅沿用 Reactor 原生链完成存在性校验，校验版本有效时使用请求感知的自定义订阅返回。
 - `EventBusStorageManager` 提供管理器级缓存通知监听；本地通知、远程通知和 `refreshAll()` 都会失效对应设备校验状态，不增加每设备订阅。
 - 设备产品绑定变化仅失效对应设备；产品协议变化、产品 clear、产品注销会清理产品缓存并失效设备一级缓存。
 - 无通知能力的 `ConfigStorageManager` 保持原逐次校验逻辑，不改变兼容语义。
@@ -42,7 +42,7 @@ mvn clean package \
   -Dtest=MonoValidatedDeviceOperatorTest,ClusterDeviceRegistryTest,EventBusStorageManagerTest
 ```
 
-- 18 tests，0 failure，0 error，构建成功。
+- 27 tests，0 failure，0 error，构建成功。
 - 覆盖首次校验、稳定快路径、demand、cancel、Context、error 重试、失效重校验、空结果清除、并发包装竞争、校验期间失效、设备绑定变化、产品移除、无通知能力兼容、本地通知和 `refreshAll()` 失效。
 
 ### 性能结果

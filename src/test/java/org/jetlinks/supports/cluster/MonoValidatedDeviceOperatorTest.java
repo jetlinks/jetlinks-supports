@@ -10,6 +10,8 @@ import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 import reactor.util.context.Context;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -220,6 +222,48 @@ public class MonoValidatedDeviceOperatorTest {
                     .thenRequest(1)
                     .expectNext(device)
                     .verifyComplete();
+    }
+
+    @Test
+    public void shouldNotInvalidateDuringValidatedFastPathEmission() throws InterruptedException {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        DeviceOperator device = mock(DeviceOperator.class);
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            device,
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        assertSame(device, source.block());
+
+        CountDownLatch emissionStarted = new CountDownLatch(1);
+        CountDownLatch releaseEmission = new CountDownLatch(1);
+        CountDownLatch invalidated = new CountDownLatch(1);
+        Thread subscriber = new Thread(() -> source.subscribe(ignore -> {
+            emissionStarted.countDown();
+            try {
+                releaseEmission.await();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(error);
+            }
+        }));
+        subscriber.start();
+        assertTrue(emissionStarted.await(5, TimeUnit.SECONDS));
+
+        Thread invalidator = new Thread(() -> {
+            source.invalidate();
+            invalidated.countDown();
+        });
+        try {
+            invalidator.start();
+            assertFalse(invalidated.await(100, TimeUnit.MILLISECONDS));
+        } finally {
+            releaseEmission.countDown();
+            subscriber.join(5000);
+            invalidator.join(5000);
+        }
+        assertTrue(invalidated.await(0, TimeUnit.SECONDS));
     }
 
     @Test
