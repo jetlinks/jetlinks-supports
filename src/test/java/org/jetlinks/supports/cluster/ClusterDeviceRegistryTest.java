@@ -38,6 +38,7 @@ import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -241,6 +242,40 @@ public class ClusterDeviceRegistryTest {
         registry.addInterceptor(interceptor);
         registry.dispose();
 
+        assertTrue(disposed.get());
+    }
+
+    @Test
+    public void shouldContinueRegistryDisposalAfterInterceptorFailure() {
+        NotifyingConfigStorageManager manager = new NotifyingConfigStorageManager();
+        ClusterDeviceRegistry registry = createRegistry(manager);
+        DeviceMessageSenderInterceptor failing = mock(
+            DeviceMessageSenderInterceptor.class,
+            withSettings().extraInterfaces(Disposable.class)
+        );
+        DeviceMessageSenderInterceptor following = mock(
+            DeviceMessageSenderInterceptor.class,
+            withSettings().extraInterfaces(Disposable.class)
+        );
+        AtomicReference<Boolean> disposed = new AtomicReference<>(false);
+        doAnswer(ignore -> {
+            throw new IllegalStateException("boom");
+        }).when((Disposable) failing).dispose();
+        doAnswer(ignore -> {
+            disposed.set(true);
+            return null;
+        }).when((Disposable) following).dispose();
+        registry.addInterceptor(failing);
+        registry.addInterceptor(following);
+
+        try {
+            registry.dispose();
+            fail("expected dispose failure");
+        } catch (RuntimeException error) {
+            assertTrue(error.getCause() instanceof IllegalStateException);
+        }
+
+        assertEquals(0, manager.listenerCount());
         assertTrue(disposed.get());
     }
 

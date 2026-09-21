@@ -459,15 +459,34 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
 
     @Override
     public void dispose() {
-        cacheNotifyDisposable.dispose();
+        RuntimeException disposeError = null;
+        try {
+            cacheNotifyDisposable.dispose();
+        } catch (Throwable error) {
+            disposeError = new RuntimeException("Failed to dispose cache notify listener", error);
+        }
         for (DeviceMessageSenderInterceptor interceptor : registeredInterceptors) {
             if (interceptor instanceof Disposable) {
-                ((Disposable) interceptor).dispose();
+                try {
+                    ((Disposable) interceptor).dispose();
+                } catch (Throwable error) {
+                    if (disposeError == null) {
+                        disposeError = new RuntimeException("Failed to dispose message interceptor", error);
+                    } else {
+                        disposeError.addSuppressed(error);
+                    }
+                }
             }
         }
-        registeredInterceptors.clear();
-        invalidateProductCache();
-        invalidateAllDeviceCache();
+        try {
+            registeredInterceptors.clear();
+            invalidateProductCache();
+            invalidateAllDeviceCache();
+        } finally {
+            if (disposeError != null) {
+                throw disposeError;
+            }
+        }
     }
 
     protected Mono<Void> doUnregister(DeviceProductOperator product) {
