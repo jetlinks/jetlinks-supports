@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -42,13 +43,15 @@ import java.util.function.*;
 import java.util.stream.Collectors;
 
 @Slf4j
-public class EventBusStorageManager implements ConfigStorageManager, Disposable {
+public class EventBusStorageManager implements ConfigStorageManager, ConfigStorageCacheNotifier, Disposable {
 
     static final String NOTIFY_TOPIC = "/_sys/cluster_cache";
     private final AtomicBoolean CLUSTER_SUBSCRIBER = new AtomicBoolean();
     final ConcurrentMap<String, LocalCacheClusterConfigStorage> cache;
 
     private final Disposable.Composite disposable = Disposables.composite();
+
+    private final Set<Consumer<CacheNotify>> cacheNotifyListeners = ConcurrentHashMap.newKeySet();
 
     private final EventBus eventBus;
     private final Function<String, LocalCacheClusterConfigStorage> storageBuilder;
@@ -151,30 +154,53 @@ public class EventBusStorageManager implements ConfigStorageManager, Disposable 
         } catch (Throwable error) {
             log.warn("clear local cache error", error);
         }
+        notifyListeners(cacheNotify);
     }
 
     Mono<Void> doNotify(CacheNotify notify) {
-        if (notifyTopics.length == 1) {
-            return eventBus
-                .publish(notifyTopics[0], notify)
-                .then();
-        }
+        return Mono.defer(() -> {
+            notifyListeners(notify);
+            if (notifyTopics.length == 1) {
+                return eventBus
+                    .publish(notifyTopics[0], notify)
+                    .then();
+            }
 
-        return Flux
-            .fromArray(notifyTopics)
-            .flatMap(t -> eventBus.publish(t, notify), notifyTopics.length)
-            .then();
+            return Flux
+                .fromArray(notifyTopics)
+                .flatMap(t -> eventBus.publish(t, notify), notifyTopics.length)
+                .then();
+        });
+    }
+
+    @Override
+    public Disposable listenCacheNotify(Consumer<CacheNotify> listener) {
+        cacheNotifyListeners.add(Objects.requireNonNull(listener, "listener"));
+        return () -> cacheNotifyListeners.remove(listener);
+    }
+
+    private void notifyListeners(CacheNotify notify) {
+        for (Consumer<CacheNotify> listener : cacheNotifyListeners) {
+            try {
+                listener.accept(notify);
+            } catch (Throwable error) {
+                log.warn("handle config cache notify error", error);
+            }
+        }
     }
 
     public void refreshAll() {
         for (Map.Entry<String, LocalCacheClusterConfigStorage> entry : cache.entrySet()) {
-            entry.getValue().clearLocalCache(CacheNotify.expiresAll(entry.getKey()));
+            CacheNotify notify = CacheNotify.expiresAll(entry.getKey());
+            entry.getValue().clearLocalCache(notify);
+            notifyListeners(notify);
         }
     }
 
     @Override
     public void dispose() {
         disposable.dispose();
+        cacheNotifyListeners.clear();
     }
 
     void cleanup() {
