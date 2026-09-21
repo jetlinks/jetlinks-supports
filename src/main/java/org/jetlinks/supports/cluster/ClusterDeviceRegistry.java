@@ -57,6 +57,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     @Setter
     private DevicePrincipalManager principalManager;
 
+    @Setter
+    private DeviceModuleThingProvider moduleThingProvider;
+
     @Deprecated
     public ClusterDeviceRegistry(ProtocolSupports supports,
                                  ClusterManager clusterManager,
@@ -197,6 +200,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         }
         if (principalManager != null) {
             device.setPrincipalManager(principalManager);
+        }
+        if (moduleThingProvider != null) {
+            device.setModuleThingProvider(moduleThingProvider);
         }
         return device;
     }
@@ -358,6 +364,17 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             this.rpcChain = chain;
         } else {
             this.rpcChain = this.rpcChain.composite(Collections.singleton(chain));
+        }
+    }
+
+    public void addModuleThingProvider(DeviceModuleThingProvider provider) {
+        if (this.moduleThingProvider == null) {
+            this.moduleThingProvider = provider;
+        } else {
+            DeviceModuleThingProvider old = this.moduleThingProvider;
+            this.moduleThingProvider = (device, moduleCode) -> old
+                .getModuleThing(device, moduleCode)
+                .switchIfEmpty(provider.getModuleThing(device, moduleCode));
         }
     }
 }
