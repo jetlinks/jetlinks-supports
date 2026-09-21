@@ -29,6 +29,7 @@ import reactor.util.function.Tuple2;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
@@ -61,6 +62,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     private final ClusterManager clusterManager;
 
     private final Disposable cacheNotifyDisposable;
+
+    private final List<DeviceMessageSenderInterceptor> registeredInterceptors = new CopyOnWriteArrayList<>();
 
     //状态检查器
     private final CompositeDeviceStateChecker stateChecker = new CompositeDeviceStateChecker();
@@ -457,6 +460,12 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     @Override
     public void dispose() {
         cacheNotifyDisposable.dispose();
+        for (DeviceMessageSenderInterceptor interceptor : registeredInterceptors) {
+            if (interceptor instanceof Disposable) {
+                ((Disposable) interceptor).dispose();
+            }
+        }
+        registeredInterceptors.clear();
         invalidateProductCache();
         invalidateAllDeviceCache();
     }
@@ -496,6 +505,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     }
 
     public void addInterceptor(DeviceMessageSenderInterceptor interceptor) {
+        registeredInterceptors.add(interceptor);
         this.interceptor.addInterceptor(interceptor);
     }
 

@@ -14,6 +14,7 @@ import org.jetlinks.core.device.DeviceOperationBroker;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceProductOperator;
 import org.jetlinks.core.device.ProductInfo;
+import org.jetlinks.core.message.interceptor.DeviceMessageSenderInterceptor;
 import org.jetlinks.supports.config.CacheNotify;
 import org.jetlinks.supports.config.ConfigStorageCacheNotifier;
 import org.jetlinks.supports.config.InMemoryConfigStorageManager;
@@ -36,9 +37,12 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.withSettings;
 import static org.mockito.Mockito.when;
 
 public class ClusterDeviceRegistryTest {
@@ -219,6 +223,25 @@ public class ClusterDeviceRegistryTest {
         registry.dispose();
 
         assertEquals(0, manager.listenerCount());
+    }
+
+    @Test
+    public void shouldDisposeAddedInterceptors() {
+        ClusterDeviceRegistry registry = createRegistry(new InMemoryConfigStorageManager());
+        DeviceMessageSenderInterceptor interceptor = mock(
+            DeviceMessageSenderInterceptor.class,
+            withSettings().extraInterfaces(Disposable.class)
+        );
+        AtomicReference<Boolean> disposed = new AtomicReference<>(false);
+        doAnswer(ignore -> {
+            disposed.set(true);
+            return null;
+        }).when((Disposable) interceptor).dispose();
+
+        registry.addInterceptor(interceptor);
+        registry.dispose();
+
+        assertTrue(disposed.get());
     }
 
     private DeviceProductOperator register(String version) {
