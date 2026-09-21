@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -50,6 +51,92 @@ public class MonoValidatedDeviceOperatorTest {
         assertSame(device, source.block());
         assertEquals(2, subscriptions.get());
         assertTrue(source.isValidated());
+    }
+
+    @Test
+    public void shouldRevalidateWhenInvalidatedBeforeDemand() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        DeviceOperator device = mock(DeviceOperator.class);
+        DeviceProductOperator product = mock(DeviceProductOperator.class);
+        AtomicBoolean exists = new AtomicBoolean(true);
+        AtomicInteger subscriptions = new AtomicInteger();
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            device,
+            Mono.defer(() -> {
+                subscriptions.incrementAndGet();
+                return exists.get() ? Mono.just(product) : Mono.empty();
+            }),
+            cache
+        );
+
+        assertSame(device, source.block());
+        StepVerifier.create(source, 0)
+                    .then(() -> {
+                        exists.set(false);
+                        source.invalidate();
+                        cache.invalidate("test");
+                    })
+                    .thenRequest(1)
+                    .verifyComplete();
+
+        assertEquals(2, subscriptions.get());
+        assertFalse(source.isValidated());
+    }
+
+    @Test
+    public void shouldPropagateContextAndCancellationAfterInvalidationBeforeDemand() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        AtomicReference<Mono<DeviceProductOperator>> validation = new AtomicReference<>(
+            Mono.just(mock(DeviceProductOperator.class))
+        );
+        AtomicReference<String> contextValue = new AtomicReference<>();
+        AtomicInteger cancellations = new AtomicInteger();
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.deferContextual(context -> {
+                contextValue.set(context.getOrDefault("trace", ""));
+                return validation.get();
+            }),
+            cache
+        );
+
+        assertNotNull(source.block());
+        validation.set(Mono.<DeviceProductOperator>never().doOnCancel(cancellations::incrementAndGet));
+        StepVerifier.create(source.contextWrite(context -> context.put("trace", "new")), 0)
+                    .then(() -> {
+                        source.invalidate();
+                        cache.invalidate("test");
+                    })
+                    .thenRequest(1)
+                    .thenCancel()
+                    .verify();
+
+        assertEquals("new", contextValue.get());
+        assertEquals(1, cancellations.get());
+    }
+
+    @Test
+    public void shouldPropagateValidationErrorAfterInvalidationBeforeDemand() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        AtomicReference<Mono<DeviceProductOperator>> validation = new AtomicReference<>(
+            Mono.just(mock(DeviceProductOperator.class))
+        );
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test", mock(DeviceOperator.class), Mono.defer(validation::get), cache
+        );
+
+        assertNotNull(source.block());
+        validation.set(Mono.error(new IllegalStateException("invalid")));
+        StepVerifier.create(source, 0)
+                    .then(() -> {
+                        source.invalidate();
+                        cache.invalidate("test");
+                    })
+                    .thenRequest(1)
+                    .expectErrorMessage("invalid")
+                    .verify();
     }
 
     @Test

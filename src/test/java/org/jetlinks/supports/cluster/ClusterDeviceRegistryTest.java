@@ -1,6 +1,7 @@
 package org.jetlinks.supports.cluster;
 
 import com.google.common.cache.CacheBuilder;
+import com.google.common.collect.ForwardingConcurrentMap;
 import org.jetlinks.core.ProtocolSupport;
 import org.jetlinks.core.ProtocolSupports;
 import org.jetlinks.core.Value;
@@ -28,8 +29,16 @@ import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.util.Set;
+import java.lang.reflect.Field;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 
 import static org.junit.Assert.assertEquals;
@@ -199,6 +208,83 @@ public class ClusterDeviceRegistryTest {
     }
 
     @Test
+    public void shouldNotReinsertUnversionedProductWhenInvalidatedDuringCacheWrite() throws Exception {
+        assertInvalidationWinsOverInFlightWrite(null, "productOperatorMap");
+    }
+
+    @Test
+    public void shouldNotReinsertVersionedProductWhenInvalidatedDuringCacheWrite() throws Exception {
+        assertInvalidationWinsOverInFlightWrite("v1", "versionedProductOperatorMap");
+    }
+
+    private void assertInvalidationWinsOverInFlightWrite(String version, String fieldName) throws Exception {
+        NotifyingConfigStorageManager manager = new NotifyingConfigStorageManager();
+        ClusterDeviceRegistry registry = createRegistry(manager);
+        registry.register(createProduct(version)).block();
+
+        PausedWriteMap<String, Object> map = new PausedWriteMap<>();
+        Field cacheField = ClusterDeviceRegistry.class.getDeclaredField(fieldName);
+        cacheField.setAccessible(true);
+        cacheField.set(registry, map);
+
+        CompletableFuture<DeviceProductOperator> lookup = CompletableFuture.supplyAsync(
+            () -> registry.getProduct("test", version).block()
+        );
+        assertTrue(map.entered.await(5, TimeUnit.SECONDS));
+
+        CompletableFuture<Void> invalidation = CompletableFuture.runAsync(
+            () -> manager.emit(CacheNotify.clear("device-product:test"))
+        );
+        try {
+            try {
+                invalidation.get(200, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException expected) {
+                // 写入与失效互斥时，失效将等待写入完成。
+            }
+        } finally {
+            map.release.countDown();
+        }
+        assertNotNull(lookup.get(5, TimeUnit.SECONDS));
+        invalidation.get(5, TimeUnit.SECONDS);
+        assertNull(map.get("test"));
+    }
+
+    private static final class PausedWriteMap<K, V> extends ForwardingConcurrentMap<K, V> {
+        private final ConcurrentMap<K, V> entries = new ConcurrentHashMap<>();
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        protected ConcurrentMap<K, V> delegate() {
+            return entries;
+        }
+
+        @Override
+        public V put(K key, V value) {
+            pauseWrite();
+            return entries.put(key, value);
+        }
+
+        @Override
+        public V compute(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
+            pauseWrite();
+            return entries.compute(key, remappingFunction);
+        }
+
+        private void pauseWrite() {
+            entered.countDown();
+            try {
+                if (!release.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("timed out awaiting cache write");
+                }
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(error);
+            }
+        }
+    }
+
+    @Test
     public void shouldKeepPerSubscriptionValidationWithoutNotifier() {
         InMemoryConfigStorageManager manager = new InMemoryConfigStorageManager();
         ClusterDeviceRegistry registry = createRegistry(manager);
@@ -327,7 +413,7 @@ public class ClusterDeviceRegistryTest {
                                    if (paused != null
                                        && paused.matches(id, key)) {
                                        Value snapshot = storage.getConfig(key).block();
-                                       return paused.await.then(Mono.justOrEmpty(snapshot));
+                                       return paused.await.asMono().then(Mono.justOrEmpty(snapshot));
                                    }
                                    return storage.getConfig(key);
                                }

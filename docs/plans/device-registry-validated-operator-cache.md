@@ -84,3 +84,20 @@ JFR 显示基线热点集中在 `MonoDeviceProduct.resolve`、`LocalCacheCluster
 
 - 实现提交：`ebbffb2`
 - Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/43
+
+## PR 并发评审修复计划
+
+- 目标：阻止产品缓存失效后的旧加载结果回填，并确保设备快路径在订阅后延迟请求时不会越过已完成的失效。
+- 范围：`ClusterDeviceRegistry` 的产品缓存写入/失效，`MonoValidatedDeviceOperator` 的订阅/请求边界及对应并发回归测试。
+- 不做：不修改配置缓存、通知协议、产品/设备查找规则或常驻缓存形态。
+- 步骤：先增加可控交错测试复现检查与写入、订阅与请求之间的竞态；再在产品缓存写入与失效处建立原子边界，并在设备快路径的实际发射点核对失效状态。
+- 风险：保持 Reactor demand、cancel、Context、无通知能力管理器的原行为；产品缓存命中路径不引入互斥，设备快路径额外状态须测量分配和吞吐。
+- 验证：先运行新增测试确认修复前失败，再运行目标集群注册/设备 Mono 测试及主代码编译；与既有基准比较热路径分配/QPS，记录残余风险。
+
+### 并发评审修复结果
+
+- 修复前新增的三个受控交错用例均失败：无版本和带版本产品在失效清空后回填，以及设备在订阅后、请求前失效仍发射旧 Operator。
+- 产品缓存只在缺失加载的写入、按版本移除和失效清空处共用互斥边界；缓存命中查询不加锁。移除产品时推进加载代数，避免注销后仍在途的产品查询回填。
+- 已校验设备在 `request` 时复核代数；若订阅后已失效，改走原存在性校验源，并转发 demand、cancel、Context、错误和空结果。每次快路径订阅多一个请求感知状态对象；不新增每设备常驻缓存。
+- Maven 定向执行 `MonoValidatedDeviceOperatorTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest`：27 tests，0 failure，0 error；同时修正该测试中原有的 `Sinks.Empty#then` 编译错误。`git diff --check` 通过。IDE 项目未打开此仓库，Maven 编译和测试为本次有效验证。
+- 原文中的 QPS/B-op 是修复前数据，**不作为修复后的性能结论**。本次没有同环境 A/B 压测；快路径每次订阅的额外分配及线上吞吐仍需另行测量。

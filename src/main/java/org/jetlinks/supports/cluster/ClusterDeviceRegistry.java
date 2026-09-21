@@ -52,6 +52,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
 
     private final AtomicLong productCacheVersion = new AtomicLong();
 
+    private final Object productCacheLock = new Object();
+
     //协议支持
     private final ProtocolSupports supports;
 
@@ -230,30 +232,36 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     }
 
     private void cacheProduct(String productId, String version, DeviceProductOperator operator, long cacheVersion) {
-        if (productCacheVersion.get() != cacheVersion) {
-            return;
-        }
-        if (!StringUtils.hasText(version)) {
-            productOperatorMap.put(productId, operator);
-            return;
-        }
-        versionedProductOperatorMap.compute(productId, (ignore, versioned) -> {
-            if (versioned == null) {
-                versioned = VersionedProductOperators.EMPTY;
+        // 缺失加载的版本检查和写入必须与失效互斥，避免旧加载在清空缓存后回填。
+        synchronized (productCacheLock) {
+            if (productCacheVersion.get() != cacheVersion) {
+                return;
             }
-            return versioned.with(version, operator);
-        });
+            if (!StringUtils.hasText(version)) {
+                productOperatorMap.put(productId, operator);
+                return;
+            }
+            versionedProductOperatorMap.compute(productId, (ignore, versioned) -> {
+                if (versioned == null) {
+                    versioned = VersionedProductOperators.EMPTY;
+                }
+                return versioned.with(version, operator);
+            });
+        }
     }
 
     private void removeProductFromCache(String productId, String version) {
-        if (!StringUtils.hasText(version)) {
-            productOperatorMap.remove(productId);
-            return;
+        synchronized (productCacheLock) {
+            productCacheVersion.incrementAndGet();
+            if (!StringUtils.hasText(version)) {
+                productOperatorMap.remove(productId);
+                return;
+            }
+            versionedProductOperatorMap.computeIfPresent(productId, (ignore, versioned) -> {
+                VersionedProductOperators updated = versioned.without(version);
+                return updated.isEmpty() ? null : updated;
+            });
         }
-        versionedProductOperatorMap.computeIfPresent(productId, (ignore, versioned) -> {
-            VersionedProductOperators updated = versioned.without(version);
-            return updated.isEmpty() ? null : updated;
-        });
     }
 
     private DefaultDeviceOperator createOperator(String deviceId) {
@@ -418,9 +426,11 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     }
 
     private void invalidateProductCache() {
-        productCacheVersion.incrementAndGet();
-        productOperatorMap.clear();
-        versionedProductOperatorMap.clear();
+        synchronized (productCacheLock) {
+            productCacheVersion.incrementAndGet();
+            productOperatorMap.clear();
+            versionedProductOperatorMap.clear();
+        }
     }
 
     private boolean affects(CacheNotify notify, String... keys) {
