@@ -21,6 +21,7 @@ import org.jetlinks.supports.config.CacheNotify;
 import org.jetlinks.supports.config.ConfigStorageCacheNotifier;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.function.Tuple2;
@@ -28,8 +29,9 @@ import reactor.util.function.Tuple2;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
-public class ClusterDeviceRegistry implements DeviceRegistry {
+public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     //全局拦截器
     private final CompositeDeviceMessageSenderInterceptor interceptor = new CompositeDeviceMessageSenderInterceptor();
 
@@ -47,6 +49,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     //带版本产品
     private final ConcurrentMap<String, VersionedProductOperators> versionedProductOperatorMap = Caches.newCache();
 
+    private final AtomicLong productCacheVersion = new AtomicLong();
+
     //协议支持
     private final ProtocolSupports supports;
 
@@ -55,6 +59,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     //集群管理
     private final ClusterManager clusterManager;
+
+    private final Disposable cacheNotifyDisposable;
 
     //状态检查器
     private final CompositeDeviceStateChecker stateChecker = new CompositeDeviceStateChecker();
@@ -87,9 +93,9 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.operatorCache = cache;
         this.clusterManager = clusterManager;
         this.validatedDeviceCacheEnabled = storageManager instanceof ConfigStorageCacheNotifier;
-        if (storageManager instanceof ConfigStorageCacheNotifier) {
-            ((ConfigStorageCacheNotifier) storageManager).listenCacheNotify(this::handleConfigCacheNotify);
-        }
+        this.cacheNotifyDisposable = storageManager instanceof ConfigStorageCacheNotifier
+            ? ((ConfigStorageCacheNotifier) storageManager).listenCacheNotify(this::handleConfigCacheNotify)
+            : () -> {};
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -104,6 +110,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.operatorCache = cache;
         this.clusterManager = clusterManager;
         this.validatedDeviceCacheEnabled = false;
+        this.cacheNotifyDisposable = () -> {};
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -177,9 +184,10 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             }
         }
         DefaultDeviceProductOperator deviceOperator = createProductOperator(productId);
+        long cacheVersion = productCacheVersion.get();
         return deviceOperator
             .getConfig(DeviceConfigKey.protocol)
-            .doOnNext(r -> productOperatorMap.put(productId, deviceOperator))
+            .doOnNext(r -> cacheProduct(productId, null, deviceOperator, cacheVersion))
             .map((r) -> deviceOperator);
     }
 
@@ -199,9 +207,10 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             }
         }
         DefaultDeviceProductOperator operator = createProductOperator(productId, version);
+        long cacheVersion = productCacheVersion.get();
         return operator
             .getConfig(DeviceConfigKey.protocol)
-            .doOnNext(r -> cacheProduct(productId, version, operator))
+            .doOnNext(r -> cacheProduct(productId, version, operator, cacheVersion))
             .map((r) -> operator);
     }
 
@@ -214,6 +223,13 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     }
 
     private void cacheProduct(String productId, String version, DeviceProductOperator operator) {
+        cacheProduct(productId, version, operator, productCacheVersion.get());
+    }
+
+    private void cacheProduct(String productId, String version, DeviceProductOperator operator, long cacheVersion) {
+        if (productCacheVersion.get() != cacheVersion) {
+            return;
+        }
         if (!StringUtils.hasText(version)) {
             productOperatorMap.put(productId, operator);
             return;
@@ -393,10 +409,15 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         }
         if (storageId.startsWith("device-product:")
             && affects(notify, DeviceConfigKey.protocol.getKey())) {
-            productOperatorMap.clear();
-            versionedProductOperatorMap.clear();
+            invalidateProductCache();
             invalidateAllDeviceCache();
         }
+    }
+
+    private void invalidateProductCache() {
+        productCacheVersion.incrementAndGet();
+        productOperatorMap.clear();
+        versionedProductOperatorMap.clear();
     }
 
     private boolean affects(CacheNotify notify, String... keys) {
@@ -431,6 +452,13 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             }
         }
         operatorCache.invalidateAll();
+    }
+
+    @Override
+    public void dispose() {
+        cacheNotifyDisposable.dispose();
+        invalidateProductCache();
+        invalidateAllDeviceCache();
     }
 
     protected Mono<Void> doUnregister(DeviceProductOperator product) {

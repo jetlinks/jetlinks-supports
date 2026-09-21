@@ -3,6 +3,7 @@ package org.jetlinks.supports.cluster;
 import com.google.common.cache.CacheBuilder;
 import org.jetlinks.core.ProtocolSupport;
 import org.jetlinks.core.ProtocolSupports;
+import org.jetlinks.core.Value;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.cluster.ClusterSet;
 import org.jetlinks.core.config.ConfigStorage;
@@ -21,12 +22,16 @@ import org.junit.Test;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
 
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
@@ -170,6 +175,25 @@ public class ClusterDeviceRegistryTest {
     }
 
     @Test
+    public void shouldNotCacheProductLoadedBeforeInvalidation() {
+        NotifyingConfigStorageManager manager = new NotifyingConfigStorageManager();
+        ClusterDeviceRegistry registry = createRegistry(manager);
+        registry.register(createProduct("v1")).block();
+        manager.pauseNextProtocolLookup("device-product:test:v1");
+
+        StepVerifier.create(registry.getProduct("test", "v1"))
+                    .then(() -> {
+                        manager.getStorage("device-product:test:v1").block().clear().block();
+                        manager.emit(CacheNotify.clear("device-product:test:v1"));
+                        manager.releasePausedLookup();
+                    })
+                    .expectNextCount(1)
+                    .verifyComplete();
+
+        assertNull(registry.getProduct("test", "v1").block());
+    }
+
+    @Test
     public void shouldKeepPerSubscriptionValidationWithoutNotifier() {
         InMemoryConfigStorageManager manager = new InMemoryConfigStorageManager();
         ClusterDeviceRegistry registry = createRegistry(manager);
@@ -183,6 +207,18 @@ public class ClusterDeviceRegistryTest {
             .block();
 
         assertNull(registry.getDevice("device").block());
+    }
+
+    @Test
+    public void shouldDisposeCacheNotifyListener() {
+        NotifyingConfigStorageManager manager = new NotifyingConfigStorageManager();
+        ClusterDeviceRegistry registry = createRegistry(manager);
+
+        assertEquals(1, manager.listenerCount());
+
+        registry.dispose();
+
+        assertEquals(0, manager.listenerCount());
     }
 
     private DeviceProductOperator register(String version) {
@@ -221,10 +257,58 @@ public class ClusterDeviceRegistryTest {
 
         private final InMemoryConfigStorageManager delegate = new InMemoryConfigStorageManager();
         private final Set<Consumer<CacheNotify>> listeners = new CopyOnWriteArraySet<>();
+        private final AtomicReference<PausedLookup> pausedLookup = new AtomicReference<>();
 
         @Override
         public Mono<ConfigStorage> getStorage(String id) {
-            return delegate.getStorage(id);
+            return delegate.getStorage(id)
+                           .map(storage -> new ConfigStorage() {
+                               @Override
+                               public Mono<Value> getConfig(String key) {
+                                   PausedLookup paused = pausedLookup.get();
+                                   if (paused != null
+                                       && paused.matches(id, key)) {
+                                       Value snapshot = storage.getConfig(key).block();
+                                       return paused.await.then(Mono.justOrEmpty(snapshot));
+                                   }
+                                   return storage.getConfig(key);
+                               }
+
+                               @Override
+                               public Mono<org.jetlinks.core.Values> getConfigs(java.util.Collection<String> key) {
+                                   return storage.getConfigs(key);
+                               }
+
+                               @Override
+                               public Mono<Boolean> setConfigs(java.util.Map<String, Object> values) {
+                                   return storage.setConfigs(values);
+                               }
+
+                               @Override
+                               public Mono<Boolean> setConfig(String key, Object value) {
+                                   return storage.setConfig(key, value);
+                               }
+
+                               @Override
+                               public Mono<Boolean> remove(String key) {
+                                   return storage.remove(key);
+                               }
+
+                               @Override
+                               public Mono<Value> getAndRemove(String key) {
+                                   return storage.getAndRemove(key);
+                               }
+
+                               @Override
+                               public Mono<Boolean> remove(java.util.Collection<String> key) {
+                                   return storage.remove(key);
+                               }
+
+                               @Override
+                               public Mono<Boolean> clear() {
+                                   return storage.clear();
+                               }
+                           });
         }
 
         @Override
@@ -233,8 +317,38 @@ public class ClusterDeviceRegistryTest {
             return () -> listeners.remove(listener);
         }
 
+        private void pauseNextProtocolLookup(String storageId) {
+            pausedLookup.set(new PausedLookup(storageId, Sinks.empty()));
+        }
+
+        private void releasePausedLookup() {
+            PausedLookup paused = pausedLookup.getAndSet(null);
+            if (paused != null) {
+                paused.await.tryEmitEmpty();
+            }
+        }
+
+        private int listenerCount() {
+            return listeners.size();
+        }
+
         private void emit(CacheNotify notify) {
             listeners.forEach(listener -> listener.accept(notify));
+        }
+
+        private static final class PausedLookup {
+            private final String storageId;
+            private final Sinks.Empty<Void> await;
+
+            private PausedLookup(String storageId, Sinks.Empty<Void> await) {
+                this.storageId = storageId;
+                this.await = await;
+            }
+
+            private boolean matches(String storageId, String key) {
+                return this.storageId.equals(storageId)
+                    && DeviceConfigKey.protocol.getKey().equals(key);
+            }
         }
     }
 }
