@@ -225,13 +225,17 @@ public class MonoValidatedDeviceOperatorTest {
     }
 
     @Test
-    public void shouldNotInvalidateDuringValidatedFastPathEmission() throws InterruptedException {
+    public void shouldInvalidateDuringValidatedFastPathEmissionAndRevalidateNextRequest() throws InterruptedException {
         Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
         DeviceOperator device = mock(DeviceOperator.class);
+        AtomicInteger validations = new AtomicInteger();
         MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
             "test",
             device,
-            Mono.just(mock(DeviceProductOperator.class)),
+            Mono.defer(() -> {
+                validations.incrementAndGet();
+                return Mono.just(mock(DeviceProductOperator.class));
+            }),
             cache
         );
         assertSame(device, source.block());
@@ -257,13 +261,16 @@ public class MonoValidatedDeviceOperatorTest {
         });
         try {
             invalidator.start();
-            assertFalse(invalidated.await(100, TimeUnit.MILLISECONDS));
+            assertTrue(invalidated.await(5, TimeUnit.SECONDS));
+            assertSame(device, source.block());
+            assertEquals(2, validations.get());
         } finally {
             releaseEmission.countDown();
             subscriber.join(5000);
             invalidator.join(5000);
         }
-        assertTrue(invalidated.await(0, TimeUnit.SECONDS));
+        assertFalse(subscriber.isAlive());
+        assertFalse(invalidator.isAlive());
     }
 
     @Test
