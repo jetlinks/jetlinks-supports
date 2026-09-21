@@ -79,3 +79,8 @@ JFR 显示基线热点集中在 `MonoDeviceProduct.resolve`、`LocalCacheCluster
 - 并发扩展：`target/device-api-jfr/validated-device-concurrency/`
 - JFR：`target/device-api-jfr/validated-device-jfr/`
 - 常驻内存：`target/device-api-jfr/validated-device-memory/`
+
+### 交付
+
+- 实现提交：`ebbffb2`
+- Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/43
