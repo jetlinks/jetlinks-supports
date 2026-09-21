@@ -29,7 +29,11 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     private volatile Map<String, PropertyMetadata> tags;
 
+    private volatile Map<String, ThingMetadata> modules;
+
     private volatile List<PropertyMetadata> propertyMetadataList;
+
+    private volatile List<ThingMetadata> moduleMetadataList;
 
     @Getter
     @Setter
@@ -52,7 +56,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
     }
 
     public DefaultThingsMetadata(JSONObject jsonObject) {
-        this.jsonObject = jsonObject;
+        fromJson(jsonObject);
     }
 
     public DefaultThingsMetadata(ThingMetadata another) {
@@ -83,6 +87,12 @@ public class DefaultThingsMetadata implements ThingMetadata {
             .stream()
             .map(JetLinksPropertyMetadata::new)
             .collect(Collectors.toMap(JetLinksPropertyMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+
+        this.modules = another
+            .getModules()
+            .stream()
+            .map(DefaultThingsMetadata::new)
+            .collect(Collectors.toMap(DefaultThingsMetadata::getId, Function.identity(), (a, b) -> a, LinkedHashMap::new));
 
     }
 
@@ -183,6 +193,33 @@ public class DefaultThingsMetadata implements ThingMetadata {
     }
 
     @Override
+    public List<ThingMetadata> getModules() {
+        if (CollectionUtils.isNotEmpty(this.moduleMetadataList)) {
+            return this.moduleMetadataList;
+        }
+        if (this.modules == null && jsonObject != null) {
+            this.modules = Optional
+                .ofNullable(jsonObject.getJSONArray("modules"))
+                .map(Collection::stream)
+                .<Map<String, ThingMetadata>>map(stream -> stream
+                    .map(obj -> new DefaultThingsMetadata(toJSONObject(obj)))
+                    .collect(Collectors.toMap(
+                        ThingMetadata::getId,
+                        Function.identity(),
+                        (a, b) -> a,
+                        LinkedHashMap::new))
+                )
+                .orElse(Collections.emptyMap());
+        }
+
+        if (this.moduleMetadataList == null && this.modules != null) {
+            this.moduleMetadataList = Collections.unmodifiableList(new ArrayList<>(this.modules.values()));
+            return this.moduleMetadataList;
+        }
+        return Collections.emptyList();
+    }
+
+    @Override
     public EventMetadata getEventOrNull(String id) {
         if (events == null) {
             getEvents();
@@ -253,6 +290,14 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.tags.put(metadata.getId(), new JetLinksPropertyMetadata(metadata));
     }
 
+    public void addModule(ThingMetadata metadata) {
+        if (this.modules == null) {
+            this.modules = new LinkedHashMap<>();
+        }
+        this.modules.put(metadata.getId(), new DefaultThingsMetadata(metadata));
+        this.moduleMetadataList = Collections.unmodifiableList(new ArrayList<>(this.modules.values()));
+    }
+
     public Map<String, Object> getExpands() {
         if (this.expands == null && jsonObject != null) {
             this.expands = jsonObject.getJSONObject("expands");
@@ -270,6 +315,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
         json.put("functions", getFunctions().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("events", getEvents().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("tags", getTags().stream().map(Jsonable::toJson).collect(Collectors.toList()));
+        json.put("modules", getModules().stream().map(Jsonable::toJson).collect(Collectors.toList()));
         json.put("expands", expands);
         return json;
     }
@@ -281,6 +327,9 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.events = null;
         this.functions = null;
         this.tags = null;
+        this.modules = null;
+        this.propertyMetadataList = null;
+        this.moduleMetadataList = null;
         this.id = json.getString("id");
         this.name = json.getString("name");
         this.description = json.getString("description");
@@ -343,6 +392,14 @@ public class DefaultThingsMetadata implements ThingMetadata {
         for (PropertyMetadata tag : metadata.getTags()) {
             doMerge(deviceMetadata.tags, tag, PropertyMetadata::merge, options);
         }
+
+        if (deviceMetadata.modules == null) {
+            deviceMetadata.getModules();
+        }
+        for (ThingMetadata module : metadata.getModules()) {
+            doMerge(deviceMetadata.modules, new DefaultThingsMetadata(module), ThingMetadata::merge, options);
+        }
+        deviceMetadata.moduleMetadataList = null;
 
         return deviceMetadata;
     }
