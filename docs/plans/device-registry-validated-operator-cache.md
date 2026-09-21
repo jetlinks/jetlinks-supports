@@ -126,3 +126,48 @@ JFR 显示基线热点集中在 `MonoDeviceProduct.resolve`、`LocalCacheCluster
 | 16 | 34.50M / 53.74M | 6.33M / 5.31M | ≈32 / ≈80 |
 
 `plain` 下 8 线程无锁版较加锁版约快 45%，且从 1 到 8 线程总吞吐增长；16 线程与部分其他组合的 fork 差异较大，不宜外推精确增幅。`expireSoft` 下两版均在约 5–7M QPS，增加线程没有有效扩展，当前不能认为无锁化改善了该缓存配置。该模式每次命中还维护访问时间和 recency queue；8 线程 JFR 分配样本以 `ConcurrentLinkedQueue$Node` 和 `ValidatedSubscription` 为主，CPU 样本集中在 `String.hashCode`、`LocalCache.connectAccessOrder` 和 `ConcurrentLinkedQueue.offer`。这说明缓存访问维护成本会盖过设备 Mono 的锁优化；不能仅凭同一热设备基准推断不同缓存配置下的真实收益。
+
+## 可选并发设备缓存计划
+
+- 目标：新增接收 `Duration` 访问空闲过期时间的构造器，使有配置变更通知能力的 Registry 使用 `ConcurrentHashMap` 承载已校验设备；保持现有 Guava 注入构造器和无通知管理器的逐次校验兼容路径。
+- 范围：`ClusterDeviceRegistry`、`MonoValidatedDeviceOperator`、新的设备缓存承载类及相关测试；不修改配置值缓存、通知协议和产品缓存。
+- 步骤：缓存读使用 map 查找与低频访问时间采样；共享调度器按周期扫描并条件删除空闲 entry；在注册、通知失效、注销和释放时保留版本失效与生命周期语义。
+- 风险：定期扫描意味着空闲过期允许扫描周期内的延迟；强引用缓存与原软引用行为不同，必须记录常驻内存及清理后的引用释放。无通知管理器继续使用原校验路径。
+- 验证：定向测试过期、续期、并发失效和 dispose；使用 10 万设备、单线程及并发 JMH 与原实现对照，并记录分配和跨 fork 波动。后续在本节回填结果。
+
+### 实施与验证
+
+- 新构造器 `ClusterDeviceRegistry(..., Duration expireAfterAccess)` 在支持配置变更通知时使用 `ConcurrentValidatedDeviceCache`；原缓存注入构造器保持不变。无通知能力的管理器仍使用原 Guava 访问过期缓存与逐次产品校验。
+- 设备命中使用 `ConcurrentHashMap` 查找；每秒更新一次共享时间刻度并采样设备访问时间，空闲条目按 `max(1 秒, min(过期时间, 1 分钟))` 间隔扫描，扫描时复核访问时间并按当前 entry 条件删除。过期存在采样与扫描周期内的延迟。注册、产品/设备配置通知、注销及 `dispose()` 继续触发原有失效边界。
+- 新模式使用强引用：必须按设备数量和实际 Operator 体积评估内存，不能直接等同于旧 `softValues()` 在内存压力下的回收能力。空闲过期并不是硬性最大容量。
+- JDK 21.0.10、G1、512 MiB，10 万不同 ID，命中率 100%，JMH 每模式 2 fork、每 fork 2×1 秒预热与 3×2 秒测量；1 秒周期维护时间刻度，30 分钟过期策略，不含设备业务或网络调用：
+
+| 缓存模式 | 1 线程 QPS | 8 线程总 QPS | B/次 |
+|---|---:|---:|---:|
+| Guava 普通强引用 | 10.75M | 22.37M | 32 |
+| Guava 软引用＋访问过期 | 8.39M | 5.47M | 80 |
+| CHM＋定期过期 | 17.93M | 137.14M | 32 |
+
+CHM 相比普通 Guava 约为 1.67× / 6.13×，相比软引用访问过期约为 2.14× / 25.07×（单线程 / 8 线程）。CHM 两个 fork 在 8 线程下分别为 133.15M、141.12M；普通 Guava 分别为 21.09M、23.65M。仅表示满命中 L1 微基准的收益；强引用常驻内存、过期扫描及真实设备处理链路仍须按实际部署观察。
+
+定向运行 `ConcurrentValidatedDeviceCacheTest`、`MonoValidatedDeviceOperatorTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 共 34 项，0 failure、0 error；`git diff --check` 通过。独立 JMH 源码和 JSON 保留在本机 `/private/tmp/ChmValidatedOperatorJmh.java` 与 `/private/tmp/jetlinks-map-maintenance-{1,8}.json`，非仓库提交文件。
+
+### 百万设备及未知设备复核
+
+沿用 30 分钟过期、100% 缓存命中的同一 JMH 操作，改为 100 万个不同 ID、2 GiB heap、1/8 线程各 2 fork（每 fork 2×1 秒预热、3×2 秒测量）：
+
+| 缓存模式 | 1 线程 QPS | 8 线程总 QPS | B/次 |
+|---|---:|---:|---:|
+| Guava 普通强引用 | 4.04M | 18.74M | 32 |
+| Guava 软引用＋访问过期 | 2.21M | 5.75M | 80 |
+| CHM＋定期过期 | 4.48M | 38.70M | 32 |
+
+百万设备下 CHM 8 线程约为普通 Guava 的 2.07 倍、旧软引用过期配置的 6.73 倍；相对 10 万设备场景，容量增大后其优势缩小。这里复用模拟 Operator，只测本地查找和订阅，不代表完整设备上报。JMH JSON 在本机 `/private/tmp/jetlinks-map-million-{1,8}.json`。
+
+独立 JVM（JDK 21、G1、`-Xms128m -Xmx4g`）用 100 万个不同 ID、**每 ID 一个真实 `DefaultDeviceOperator`** 与共享的模拟存储/产品校验源测 GC 后保留堆；时钟可控地推进 20/31/51 分钟验证空闲清理。3 轮独立进程的保留堆增量均约为：100 万 entry **580 MiB**（约 608 B/entry）；再读取 100 万个不同的不存在设备并完成空结果清除后，entry 仍为 100 万，保留堆不变；清除 90 万冷 entry、保留 10 万热 entry 后约 **66.7 MiB**；全部过期后仍比空缓存多 **10.25 MiB**（主要是 CHM 已扩容的表）。清理 90 万 entry 用 65–77 ms，余下 10 万用约 10 ms。这是共享模拟存储的 Operator 对象图，真实配置存储和元数据可能增加保留量。
+
+另一独立 JVM 对实际 `ClusterDeviceRegistry.getDevice` 用 8 线程访问 100 万个不同未知设备，校验源返回空：结束时设备缓存 **0 entry**，GC 后堆相对基线约 **+0.25 MiB**；约 5.7–6.2M QPS 是该模拟存储探针的总吞吐，不与满命中 JMH 直接比较。诊断源码在本机 `/private/tmp/MillionDeviceCacheMemory.java`。
+
+**RSS 与保留堆不同**：真实 Operator 三轮中，全部清理并 GC 后，堆已用约 23 MiB、已提交 128 MiB，但 `ps` 读取的进程 RSS 仍约 1.25 GiB；未知设备单独探针也出现未保留 entry 而 RSS 较高的情况。不能把这些短时 RSS 视为缓存仍持有设备；整桶淘汰也不保证 JVM/操作系统立即降低 RSS。线上内存风险需结合 GC、进程工作集及实际存储实现监测。
+
+同口径交付复核：JDK 21.0.10、G1、2 GiB heap、8 线程、3 fork，每 fork 2×1 秒预热、3×2 秒测量，30 分钟过期，100% 预填命中；保留单个 CHM，不采用分桶。10 万设备下 Guava 强引用 / 原软引用过期 / CHM 分别为 50.34M / 5.62M / 113.52M QPS（CHM 相比两条基线分别提升 125.5% / 1920.2%）；100 万设备下分别为 19.42M / 5.79M / 38.14M QPS（分别提升 96.4% / 559.0%）。10 万设备的历史结果使用 512 MiB heap，不能与本轮绝对值混算。结果仅代表本地查找和订阅，不代表端到端上报；原始结果为 `/private/tmp/jetlinks-current-chm-{100k,1m}-confirm.json`。定向运行 `ConcurrentValidatedDeviceCacheTest`、`MonoValidatedDeviceOperatorTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 共 34 项，0 failure、0 error。

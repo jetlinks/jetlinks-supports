@@ -24,12 +24,14 @@ import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.function.Tuple2;
 
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
@@ -41,6 +43,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
 
     //缓存
     private final Cache<String, Mono<DeviceOperator>> operatorCache;
+
+    private final ConcurrentValidatedDeviceCache concurrentDeviceCache;
 
     private final boolean validatedDeviceCacheEnabled;
 
@@ -64,6 +68,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     private final ClusterManager clusterManager;
 
     private final Disposable cacheNotifyDisposable;
+
+    private final Disposable cacheCleanupDisposable;
 
     private final List<DeviceMessageSenderInterceptor> registeredInterceptors = new CopyOnWriteArrayList<>();
 
@@ -92,15 +98,55 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
                                  ClusterManager clusterManager,
                                  DeviceOperationBroker handler,
                                  Cache<String, Mono<DeviceOperator>> cache) {
+        this(supports, storageManager, clusterManager, handler, cache, null);
+    }
+
+    public ClusterDeviceRegistry(ProtocolSupports supports,
+                                 ConfigStorageManager storageManager,
+                                 ClusterManager clusterManager,
+                                 DeviceOperationBroker handler,
+                                 Duration expireAfterAccess) {
+        this(supports, storageManager, clusterManager, handler, null,
+             Objects.requireNonNull(expireAfterAccess, "expireAfterAccess"));
+    }
+
+    private ClusterDeviceRegistry(ProtocolSupports supports,
+                                  ConfigStorageManager storageManager,
+                                  ClusterManager clusterManager,
+                                  DeviceOperationBroker handler,
+                                  Cache<String, Mono<DeviceOperator>> cache,
+                                  Duration expireAfterAccess) {
         this.supports = supports;
         this.handler = handler;
         this.manager = storageManager;
-        this.operatorCache = cache;
         this.clusterManager = clusterManager;
         this.validatedDeviceCacheEnabled = storageManager instanceof ConfigStorageCacheNotifier;
+        if (expireAfterAccess != null) {
+            if (expireAfterAccess.isZero() || expireAfterAccess.isNegative()) {
+                throw new IllegalArgumentException("expireAfterAccess must be positive");
+            }
+            this.concurrentDeviceCache = validatedDeviceCacheEnabled
+                ? new ConcurrentValidatedDeviceCache(expireAfterAccess)
+                : null;
+            this.operatorCache = validatedDeviceCacheEnabled
+                ? null
+                : CacheBuilder.newBuilder()
+                    .softValues()
+                    .expireAfterAccess(expireAfterAccess)
+                    .<String, Mono<DeviceOperator>>build();
+        } else {
+            this.operatorCache = Objects.requireNonNull(cache, "cache");
+            this.concurrentDeviceCache = null;
+        }
         this.cacheNotifyDisposable = storageManager instanceof ConfigStorageCacheNotifier
             ? ((ConfigStorageCacheNotifier) storageManager).listenCacheNotify(this::handleConfigCacheNotify)
             : () -> {};
+        this.cacheCleanupDisposable = concurrentDeviceCache == null
+            ? () -> {}
+            : Schedulers.parallel().schedulePeriodically(concurrentDeviceCache::maintenance,
+                                                         1,
+                                                         1,
+                                                         TimeUnit.SECONDS);
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -113,9 +159,11 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
         this.handler = handler;
         this.manager = new ClusterConfigStorageManager(clusterManager);
         this.operatorCache = cache;
+        this.concurrentDeviceCache = null;
         this.clusterManager = clusterManager;
         this.validatedDeviceCacheEnabled = false;
         this.cacheNotifyDisposable = () -> {};
+        this.cacheCleanupDisposable = () -> {};
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -150,19 +198,24 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
         }
         {
 
-            Mono<DeviceOperator> deviceOperator = operatorCache.getIfPresent(deviceId);
+            Mono<DeviceOperator> deviceOperator = concurrentDeviceCache == null
+                ? operatorCache.getIfPresent(deviceId)
+                : concurrentDeviceCache.get(deviceId);
             if (null != deviceOperator) {
                 return deviceOperator;
             }
         }
         DeviceOperator deviceOperator = createOperator(deviceId);
         if (validatedDeviceCacheEnabled) {
-            return new MonoValidatedDeviceOperator(
-                deviceId,
-                deviceOperator,
-                deviceOperator.getProduct(),
-                operatorCache
-            );
+            return concurrentDeviceCache == null
+                ? new MonoValidatedDeviceOperator(deviceId,
+                                                  deviceOperator,
+                                                  deviceOperator.getProduct(),
+                                                  operatorCache)
+                : new MonoValidatedDeviceOperator(deviceId,
+                                                  deviceOperator,
+                                                  deviceOperator.getProduct(),
+                                                  concurrentDeviceCache);
         }
         return deviceOperator
             //有产品则认为存在
@@ -389,6 +442,16 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     }
 
     private void cacheRegisteredDevice(DeviceOperator operator) {
+        if (concurrentDeviceCache != null) {
+            concurrentDeviceCache.put(
+                operator.getDeviceId(),
+                new MonoValidatedDeviceOperator(operator.getDeviceId(),
+                                                operator,
+                                                operator.getSelfConfig(DeviceConfigKey.productId),
+                                                concurrentDeviceCache)
+            );
+            return;
+        }
         Mono<DeviceOperator> cached;
         if (validatedDeviceCacheEnabled) {
             cached = new MonoValidatedDeviceOperator(
@@ -447,6 +510,14 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     }
 
     private void invalidateDeviceCache(String deviceId) {
+        if (concurrentDeviceCache != null) {
+            MonoValidatedDeviceOperator cached = concurrentDeviceCache.get(deviceId);
+            if (cached != null) {
+                cached.invalidate();
+                concurrentDeviceCache.remove(deviceId, cached);
+            }
+            return;
+        }
         Mono<DeviceOperator> cached = operatorCache.getIfPresent(deviceId);
         if (cached instanceof MonoValidatedDeviceOperator) {
             ((MonoValidatedDeviceOperator) cached).invalidate();
@@ -459,6 +530,10 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     }
 
     private void invalidateAllDeviceCache() {
+        if (concurrentDeviceCache != null) {
+            concurrentDeviceCache.invalidateAll();
+            return;
+        }
         for (Mono<DeviceOperator> cached : operatorCache.asMap().values()) {
             if (cached instanceof MonoValidatedDeviceOperator) {
                 ((MonoValidatedDeviceOperator) cached).invalidate();
@@ -471,9 +546,18 @@ public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     public void dispose() {
         RuntimeException disposeError = null;
         try {
+            cacheCleanupDisposable.dispose();
+        } catch (Throwable error) {
+            disposeError = new RuntimeException("Failed to dispose device cache cleanup", error);
+        }
+        try {
             cacheNotifyDisposable.dispose();
         } catch (Throwable error) {
-            disposeError = new RuntimeException("Failed to dispose cache notify listener", error);
+            if (disposeError == null) {
+                disposeError = new RuntimeException("Failed to dispose cache notify listener", error);
+            } else {
+                disposeError.addSuppressed(error);
+            }
         }
         for (DeviceMessageSenderInterceptor interceptor : registeredInterceptors) {
             if (interceptor instanceof Disposable) {

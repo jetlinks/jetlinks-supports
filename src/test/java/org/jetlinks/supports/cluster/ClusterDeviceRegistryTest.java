@@ -28,6 +28,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.Set;
 import java.lang.reflect.Field;
 import java.util.concurrent.CompletableFuture;
@@ -186,6 +187,67 @@ public class ClusterDeviceRegistryTest {
         manager.emit(CacheNotify.clear("device-product:test"));
 
         assertNull(registry.getDevice("device").block());
+    }
+
+    @Test
+    public void shouldInvalidateConcurrentDeviceCacheOnBindingChange() {
+        NotifyingConfigStorageManager manager = new NotifyingConfigStorageManager();
+        ClusterDeviceRegistry registry = createRegistry(manager, Duration.ofMinutes(30));
+        try {
+            registry.register(createProduct(null)).block();
+            DeviceOperator device = registry.register(createDevice()).block();
+            assertSame(device, registry.getDevice("device").block());
+
+            manager.getStorage("device:device")
+                   .flatMap(storage -> storage.remove(DeviceConfigKey.productId.getKey()))
+                   .block();
+            manager.emit(CacheNotify.expires("device:device", Set.of(DeviceConfigKey.productId.getKey())));
+            assertNull(registry.getDevice("device").block());
+        } finally {
+            registry.dispose();
+        }
+        assertEquals(0, manager.listenerCount());
+    }
+
+    @Test
+    public void shouldRevalidateConcurrentDeviceCacheAfterDelayedDemand() {
+        NotifyingConfigStorageManager manager = new NotifyingConfigStorageManager();
+        ClusterDeviceRegistry registry = createRegistry(manager, Duration.ofMinutes(30));
+        try {
+            registry.register(createProduct(null)).block();
+            registry.register(createDevice()).block();
+            assertNotNull(registry.getDevice("device").block());
+
+            StepVerifier.create(registry.getDevice("device"), 0)
+                        .then(() -> {
+                            manager.getStorage("device:device")
+                                   .flatMap(storage -> storage.remove(DeviceConfigKey.productId.getKey()))
+                                   .block();
+                            manager.emit(CacheNotify.expires(
+                                "device:device", Set.of(DeviceConfigKey.productId.getKey())));
+                        })
+                        .thenRequest(1)
+                        .verifyComplete();
+        } finally {
+            registry.dispose();
+        }
+    }
+
+    @Test
+    public void shouldKeepValidationFallbackWithExpirationConstructor() {
+        InMemoryConfigStorageManager manager = new InMemoryConfigStorageManager();
+        ClusterDeviceRegistry registry = createRegistry(manager, Duration.ofMinutes(30));
+        try {
+            registry.register(createProduct(null)).block();
+            registry.register(createDevice()).block();
+            assertNotNull(registry.getDevice("device").block());
+            manager.getStorage("device:device")
+                   .flatMap(storage -> storage.remove(DeviceConfigKey.productId.getKey()))
+                   .block();
+            assertNull(registry.getDevice("device").block());
+        } finally {
+            registry.dispose();
+        }
     }
 
     @Test
@@ -394,6 +456,10 @@ public class ClusterDeviceRegistryTest {
             broker,
             CacheBuilder.newBuilder().build()
         );
+    }
+
+    private ClusterDeviceRegistry createRegistry(ConfigStorageManager storageManager, Duration expireAfterAccess) {
+        return new ClusterDeviceRegistry(supports, storageManager, clusterManager, broker, expireAfterAccess);
     }
 
     private static final class NotifyingConfigStorageManager
