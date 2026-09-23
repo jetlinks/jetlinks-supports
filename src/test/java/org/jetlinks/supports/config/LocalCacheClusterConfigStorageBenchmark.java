@@ -29,6 +29,16 @@ import static org.mockito.Mockito.when;
 public class LocalCacheClusterConfigStorageBenchmark {
 
     @Benchmark
+    public Values positiveHit2(PositiveHit2State state) {
+        return state.storage.getConfigs(state.keys).block();
+    }
+
+    @Benchmark
+    public Values positiveHit3(PositiveHit3State state) {
+        return state.storage.getConfigs(state.keys).block();
+    }
+
+    @Benchmark
     public Values positiveHit8(PositiveHitState state) {
         return state.storage.getConfigs(state.keys).block();
     }
@@ -94,6 +104,26 @@ public class LocalCacheClusterConfigStorageBenchmark {
 
         void warmCache() {
             storage.getConfigs(keys).block();
+        }
+    }
+
+    @State(Scope.Thread)
+    public static class PositiveHit2State extends BaseState {
+        @Setup(Level.Trial)
+        public void setup() {
+            initialize(8);
+            keys = Arrays.asList("k0", "k1");
+            warmCache();
+        }
+    }
+
+    @State(Scope.Thread)
+    public static class PositiveHit3State extends BaseState {
+        @Setup(Level.Trial)
+        public void setup() {
+            initialize(8);
+            keys = Arrays.asList("k0", "k1", "k2");
+            warmCache();
         }
     }
 

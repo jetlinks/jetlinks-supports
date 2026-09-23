@@ -17,16 +17,24 @@ import org.jetlinks.core.principal.Principal;
 import org.jetlinks.core.message.interceptor.DeviceMessageSenderInterceptor;
 import org.jetlinks.core.things.ThingRpcSupportChain;
 import org.jetlinks.supports.config.ClusterConfigStorageManager;
+import org.jetlinks.supports.config.CacheNotify;
+import org.jetlinks.supports.config.ConfigStorageCacheNotifier;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.function.Tuple2;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
-public class ClusterDeviceRegistry implements DeviceRegistry {
+public class ClusterDeviceRegistry implements DeviceRegistry, Disposable {
     //全局拦截器
     private final CompositeDeviceMessageSenderInterceptor interceptor = new CompositeDeviceMessageSenderInterceptor();
 
@@ -36,8 +44,19 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     //缓存
     private final Cache<String, Mono<DeviceOperator>> operatorCache;
 
+    private final ConcurrentValidatedDeviceCache concurrentDeviceCache;
+
+    private final boolean validatedDeviceCacheEnabled;
+
     //产品
-    private final Map<String, DeviceProductOperator> productOperatorMap = Caches.newCache();
+    private final ConcurrentMap<String, DeviceProductOperator> productOperatorMap = Caches.newCache();
+
+    //带版本产品
+    private final ConcurrentMap<String, VersionedProductOperators> versionedProductOperatorMap = Caches.newCache();
+
+    private final AtomicLong productCacheVersion = new AtomicLong();
+
+    private final Object productCacheLock = new Object();
 
     //协议支持
     private final ProtocolSupports supports;
@@ -47,6 +66,12 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
 
     //集群管理
     private final ClusterManager clusterManager;
+
+    private final Disposable cacheNotifyDisposable;
+
+    private final Disposable cacheCleanupDisposable;
+
+    private final List<DeviceMessageSenderInterceptor> registeredInterceptors = new CopyOnWriteArrayList<>();
 
     //状态检查器
     private final CompositeDeviceStateChecker stateChecker = new CompositeDeviceStateChecker();
@@ -73,11 +98,55 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                                  ClusterManager clusterManager,
                                  DeviceOperationBroker handler,
                                  Cache<String, Mono<DeviceOperator>> cache) {
+        this(supports, storageManager, clusterManager, handler, cache, null);
+    }
+
+    public ClusterDeviceRegistry(ProtocolSupports supports,
+                                 ConfigStorageManager storageManager,
+                                 ClusterManager clusterManager,
+                                 DeviceOperationBroker handler,
+                                 Duration expireAfterAccess) {
+        this(supports, storageManager, clusterManager, handler, null,
+             Objects.requireNonNull(expireAfterAccess, "expireAfterAccess"));
+    }
+
+    private ClusterDeviceRegistry(ProtocolSupports supports,
+                                  ConfigStorageManager storageManager,
+                                  ClusterManager clusterManager,
+                                  DeviceOperationBroker handler,
+                                  Cache<String, Mono<DeviceOperator>> cache,
+                                  Duration expireAfterAccess) {
         this.supports = supports;
         this.handler = handler;
         this.manager = storageManager;
-        this.operatorCache = cache;
         this.clusterManager = clusterManager;
+        this.validatedDeviceCacheEnabled = storageManager instanceof ConfigStorageCacheNotifier;
+        if (expireAfterAccess != null) {
+            if (expireAfterAccess.isZero() || expireAfterAccess.isNegative()) {
+                throw new IllegalArgumentException("expireAfterAccess must be positive");
+            }
+            this.concurrentDeviceCache = validatedDeviceCacheEnabled
+                ? new ConcurrentValidatedDeviceCache(expireAfterAccess)
+                : null;
+            this.operatorCache = validatedDeviceCacheEnabled
+                ? null
+                : CacheBuilder.newBuilder()
+                    .softValues()
+                    .expireAfterAccess(expireAfterAccess)
+                    .<String, Mono<DeviceOperator>>build();
+        } else {
+            this.operatorCache = Objects.requireNonNull(cache, "cache");
+            this.concurrentDeviceCache = null;
+        }
+        this.cacheNotifyDisposable = storageManager instanceof ConfigStorageCacheNotifier
+            ? ((ConfigStorageCacheNotifier) storageManager).listenCacheNotify(this::handleConfigCacheNotify)
+            : () -> {};
+        this.cacheCleanupDisposable = concurrentDeviceCache == null
+            ? () -> {}
+            : Schedulers.parallel().schedulePeriodically(concurrentDeviceCache::maintenance,
+                                                         1,
+                                                         1,
+                                                         TimeUnit.SECONDS);
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -90,7 +159,11 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         this.handler = handler;
         this.manager = new ClusterConfigStorageManager(clusterManager);
         this.operatorCache = cache;
+        this.concurrentDeviceCache = null;
         this.clusterManager = clusterManager;
+        this.validatedDeviceCacheEnabled = false;
+        this.cacheNotifyDisposable = () -> {};
+        this.cacheCleanupDisposable = () -> {};
         this.addStateChecker(DefaultDeviceOperator.DEFAULT_STATE_CHECKER);
     }
 
@@ -125,12 +198,25 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         }
         {
 
-            Mono<DeviceOperator> deviceOperator = operatorCache.getIfPresent(deviceId);
+            Mono<DeviceOperator> deviceOperator = concurrentDeviceCache == null
+                ? operatorCache.getIfPresent(deviceId)
+                : concurrentDeviceCache.get(deviceId);
             if (null != deviceOperator) {
                 return deviceOperator;
             }
         }
         DeviceOperator deviceOperator = createOperator(deviceId);
+        if (validatedDeviceCacheEnabled) {
+            return concurrentDeviceCache == null
+                ? new MonoValidatedDeviceOperator(deviceId,
+                                                  deviceOperator,
+                                                  deviceOperator.getProduct(),
+                                                  operatorCache)
+                : new MonoValidatedDeviceOperator(deviceId,
+                                                  deviceOperator,
+                                                  deviceOperator.getProduct(),
+                                                  concurrentDeviceCache);
+        }
         return deviceOperator
             //有产品则认为存在
             .getProduct()
@@ -156,14 +242,11 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             }
         }
         DefaultDeviceProductOperator deviceOperator = createProductOperator(productId);
+        long cacheVersion = productCacheVersion.get();
         return deviceOperator
             .getConfig(DeviceConfigKey.protocol)
-            .doOnNext(r -> productOperatorMap.put(productId, deviceOperator))
+            .doOnNext(r -> cacheProduct(productId, null, deviceOperator, cacheVersion))
             .map((r) -> deviceOperator);
-    }
-
-    private String createProductCacheKey(String productId, String version) {
-        return StringUtils.hasText(version) ? productId + ":" + version : productId;
     }
 
     @Override
@@ -175,19 +258,63 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         if (ObjectUtils.isEmpty(version)) {
             return getProduct(productId);
         }
-        String cacheId = createProductCacheKey(productId, version);
-
         {
-            DeviceProductOperator operator = productOperatorMap.get(cacheId);
+            DeviceProductOperator operator = getProductFromCache(productId, version);
             if (null != operator) {
                 return Mono.just(operator);
             }
         }
         DefaultDeviceProductOperator operator = createProductOperator(productId, version);
+        long cacheVersion = productCacheVersion.get();
         return operator
             .getConfig(DeviceConfigKey.protocol)
-            .doOnNext(r -> productOperatorMap.put(cacheId, operator))
+            .doOnNext(r -> cacheProduct(productId, version, operator, cacheVersion))
             .map((r) -> operator);
+    }
+
+    private DeviceProductOperator getProductFromCache(String productId, String version) {
+        if (!StringUtils.hasText(version)) {
+            return productOperatorMap.get(productId);
+        }
+        VersionedProductOperators versioned = versionedProductOperatorMap.get(productId);
+        return versioned == null ? null : versioned.get(version);
+    }
+
+    private void cacheProduct(String productId, String version, DeviceProductOperator operator) {
+        cacheProduct(productId, version, operator, productCacheVersion.get());
+    }
+
+    private void cacheProduct(String productId, String version, DeviceProductOperator operator, long cacheVersion) {
+        // 缺失加载的版本检查和写入必须与失效互斥，避免旧加载在清空缓存后回填。
+        synchronized (productCacheLock) {
+            if (productCacheVersion.get() != cacheVersion) {
+                return;
+            }
+            if (!StringUtils.hasText(version)) {
+                productOperatorMap.put(productId, operator);
+                return;
+            }
+            versionedProductOperatorMap.compute(productId, (ignore, versioned) -> {
+                if (versioned == null) {
+                    versioned = VersionedProductOperators.EMPTY;
+                }
+                return versioned.with(version, operator);
+            });
+        }
+    }
+
+    private void removeProductFromCache(String productId, String version) {
+        synchronized (productCacheLock) {
+            productCacheVersion.incrementAndGet();
+            if (!StringUtils.hasText(version)) {
+                productOperatorMap.remove(productId);
+                return;
+            }
+            versionedProductOperatorMap.computeIfPresent(productId, (ignore, versioned) -> {
+                VersionedProductOperators updated = versioned.without(version);
+                return updated.isEmpty() ? null : updated;
+            });
+        }
     }
 
     private DefaultDeviceOperator createOperator(String deviceId) {
@@ -228,9 +355,6 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     public Mono<DeviceOperator> register(DeviceInfo deviceInfo) {
         return Mono.defer(() -> {
             DefaultDeviceOperator operator = createOperator(deviceInfo.getId());
-            operatorCache.put(operator.getDeviceId(), Mono
-                .<DeviceOperator>just(operator)
-                .filterWhen(device -> device.getSelfConfig(DeviceConfigKey.productId).hasElement()));
 
             Map<String, Object> configs = new HashMap<>();
 
@@ -252,7 +376,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                 .flatMap(protocol -> protocol.onDeviceRegister(operator))
                 //绑定设备到产品
                 .then(getProductBind(deviceInfo.getProductId(), deviceInfo.getProductVersion()).add(deviceInfo.getId()))
-                .thenReturn(operator);
+                .thenReturn(operator)
+                .doOnNext(this::cacheRegisteredDevice);
         });
     }
 
@@ -260,8 +385,6 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     public Mono<DeviceProductOperator> register(ProductInfo productInfo) {
         return Mono.defer(() -> {
             DefaultDeviceProductOperator operator = createProductOperator(productInfo.getId(), productInfo.getVersion());
-            String cacheId = createProductCacheKey(productInfo.getId(), productInfo.getVersion());
-            productOperatorMap.put(cacheId, operator);
 
             Map<String, Object> configs = new HashMap<>();
 
@@ -281,7 +404,8 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
                 .setConfigs(configs)
                 .then(operator.getProtocol())
                 .flatMap(protocol -> protocol.onProductRegister(operator))
-                .thenReturn(operator);
+                .thenReturn(operator)
+                .doOnNext(ignore -> cacheProduct(productInfo.getId(), productInfo.getVersion(), operator));
         });
     }
 
@@ -290,7 +414,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         return this
             .getDevice(deviceId)
             .flatMap(this::doUnregister)
-            .doFinally(r -> operatorCache.invalidate(deviceId))
+            .doFinally(r -> invalidateDeviceCache(deviceId))
             .then();
     }
 
@@ -299,7 +423,10 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         return this
             .getProduct(productId)
             .flatMap(this::doUnregister)
-            .doFinally(r -> productOperatorMap.remove(createProductCacheKey(productId, null)));
+            .doFinally(r -> {
+                removeProductFromCache(productId, null);
+                invalidateAllDeviceCache();
+            });
 
     }
 
@@ -308,7 +435,152 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
         return this
             .getProduct(productId, version)
             .flatMap(this::doUnregister)
-            .doFinally(r -> productOperatorMap.remove(createProductCacheKey(productId, version)));
+            .doFinally(r -> {
+                removeProductFromCache(productId, version);
+                invalidateAllDeviceCache();
+            });
+    }
+
+    private void cacheRegisteredDevice(DeviceOperator operator) {
+        if (concurrentDeviceCache != null) {
+            concurrentDeviceCache.put(
+                operator.getDeviceId(),
+                new MonoValidatedDeviceOperator(operator.getDeviceId(),
+                                                operator,
+                                                operator.getSelfConfig(DeviceConfigKey.productId),
+                                                concurrentDeviceCache)
+            );
+            return;
+        }
+        Mono<DeviceOperator> cached;
+        if (validatedDeviceCacheEnabled) {
+            cached = new MonoValidatedDeviceOperator(
+                operator.getDeviceId(),
+                operator,
+                operator.getSelfConfig(DeviceConfigKey.productId),
+                operatorCache
+            );
+        } else {
+            cached = Mono
+                .just(operator)
+                .filterWhen(device -> device.getSelfConfig(DeviceConfigKey.productId).hasElement());
+        }
+        operatorCache.put(operator.getDeviceId(), cached);
+    }
+
+    private void handleConfigCacheNotify(CacheNotify notify) {
+        String storageId = notify.getName();
+        if (!StringUtils.hasText(storageId)) {
+            return;
+        }
+        if (storageId.startsWith("device:")) {
+            if (affects(notify,
+                        DeviceConfigKey.productId.getKey(),
+                        DeviceConfigKey.productVersion.getKey())) {
+                invalidateDeviceCache(storageId.substring("device:".length()));
+            }
+            return;
+        }
+        if (storageId.startsWith("device-product:")
+            && affects(notify, DeviceConfigKey.protocol.getKey())) {
+            invalidateProductCache();
+            invalidateAllDeviceCache();
+        }
+    }
+
+    private void invalidateProductCache() {
+        synchronized (productCacheLock) {
+            productCacheVersion.incrementAndGet();
+            productOperatorMap.clear();
+            versionedProductOperatorMap.clear();
+        }
+    }
+
+    private boolean affects(CacheNotify notify, String... keys) {
+        Collection<String> changed = notify.getKeys();
+        if (notify.isClear() || changed == null || changed.isEmpty()) {
+            return true;
+        }
+        for (String key : keys) {
+            if (changed.contains(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void invalidateDeviceCache(String deviceId) {
+        if (concurrentDeviceCache != null) {
+            MonoValidatedDeviceOperator cached = concurrentDeviceCache.get(deviceId);
+            if (cached != null) {
+                cached.invalidate();
+                concurrentDeviceCache.remove(deviceId, cached);
+            }
+            return;
+        }
+        Mono<DeviceOperator> cached = operatorCache.getIfPresent(deviceId);
+        if (cached instanceof MonoValidatedDeviceOperator) {
+            ((MonoValidatedDeviceOperator) cached).invalidate();
+        }
+        if (cached != null) {
+            operatorCache.asMap().remove(deviceId, cached);
+        } else {
+            operatorCache.invalidate(deviceId);
+        }
+    }
+
+    private void invalidateAllDeviceCache() {
+        if (concurrentDeviceCache != null) {
+            concurrentDeviceCache.invalidateAll();
+            return;
+        }
+        for (Mono<DeviceOperator> cached : operatorCache.asMap().values()) {
+            if (cached instanceof MonoValidatedDeviceOperator) {
+                ((MonoValidatedDeviceOperator) cached).invalidate();
+            }
+        }
+        operatorCache.invalidateAll();
+    }
+
+    @Override
+    public void dispose() {
+        RuntimeException disposeError = null;
+        try {
+            cacheCleanupDisposable.dispose();
+        } catch (Throwable error) {
+            disposeError = new RuntimeException("Failed to dispose device cache cleanup", error);
+        }
+        try {
+            cacheNotifyDisposable.dispose();
+        } catch (Throwable error) {
+            if (disposeError == null) {
+                disposeError = new RuntimeException("Failed to dispose cache notify listener", error);
+            } else {
+                disposeError.addSuppressed(error);
+            }
+        }
+        for (DeviceMessageSenderInterceptor interceptor : registeredInterceptors) {
+            if (interceptor instanceof Disposable) {
+                try {
+                    ((Disposable) interceptor).dispose();
+                } catch (Throwable error) {
+                    if (disposeError == null) {
+                        disposeError = new RuntimeException("Failed to dispose message interceptor", error);
+                    } else {
+                        disposeError.addSuppressed(error);
+                    }
+                }
+            }
+        }
+        try {
+            registeredInterceptors.clear();
+            invalidateProductCache();
+            invalidateAllDeviceCache();
+        } finally {
+            if (disposeError != null) {
+                throw disposeError;
+            }
+        }
     }
 
     protected Mono<Void> doUnregister(DeviceProductOperator product) {
@@ -346,6 +618,7 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
     }
 
     public void addInterceptor(DeviceMessageSenderInterceptor interceptor) {
+        registeredInterceptors.add(interceptor);
         this.interceptor.addInterceptor(interceptor);
     }
 
@@ -358,6 +631,61 @@ public class ClusterDeviceRegistry implements DeviceRegistry {
             this.rpcChain = chain;
         } else {
             this.rpcChain = this.rpcChain.composite(Collections.singleton(chain));
+        }
+    }
+
+    private static final class VersionedProductOperators {
+
+        private static final VersionedProductOperators EMPTY = new VersionedProductOperators(new Object[0]);
+
+        private final Object[] operators;
+
+        private VersionedProductOperators(Object[] operators) {
+            this.operators = operators;
+        }
+
+        private DeviceProductOperator get(String version) {
+            Object[] current = operators;
+            for (int index = 0; index < current.length; index += 2) {
+                if (version.equals(current[index])) {
+                    return (DeviceProductOperator) current[index + 1];
+                }
+            }
+            return null;
+        }
+
+        private VersionedProductOperators with(String version, DeviceProductOperator operator) {
+            for (int index = 0; index < operators.length; index += 2) {
+                if (version.equals(operators[index])) {
+                    Object[] updated = operators.clone();
+                    updated[index + 1] = operator;
+                    return new VersionedProductOperators(updated);
+                }
+            }
+            Object[] updated = Arrays.copyOf(operators, operators.length + 2);
+            updated[operators.length] = version;
+            updated[operators.length + 1] = operator;
+            return new VersionedProductOperators(updated);
+        }
+
+        private VersionedProductOperators without(String version) {
+            for (int index = 0; index < operators.length; index += 2) {
+                if (!version.equals(operators[index])) {
+                    continue;
+                }
+                if (operators.length == 2) {
+                    return EMPTY;
+                }
+                Object[] updated = new Object[operators.length - 2];
+                System.arraycopy(operators, 0, updated, 0, index);
+                System.arraycopy(operators, index + 2, updated, index, operators.length - index - 2);
+                return new VersionedProductOperators(updated);
+            }
+            return this;
+        }
+
+        private boolean isEmpty() {
+            return operators.length == 0;
         }
     }
 }
