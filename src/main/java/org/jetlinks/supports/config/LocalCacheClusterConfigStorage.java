@@ -136,6 +136,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
+        Mono<Values> cachedValues = getCachedValues(keys);
+        if (cachedValues != null) {
+            return cachedValues;
+        }
         int remaining = keys.size();
         Map<String, Object> loaded = null;
         //获取二级缓存中加载的配置
@@ -179,6 +183,40 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             loaded
         );
 
+    }
+
+    private Mono<Values> getCachedValues(Collection<String> keys) {
+        int count = keys.size();
+        if (count != 2 && count != 3) {
+            return null;
+        }
+        Iterator<String> iterator = keys.iterator();
+        String firstKey = iterator.next();
+        Value first = getOrCreateCache(firstKey).getCached();
+        if (first == null) {
+            return null;
+        }
+        String secondKey = iterator.next();
+        Value second = getOrCreateCache(secondKey).getCached();
+        if (second == null) {
+            return null;
+        }
+        Object firstValue = first.get();
+        Object secondValue = second.get();
+        if (count == 2) {
+            return firstValue == null && secondValue == null
+                ? EMPTY_VALUES_MONO
+                : Mono.just(Values.of(firstKey, firstValue, secondKey, secondValue));
+        }
+        String thirdKey = iterator.next();
+        Value third = getOrCreateCache(thirdKey).getCached();
+        if (third == null) {
+            return null;
+        }
+        Object thirdValue = third.get();
+        return firstValue == null && secondValue == null && thirdValue == null
+            ? EMPTY_VALUES_MONO
+            : Mono.just(Values.of(firstKey, firstValue, secondKey, secondValue, thirdKey, thirdValue));
     }
 
     private void updateValue(Cache cache, int version, Object value) {

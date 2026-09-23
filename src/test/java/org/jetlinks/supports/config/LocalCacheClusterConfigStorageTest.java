@@ -36,6 +36,50 @@ import static org.mockito.Mockito.*;
 public class LocalCacheClusterConfigStorageTest {
 
     @Test
+    public void testTwoAndThreeKeyCachedValues() {
+        Map<String, Object> backend = new HashMap<>();
+        backend.put("id", "device-1");
+        backend.put("name", "demo");
+        ClusterCache<String, Object> clusterCache = createClusterCache(backend);
+        LocalCacheClusterConfigStorage storage = createStorage(clusterCache);
+
+        List<String> twoKeys = Arrays.asList("id", "name");
+        List<String> threeKeys = Arrays.asList("id", "name", "missing");
+        storage.getConfigs(threeKeys).block();
+
+        Values two = storage.getConfigs(twoKeys).block();
+        Values three = storage.getConfigs(threeKeys).block();
+        assertNotNull(two);
+        assertNotNull(three);
+        assertEquals(backend, two.getAllValues());
+        assertEquals(backend, three.getAllValues());
+        assertEquals(2, two.size());
+        assertEquals(2, three.size());
+        assertEquals("demo", three.getString("name", (String) null));
+        assertFalse(three.getValue("missing").isPresent());
+        verify(clusterCache, times(1)).get(anyCollection());
+
+        storage.clearLocalCache(CacheNotify.expires("test", Collections.singleton("name")));
+        assertEquals(backend, storage.getConfigs(threeKeys).block().getAllValues());
+        verify(clusterCache, times(2)).get(anyCollection());
+    }
+
+    @Test
+    public void testDuplicateKeysOnCachedRead() {
+        Map<String, Object> backend = Collections.singletonMap("id", "device-1");
+        ClusterCache<String, Object> clusterCache = createClusterCache(backend);
+        LocalCacheClusterConfigStorage storage = createStorage(clusterCache);
+        List<String> duplicateKeys = Arrays.asList("id", "id", "id");
+        storage.getConfigs(duplicateKeys).block();
+
+        Values values = storage.getConfigs(duplicateKeys).block();
+        assertNotNull(values);
+        assertEquals(1, values.size());
+        assertEquals(backend, values.getAllValues());
+        verify(clusterCache, times(1)).get(anyCollection());
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     public void testGetConfigsPositiveHitDoesNotReload() {
         Map<String, Object> backend = new HashMap<>();
