@@ -72,6 +72,29 @@ mvn clean package \
 - 全量验证：`mvn test` 执行 226 项，其中 2 项失败；`JsonSchemaTypeMapperTest#testMapFromProperty_NullValueType` 与 `DetailErrorMapperTest#testRoundTripConversion` 已在未修改基线 `e9e2420` 单独复现，确认与本次变更无关。`git diff --check` 通过。
 - 交付：实现提交 `fa366222a61ec973a9846fba7073318448407553`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/45
 
+### 嵌套委托覆盖计划
+
+- 目标：验证缓存 Publisher 内继续订阅同设备、其他设备以及再次回到原设备时，不发生递归追逐、错误吞没、取消丢失或用户 Context 丢失。
+- 范围：只扩展 `MonoValidatedDeviceOperator` 的订阅期循环检测与单元测试；不修改缓存结构、过期策略和 Registry 查找入口。
+- 场景：同设备嵌套、跨设备嵌套、跨设备循环、Assembly/`hide` 包装、嵌套错误与嵌套取消。循环场景使用受控缓存查找上限稳定暴露重复追逐，不直接制造巨量 `StackOverflowError` 日志。
+- 验证：先运行循环嵌套回归用例确认现有实现失败，再统一执行设备 Mono、并发缓存与 Registry 相关测试。
+- 实现：测试复现出跨设备循环 `device-a -> device-b -> device-a` 时只检查 Context 顶层标记会再次追逐缓存；现改为迭代检查整条委托链并移除命中的设备标记，同时保留更近的其他设备标记，避免订阅递归和深链遍历递归，且不破坏后续跨设备循环保护。
+- 覆盖：补充同设备嵌套、跨设备嵌套与 Context、跨设备循环及祖先标记保留、`ConcurrentValidatedDeviceCache` 构造路径、失效后重新校验成功、空结果、错误、已进入嵌套阶段后的取消传播，以及下游先取消而校验源延迟发送 `onSubscribe` 的竞态。
+- 结果：`MonoValidatedDeviceOperatorTest` 28 项通过；联合 `ConcurrentValidatedDeviceCacheTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 共 52 项通过。JaCoCo 显示 `MonoValidatedDeviceOperator` 行覆盖 70/73、分支覆盖 33/36，`git diff --check` 通过。
+- 交付：实现提交 `09a53dbad1924c20f8e5e5c919e13401b27eb1a9`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/46
+
+### 嵌套委托性能复核
+
+- 环境：JDK 21.0.10、JMH 1.35、G1、512 MiB heap；基线为 `b6ae413`，候选为 PR #46 当前工作树。常用路径使用 2～5 fork、每 fork 2～3 次 1 秒预热和 3～5 次 1 秒测量，并启用 `-prof gc`。
+- 优化：普通无 Context 路径直接跳过委托检查；顶层委托命中保持原直接匹配路径，仅在顶层未命中时迭代扫描祖先链。未命中和顶层命中不新增对象，只有祖先命中才重建需保留的委托前缀。
+- 普通已校验快路径：1 线程 `115.35M → 113.36M QPS`，8 线程 `32.19M → 31.32M QPS`；差异分别为 `-1.7%`、`-2.7%`，均小于本机 fork 波动，分配保持 `32 B/次`。
+- 普通跨设备嵌套：1 线程 `10.73M → 12.31M QPS`，8 线程 `14.15M → 13.43M QPS`；分配两版均为 `448 B/次`，吞吐区间重叠，未观察到稳定回退。
+- 顶层缓存委托存在 C2 逃逸分析的双形态：包装订阅被标量替换时两版均约 `60M QPS / 128 B/次`，未替换时两版均为 `152 B/次`。关闭标量替换的受控对比为 `49.48M → 55.40M QPS`，说明祖先扫描未进入顶层命中热路径。
+- 新增跨设备循环保护路径可稳定完成：1 线程 `2.39M QPS`、8 线程 `4.36M QPS`，约 `1792 B/次`；基线会继续递归追逐缓存，不能形成有效吞吐对照。该分配只发生于异常嵌套循环慢路径。
+- 环境边界：测试期间系统 load average 在约 `3～8` 波动，并存在虚拟机、IDE、浏览器及其他 Java 进程；因此多线程绝对 QPS 只用于排除数量级回退，最终结论优先依据分配量、受控逃逸分析对比和多 fork 区间。
+- 验证：最终实现重新执行上述 4 个测试类共 52 项，0 failure、0 error；JMH JSON 保留在本机 `/private/tmp/pr46-*.json`，临时基准源码已清理，不提交仓库。
+- 交付：性能快路径提交 `ae8839b`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/46
+
 ### 性能结果
 
 独立 JVM，JDK 17.0.18，Reactor 3.7.8，G1，4 线程，预热 5 秒、测量 8 秒，最终产物 3 轮交错 A/B：
