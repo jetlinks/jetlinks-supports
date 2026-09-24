@@ -45,6 +45,16 @@ mvn clean package \
 - 27 tests，0 failure，0 error，构建成功。
 - 覆盖首次校验、稳定快路径、demand、cancel、Context、error 重试、失效重校验、空结果清除、并发包装竞争、校验期间失效、设备绑定变化、产品移除、无通知能力兼容、本地通知和 `refreshAll()` 失效。
 
+### 缓存替换递归修复
+
+- 目标：修复同一设备的两个 `MonoValidatedDeviceOperator` 在并发缓存替换时相互递归订阅并触发 `StackOverflowError`。
+- 范围：仅调整 `MonoValidatedDeviceOperator` 的缓存委托入口和对应回归测试；不修改缓存结构、失效策略、存在性校验或 Registry 查找逻辑。
+- 实现：订阅时只解析一次缓存快照；快照为另一个已校验设备 Mono 时直接进入其实际订阅逻辑，不再递归查询缓存。普通缓存 `Mono` 仍按 Reactor 标准订阅。
+- 风险：并发替换期间单次请求使用已读取的合法缓存快照，不继续追逐绝对最新值；后续请求仍读取当前缓存，保持最终收敛。
+- 验证：覆盖缓存条目持续交替、普通 `Mono` 委托、错误、取消和 Context 传播，并运行设备缓存与 Registry 定向测试。
+- 结果：修复前缓存条目持续交替用例稳定触发 `StackOverflowError`，修复后相关 4 个测试类共 38 项全部通过，0 failure、0 error；`git diff --check` 通过。
+- 交付：实现提交 `5e1ea80`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/44
+
 ### 性能结果
 
 独立 JVM，JDK 17.0.18，Reactor 3.7.8，G1，4 线程，预热 5 秒、测量 8 秒，最终产物 3 轮交错 A/B：
