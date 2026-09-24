@@ -93,6 +93,7 @@ mvn clean package \
 - 新增跨设备循环保护路径可稳定完成：1 线程 `2.39M QPS`、8 线程 `4.36M QPS`，约 `1792 B/次`；基线会继续递归追逐缓存，不能形成有效吞吐对照。该分配只发生于异常嵌套循环慢路径。
 - 环境边界：测试期间系统 load average 在约 `3～8` 波动，并存在虚拟机、IDE、浏览器及其他 Java 进程；因此多线程绝对 QPS 只用于排除数量级回退，最终结论优先依据分配量、受控逃逸分析对比和多 fork 区间。
 - 验证：最终实现重新执行上述 4 个测试类共 52 项，0 failure、0 error；JMH JSON 保留在本机 `/private/tmp/pr46-*.json`，临时基准源码已清理，不提交仓库。
+- 交付：性能快路径提交 `ae8839b`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/46
 
 ### 性能结果
 
