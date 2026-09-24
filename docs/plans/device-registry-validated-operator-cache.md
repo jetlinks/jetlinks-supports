@@ -81,6 +81,7 @@ mvn clean package \
 - 实现：测试复现出跨设备循环 `device-a -> device-b -> device-a` 时只检查 Context 顶层标记会再次追逐缓存；现改为迭代检查整条委托链并移除命中的设备标记，同时保留更近的其他设备标记，避免订阅递归和深链遍历递归，且不破坏后续跨设备循环保护。
 - 覆盖：补充同设备嵌套、跨设备嵌套与 Context、跨设备循环及祖先标记保留、`ConcurrentValidatedDeviceCache` 构造路径、失效后重新校验成功、空结果、错误、已进入嵌套阶段后的取消传播，以及下游先取消而校验源延迟发送 `onSubscribe` 的竞态。
 - 结果：`MonoValidatedDeviceOperatorTest` 28 项通过；联合 `ConcurrentValidatedDeviceCacheTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 共 52 项通过。JaCoCo 显示 `MonoValidatedDeviceOperator` 行覆盖 70/73、分支覆盖 33/36，`git diff --check` 通过。
+- 交付：实现提交 `09a53dbad1924c20f8e5e5c919e13401b27eb1a9`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/46
 
 ### 性能结果
 
