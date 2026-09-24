@@ -69,7 +69,8 @@ mvn clean package \
 - 性能边界：新增对象只发生在多个未缓存实例竞争后需要委托给既有缓存 Publisher 的慢路径；Registry 正常缓存命中仍直接返回缓存对象，不增加高频快路径分配。
 - 分支覆盖：新增 Assembly/debug hook、`hide`、`putIfAbsent` 竞争失败、延迟 demand 前失效、普通 Publisher、跨缓存同 deviceId、Context 隔离及废弃构造器场景。
 - 定向验证：`MonoValidatedDeviceOperatorTest`、`ConcurrentValidatedDeviceCacheTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 共 43 项通过，0 failure、0 error。
-- 全量验证：`mvn test` 执行 226 项，其中 2 项失败；`JsonSchemaTypeMapperTest#testMapFromProperty_NullValueType` 与 `DetailErrorMapperTest#testRoundTripConversion` 已在未修改基线 `e9e2420` 单独复现，确认与本次变更无关。`git diff --check` 通过。提交与 Pull Request：`pending`。
+- 全量验证：`mvn test` 执行 226 项，其中 2 项失败；`JsonSchemaTypeMapperTest#testMapFromProperty_NullValueType` 与 `DetailErrorMapperTest#testRoundTripConversion` 已在未修改基线 `e9e2420` 单独复现，确认与本次变更无关。`git diff --check` 通过。
+- 交付：实现提交 `fa366222a61ec973a9846fba7073318448407553`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/45
 
 ### 性能结果
 
