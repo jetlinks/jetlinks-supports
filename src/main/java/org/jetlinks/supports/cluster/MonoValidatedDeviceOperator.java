@@ -7,6 +7,7 @@ import reactor.core.CoreSubscriber;
 import reactor.core.Scannable;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Operators;
+import reactor.util.context.Context;
 
 import javax.annotation.Nonnull;
 import java.util.Objects;
@@ -17,6 +18,8 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
  * 首次订阅校验设备存在性，缓存有效期间直接返回设备操作对象。
  */
 final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements Scannable {
+
+    private static final Object CACHE_DELEGATION_KEY = new Object();
 
     private static final AtomicLongFieldUpdater<MonoValidatedDeviceOperator> INVALIDATION_VERSION =
         AtomicLongFieldUpdater.newUpdater(MonoValidatedDeviceOperator.class, "invalidationVersion");
@@ -62,6 +65,12 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
 
     @Override
     public void subscribe(@Nonnull CoreSubscriber<? super DeviceOperator> actual) {
+        CacheDelegation delegation = actual.currentContext().getOrDefault(CACHE_DELEGATION_KEY, null);
+        if (delegation != null && delegation.matches(cache, deviceId)) {
+            // 包装操作符保留原订阅语义，只在最终到达目标实例时停止再次追逐缓存。
+            subscribeResolved(new CacheResolvedSubscriber(actual, delegation.parent));
+            return;
+        }
         Mono<DeviceOperator> cached = getCached();
         if (cached != this) {
             if (cached == null) {
@@ -76,13 +85,13 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
         subscribeResolved(actual);
     }
 
-    private static void subscribeCached(Mono<DeviceOperator> cached,
-                                        CoreSubscriber<? super DeviceOperator> actual) {
-        if (cached instanceof MonoValidatedDeviceOperator) {
-            ((MonoValidatedDeviceOperator) cached).subscribeResolved(actual);
-        } else {
-            cached.subscribe(actual);
-        }
+    private void subscribeCached(Mono<DeviceOperator> cached,
+                                 CoreSubscriber<? super DeviceOperator> actual) {
+        CacheDelegation parent = actual.currentContext().getOrDefault(CACHE_DELEGATION_KEY, null);
+        cached.subscribe(new CacheDelegatingSubscriber(
+            actual,
+            new CacheDelegation(cache, deviceId, parent)
+        ));
     }
 
     private void subscribeResolved(CoreSubscriber<? super DeviceOperator> actual) {
@@ -144,6 +153,104 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
 
     boolean isIdle(long now, long expireAfterAccessNanos) {
         return now - lastAccessNanos >= expireAfterAccessNanos;
+    }
+
+    private static final class CacheDelegatingSubscriber implements CoreSubscriber<DeviceOperator> {
+
+        private final CoreSubscriber<? super DeviceOperator> actual;
+        private final CacheDelegation delegation;
+
+        private CacheDelegatingSubscriber(CoreSubscriber<? super DeviceOperator> actual,
+                                          CacheDelegation delegation) {
+            this.actual = actual;
+            this.delegation = delegation;
+        }
+
+        @Override
+        public void onSubscribe(@Nonnull Subscription subscription) {
+            actual.onSubscribe(subscription);
+        }
+
+        @Override
+        public void onNext(DeviceOperator device) {
+            actual.onNext(device);
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            actual.onError(error);
+        }
+
+        @Override
+        public void onComplete() {
+            actual.onComplete();
+        }
+
+        @Override
+        @Nonnull
+        public Context currentContext() {
+            return actual.currentContext().put(CACHE_DELEGATION_KEY, delegation);
+        }
+    }
+
+    private static final class CacheResolvedSubscriber implements CoreSubscriber<DeviceOperator> {
+
+        private final CoreSubscriber<? super DeviceOperator> actual;
+        private final CacheDelegation parent;
+
+        private CacheResolvedSubscriber(CoreSubscriber<? super DeviceOperator> actual,
+                                        CacheDelegation parent) {
+            this.actual = actual;
+            this.parent = parent;
+        }
+
+        @Override
+        public void onSubscribe(@Nonnull Subscription subscription) {
+            actual.onSubscribe(subscription);
+        }
+
+        @Override
+        public void onNext(DeviceOperator device) {
+            actual.onNext(device);
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            actual.onError(error);
+        }
+
+        @Override
+        public void onComplete() {
+            actual.onComplete();
+        }
+
+        @Override
+        @Nonnull
+        public Context currentContext() {
+            Context context = actual.currentContext();
+            return parent == null
+                ? context.delete(CACHE_DELEGATION_KEY)
+                : context.put(CACHE_DELEGATION_KEY, parent);
+        }
+    }
+
+    private static final class CacheDelegation {
+
+        private final Object cache;
+        private final String deviceId;
+        private final CacheDelegation parent;
+
+        private CacheDelegation(Object cache,
+                                String deviceId,
+                                CacheDelegation parent) {
+            this.cache = cache;
+            this.deviceId = deviceId;
+            this.parent = parent;
+        }
+
+        private boolean matches(Object cache, String deviceId) {
+            return this.cache == cache && this.deviceId.equals(deviceId);
+        }
     }
 
     private static final class ValidatedSubscription implements Subscription, CoreSubscriber<DeviceOperator> {

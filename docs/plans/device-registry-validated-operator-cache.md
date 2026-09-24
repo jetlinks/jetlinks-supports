@@ -55,6 +55,23 @@ mvn clean package \
 - 结果：修复前缓存条目持续交替用例稳定触发 `StackOverflowError`，修复后相关 4 个测试类共 38 项全部通过，0 failure、0 error；`git diff --check` 通过。
 - 交付：实现提交 `5e1ea80`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/44
 
+### 递归修复后分支覆盖计划
+
+- 目标：补充缓存首次读取为空、`putIfAbsent` 竞争、被委托实例延迟 demand 前失效、空校验以及普通缓存 Publisher 的回归覆盖，确认修复未遗漏另一条缓存委托入口。
+- 范围：重点验证缓存中的 `MonoValidatedDeviceOperator` 经 `MonoOnAssembly`、`hide` 等包装后仍不会重新递归查询缓存；同时覆盖兼容构造方法。除非新增用例能够稳定复现生产代码缺陷，否则不修改缓存结构、过期策略和 Registry 查找逻辑。
+- 实现约束：不能依赖 `instanceof` 解包或跳过包装操作符；使用一次性委托标记让包装链最终订阅到目标实例时直接进入实际订阅逻辑，并在该边界移除标记，保持用户 Context、assembly hook 和中间操作符语义。
+- 验证：与 `ConcurrentValidatedDeviceCacheTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 统一执行，并检查 demand、cancel、Context、错误和空结果语义。
+
+### Assembly 包装修复与验证结果
+
+- 根因：`subscribeCached` 通过 `instanceof MonoValidatedDeviceOperator` 判断是否直接进入实际订阅；缓存值经过 `MonoOnAssembly`、`hide` 或其他正常包装后类型判断失效，包装链再次进入同一缓存查找并形成递归。
+- 修复：不再依赖缓存 Publisher 的运行时类型。委托订阅通过 Reactor Context 携带按“缓存实例 + deviceId”限定的循环标记；包装链最终到达目标实例时直接进入 `subscribeResolved`，并在校验器订阅前恢复原 Context。嵌套不同缓存的同名设备不会误命中，用户 Context 与包装操作符语义保持不变。
+- 性能边界：新增对象只发生在多个未缓存实例竞争后需要委托给既有缓存 Publisher 的慢路径；Registry 正常缓存命中仍直接返回缓存对象，不增加高频快路径分配。
+- 分支覆盖：新增 Assembly/debug hook、`hide`、`putIfAbsent` 竞争失败、延迟 demand 前失效、普通 Publisher、跨缓存同 deviceId、Context 隔离及废弃构造器场景。
+- 定向验证：`MonoValidatedDeviceOperatorTest`、`ConcurrentValidatedDeviceCacheTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 共 43 项通过，0 failure、0 error。
+- 全量验证：`mvn test` 执行 226 项，其中 2 项失败；`JsonSchemaTypeMapperTest#testMapFromProperty_NullValueType` 与 `DetailErrorMapperTest#testRoundTripConversion` 已在未修改基线 `e9e2420` 单独复现，确认与本次变更无关。`git diff --check` 通过。
+- 交付：实现提交 `fa366222a61ec973a9846fba7073318448407553`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/45
+
 ### 性能结果
 
 独立 JVM，JDK 17.0.18，Reactor 3.7.8，G1，4 线程，预热 5 秒、测量 8 秒，最终产物 3 轮交错 A/B：

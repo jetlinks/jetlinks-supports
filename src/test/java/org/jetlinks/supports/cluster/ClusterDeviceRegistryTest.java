@@ -7,6 +7,7 @@ import org.jetlinks.core.ProtocolSupports;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.cluster.ClusterSet;
+import org.jetlinks.core.cluster.ClusterTopic;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.config.ConfigStorageManager;
 import org.jetlinks.core.device.DeviceConfigKey;
@@ -93,6 +94,27 @@ public class ClusterDeviceRegistryTest {
         assertSame(version2, registry.getProduct("test", "v2").block());
         assertNotSame(product, version1);
         assertNotSame(version1, version2);
+    }
+
+    @Test
+    @SuppressWarnings({"deprecation", "unchecked"})
+    public void shouldKeepDeprecatedConstructorsCompatible() {
+        ClusterManager legacyManager = mock(ClusterManager.class);
+        ClusterTopic<Object> topic = mock(ClusterTopic.class);
+        when(topic.subscribePattern()).thenReturn(Flux.empty());
+        when(legacyManager.getTopic(anyString())).thenReturn((ClusterTopic) topic);
+        ClusterDeviceRegistry defaultCache = new ClusterDeviceRegistry(supports, legacyManager, broker);
+        ClusterDeviceRegistry customCache = new ClusterDeviceRegistry(
+            supports,
+            legacyManager,
+            broker,
+            CacheBuilder.newBuilder().build()
+        );
+
+        StepVerifier.create(defaultCache.getDevice(null)).verifyComplete();
+        StepVerifier.create(defaultCache.getProduct(null)).verifyComplete();
+        StepVerifier.create(customCache.getDevice(null)).verifyComplete();
+        StepVerifier.create(customCache.getProduct(null)).verifyComplete();
     }
 
     @Test
