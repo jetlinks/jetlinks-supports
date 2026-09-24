@@ -64,17 +64,28 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
     public void subscribe(@Nonnull CoreSubscriber<? super DeviceOperator> actual) {
         Mono<DeviceOperator> cached = getCached();
         if (cached != this) {
-            if (cached != null) {
-                cached.subscribe(actual);
-                return;
+            if (cached == null) {
+                cached = putIfAbsent();
             }
-            Mono<DeviceOperator> previous = putIfAbsent();
-            if (previous != null && previous != this) {
-                previous.subscribe(actual);
+            if (cached != null && cached != this) {
+                subscribeCached(cached, actual);
                 return;
             }
         }
 
+        subscribeResolved(actual);
+    }
+
+    private static void subscribeCached(Mono<DeviceOperator> cached,
+                                        CoreSubscriber<? super DeviceOperator> actual) {
+        if (cached instanceof MonoValidatedDeviceOperator) {
+            ((MonoValidatedDeviceOperator) cached).subscribeResolved(actual);
+        } else {
+            cached.subscribe(actual);
+        }
+    }
+
+    private void subscribeResolved(CoreSubscriber<? super DeviceOperator> actual) {
         if (validatedVersion == invalidationVersion) {
             // 标量结果须在 request 时再次核对失效状态，不能在零 demand 订阅时提前固定旧设备。
             actual.onSubscribe(new ValidatedSubscription(actual, this));

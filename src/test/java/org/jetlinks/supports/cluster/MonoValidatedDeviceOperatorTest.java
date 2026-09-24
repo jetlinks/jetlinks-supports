@@ -23,6 +23,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class MonoValidatedDeviceOperatorTest {
 
@@ -177,6 +178,104 @@ public class MonoValidatedDeviceOperatorTest {
 
         assertSame(first, cached.block());
         assertSame(first, raced.block());
+    }
+
+    @Test
+    public void shouldNotRecursivelyDelegateWhenCachedOperatorChanges() {
+        Cache<String, Mono<DeviceOperator>> cache = mock(Cache.class);
+        DeviceOperator firstDevice = mock(DeviceOperator.class);
+        DeviceOperator secondDevice = mock(DeviceOperator.class);
+        MonoValidatedDeviceOperator first = new MonoValidatedDeviceOperator(
+            "test",
+            firstDevice,
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator second = new MonoValidatedDeviceOperator(
+            "test",
+            secondDevice,
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        AtomicInteger lookups = new AtomicInteger();
+        when(cache.getIfPresent("test")).thenAnswer(ignored ->
+            (lookups.getAndIncrement() & 1) == 0 ? second : first);
+
+        StepVerifier.create(first)
+                    .expectNext(secondDevice)
+                    .verifyComplete();
+
+        assertEquals(2, lookups.get());
+    }
+
+    @Test
+    public void shouldPropagateContextAndErrorFromCachedOperator() {
+        Cache<String, Mono<DeviceOperator>> cache = mock(Cache.class);
+        AtomicReference<String> contextValue = new AtomicReference<>();
+        MonoValidatedDeviceOperator cached = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.deferContextual(context -> {
+                contextValue.set(context.get("trace"));
+                return Mono.error(new IllegalStateException("invalid"));
+            }),
+            cache
+        );
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        when(cache.getIfPresent("test")).thenReturn(cached);
+
+        StepVerifier.create(source.contextWrite(Context.of("trace", "cached")))
+                    .expectErrorMessage("invalid")
+                    .verify();
+
+        assertEquals("cached", contextValue.get());
+    }
+
+    @Test
+    public void shouldCancelCachedOperatorValidation() {
+        Cache<String, Mono<DeviceOperator>> cache = mock(Cache.class);
+        AtomicBoolean cancelled = new AtomicBoolean();
+        MonoValidatedDeviceOperator cached = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.never().doOnCancel(() -> cancelled.set(true)),
+            cache
+        );
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        when(cache.getIfPresent("test")).thenReturn(cached);
+
+        StepVerifier.create(source)
+                    .thenCancel()
+                    .verify();
+
+        assertTrue(cancelled.get());
+    }
+
+    @Test
+    public void shouldDelegateToOrdinaryCachedPublisher() {
+        Cache<String, Mono<DeviceOperator>> cache = mock(Cache.class);
+        DeviceOperator cachedDevice = mock(DeviceOperator.class);
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        when(cache.getIfPresent("test")).thenReturn(Mono.just(cachedDevice));
+
+        StepVerifier.create(source)
+                    .expectNext(cachedDevice)
+                    .verifyComplete();
     }
 
     @Test
