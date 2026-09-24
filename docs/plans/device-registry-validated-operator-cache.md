@@ -72,6 +72,16 @@ mvn clean package \
 - 全量验证：`mvn test` 执行 226 项，其中 2 项失败；`JsonSchemaTypeMapperTest#testMapFromProperty_NullValueType` 与 `DetailErrorMapperTest#testRoundTripConversion` 已在未修改基线 `e9e2420` 单独复现，确认与本次变更无关。`git diff --check` 通过。
 - 交付：实现提交 `fa366222a61ec973a9846fba7073318448407553`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/45
 
+### 嵌套委托覆盖计划
+
+- 目标：验证缓存 Publisher 内继续订阅同设备、其他设备以及再次回到原设备时，不发生递归追逐、错误吞没、取消丢失或用户 Context 丢失。
+- 范围：只扩展 `MonoValidatedDeviceOperator` 的订阅期循环检测与单元测试；不修改缓存结构、过期策略和 Registry 查找入口。
+- 场景：同设备嵌套、跨设备嵌套、跨设备循环、Assembly/`hide` 包装、嵌套错误与嵌套取消。循环场景使用受控缓存查找上限稳定暴露重复追逐，不直接制造巨量 `StackOverflowError` 日志。
+- 验证：先运行循环嵌套回归用例确认现有实现失败，再统一执行设备 Mono、并发缓存与 Registry 相关测试。
+- 实现：测试复现出跨设备循环 `device-a -> device-b -> device-a` 时只检查 Context 顶层标记会再次追逐缓存；现改为迭代检查整条委托链并移除命中的设备标记，同时保留更近的其他设备标记，避免订阅递归和深链遍历递归，且不破坏后续跨设备循环保护。
+- 覆盖：补充同设备嵌套、跨设备嵌套与 Context、跨设备循环及祖先标记保留、`ConcurrentValidatedDeviceCache` 构造路径、失效后重新校验成功、空结果、错误、已进入嵌套阶段后的取消传播，以及下游先取消而校验源延迟发送 `onSubscribe` 的竞态。
+- 结果：`MonoValidatedDeviceOperatorTest` 28 项通过；联合 `ConcurrentValidatedDeviceCacheTest`、`ClusterDeviceRegistryTest`、`EventBusStorageManagerTest` 共 52 项通过。JaCoCo 显示 `MonoValidatedDeviceOperator` 行覆盖 70/73、分支覆盖 33/36，`git diff --check` 通过。
+
 ### 性能结果
 
 独立 JVM，JDK 17.0.18，Reactor 3.7.8，G1，4 线程，预热 5 秒、测量 8 秒，最终产物 3 轮交错 A/B：

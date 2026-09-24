@@ -5,17 +5,22 @@ import com.google.common.cache.CacheBuilder;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceProductOperator;
 import org.junit.Test;
+import org.reactivestreams.Subscription;
+import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 import reactor.util.context.Context;
 
-import java.util.concurrent.CountDownLatch;
+import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -90,6 +95,35 @@ public class MonoValidatedDeviceOperatorTest {
     }
 
     @Test
+    public void shouldEmitDeviceWhenRevalidationSucceedsAfterInvalidationBeforeDemand() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        DeviceOperator device = mock(DeviceOperator.class);
+        AtomicInteger subscriptions = new AtomicInteger();
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            device,
+            Mono.defer(() -> {
+                subscriptions.incrementAndGet();
+                return Mono.just(mock(DeviceProductOperator.class));
+            }),
+            cache
+        );
+
+        assertSame(device, source.block());
+        StepVerifier.create(source, 0)
+                    .then(() -> {
+                        source.invalidate();
+                        cache.invalidate("test");
+                    })
+                    .thenRequest(1)
+                    .expectNext(device)
+                    .verifyComplete();
+
+        assertEquals(2, subscriptions.get());
+        assertFalse(source.isValidated());
+    }
+
+    @Test
     public void shouldPropagateContextAndCancellationAfterInvalidationBeforeDemand() {
         Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
         AtomicReference<Mono<DeviceProductOperator>> validation = new AtomicReference<>(
@@ -120,6 +154,56 @@ public class MonoValidatedDeviceOperatorTest {
 
         assertEquals("new", contextValue.get());
         assertEquals(1, cancellations.get());
+    }
+
+    @Test
+    public void shouldCancelValidationSubscribedAfterDownstreamCancellation() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        AtomicReference<CoreSubscriber<? super DeviceProductOperator>> delayedSubscriber =
+            new AtomicReference<>();
+        Mono<DeviceProductOperator> delayed = new Mono<DeviceProductOperator>() {
+            @Override
+            public void subscribe(CoreSubscriber<? super DeviceProductOperator> actual) {
+                delayedSubscriber.set(actual);
+            }
+        };
+        AtomicReference<Mono<DeviceProductOperator>> validation = new AtomicReference<>(
+            Mono.just(mock(DeviceProductOperator.class))
+        );
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.defer(validation::get),
+            cache
+        );
+
+        assertNotNull(source.block());
+        validation.set(delayed);
+        StepVerifier.create(source, 0)
+                    .then(() -> {
+                        source.invalidate();
+                        cache.invalidate("test");
+                    })
+                    .thenRequest(1)
+                    .thenCancel()
+                    .verify();
+
+        AtomicBoolean cancelled = new AtomicBoolean();
+        AtomicLong requested = new AtomicLong();
+        assertNotNull(delayedSubscriber.get());
+        delayedSubscriber.get().onSubscribe(new Subscription() {
+            @Override
+            public void request(long count) {
+                requested.addAndGet(count);
+            }
+
+            @Override
+            public void cancel() {
+                cancelled.set(true);
+            }
+        });
+        assertTrue(cancelled.get());
+        assertEquals(0, requested.get());
     }
 
     @Test
@@ -313,6 +397,286 @@ public class MonoValidatedDeviceOperatorTest {
         StepVerifier.create(source)
                     .expectNext(expected)
                     .verifyComplete();
+    }
+
+    @Test
+    public void shouldResolveNestedSameDevicePublisher() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        DeviceOperator expected = mock(DeviceOperator.class);
+        MonoValidatedDeviceOperator cached = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator nested = new MonoValidatedDeviceOperator(
+            "device-a",
+            expected,
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        cache.put("device-a", cached.then(nested).hide());
+
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+
+        StepVerifier.create(source)
+                    .expectNext(expected)
+                    .verifyComplete();
+    }
+
+    @Test
+    public void shouldResolveNestedCrossDevicePublisher() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        DeviceOperator expected = mock(DeviceOperator.class);
+        AtomicReference<String> contextValue = new AtomicReference<>();
+        MonoValidatedDeviceOperator cachedA = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator lookupB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator cachedB = new MonoValidatedDeviceOperator(
+            "device-b",
+            expected,
+            Mono.deferContextual(context -> {
+                contextValue.set(context.get("trace"));
+                return Mono.just(mock(DeviceProductOperator.class));
+            }),
+            cache
+        );
+        cache.put("device-a", cachedA.then(lookupB).hide());
+        cache.put("device-b", cachedB.hide());
+
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+
+        StepVerifier.create(source.contextWrite(Context.of("trace", "nested")))
+                    .expectNext(expected)
+                    .verifyComplete();
+        assertEquals("nested", contextValue.get());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void shouldBreakNestedCrossDeviceDelegationCycle() {
+        Cache<String, Mono<DeviceOperator>> cache = mock(Cache.class);
+        ConcurrentMap<String, Mono<DeviceOperator>> entries = new ConcurrentHashMap<>();
+        AtomicInteger lookups = new AtomicInteger();
+        when(cache.asMap()).thenReturn(entries);
+        when(cache.getIfPresent("device-a")).thenAnswer(ignored -> {
+            if (lookups.incrementAndGet() > 8) {
+                throw new IllegalStateException("recursive cache lookup");
+            }
+            return entries.get("device-a");
+        });
+        when(cache.getIfPresent("device-b")).thenAnswer(ignored -> {
+            if (lookups.incrementAndGet() > 8) {
+                throw new IllegalStateException("recursive cache lookup");
+            }
+            return entries.get("device-b");
+        });
+
+        DeviceOperator expected = mock(DeviceOperator.class);
+        MonoValidatedDeviceOperator cachedA = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator cachedB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator nestedValidationB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator nestedA = new MonoValidatedDeviceOperator(
+            "device-a",
+            expected,
+            nestedValidationB,
+            cache
+        );
+        MonoValidatedDeviceOperator nestedB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        entries.put("device-a", cachedA.then(nestedB).hide());
+        entries.put("device-b", cachedB.then(nestedA).hide());
+
+        Hooks.onOperatorDebug();
+        try {
+            MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+                "device-a",
+                mock(DeviceOperator.class),
+                Mono.just(mock(DeviceProductOperator.class)),
+                cache
+            );
+            StepVerifier.create(source)
+                        .expectNext(expected)
+                        .verifyComplete();
+        } finally {
+            Hooks.resetOnOperatorDebug();
+        }
+        assertTrue("cache lookups should remain bounded", lookups.get() <= 8);
+    }
+
+    @Test
+    public void shouldResolveNestedCrossDeviceWithConcurrentCache() {
+        ConcurrentValidatedDeviceCache cache = new ConcurrentValidatedDeviceCache(
+            Duration.ofMinutes(1)
+        );
+        DeviceOperator expected = mock(DeviceOperator.class);
+        AtomicInteger nestedValidations = new AtomicInteger();
+        MonoValidatedDeviceOperator cachedB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.defer(() -> {
+                nestedValidations.incrementAndGet();
+                return Mono.just(mock(DeviceProductOperator.class));
+            }),
+            cache
+        );
+        MonoValidatedDeviceOperator lookupB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator cachedA = new MonoValidatedDeviceOperator(
+            "device-a",
+            expected,
+            lookupB,
+            cache
+        );
+        cache.put("device-a", cachedA);
+        cache.put("device-b", cachedB);
+
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+
+        StepVerifier.create(source)
+                    .expectNext(expected)
+                    .verifyComplete();
+        assertEquals(1, nestedValidations.get());
+    }
+
+    @Test
+    public void shouldCompleteWhenNestedCrossDeviceIsMissing() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        MonoValidatedDeviceOperator cachedA = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator nestedB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.empty(),
+            cache
+        );
+        cache.put("device-a", cachedA.then(nestedB));
+
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+
+        StepVerifier.create(source)
+                    .verifyComplete();
+        assertNull(cache.getIfPresent("device-b"));
+    }
+
+    @Test
+    public void shouldPropagateNestedCrossDeviceError() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        MonoValidatedDeviceOperator cachedA = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator nestedB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.error(new IllegalStateException("nested invalid")),
+            cache
+        );
+        cache.put("device-a", cachedA.then(nestedB));
+
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+
+        StepVerifier.create(source)
+                    .expectErrorMessage("nested invalid")
+                    .verify();
+    }
+
+    @Test
+    public void shouldCancelNestedCrossDeviceValidation() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        AtomicBoolean subscribed = new AtomicBoolean();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        MonoValidatedDeviceOperator cachedA = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator nestedB = new MonoValidatedDeviceOperator(
+            "device-b",
+            mock(DeviceOperator.class),
+            Mono.never()
+                .doOnSubscribe(ignore -> subscribed.set(true))
+                .doOnCancel(() -> cancelled.set(true)),
+            cache
+        );
+        cache.put("device-a", cachedA.then(nestedB));
+
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "device-a",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+
+        StepVerifier.create(source)
+                    .then(() -> assertTrue(subscribed.get()))
+                    .thenCancel()
+                    .verify();
+        assertTrue(cancelled.get());
     }
 
     @Test

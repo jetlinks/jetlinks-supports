@@ -66,9 +66,12 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
     @Override
     public void subscribe(@Nonnull CoreSubscriber<? super DeviceOperator> actual) {
         CacheDelegation delegation = actual.currentContext().getOrDefault(CACHE_DELEGATION_KEY, null);
-        if (delegation != null && delegation.matches(cache, deviceId)) {
+        CacheDelegation remaining = delegation == null
+            ? null
+            : delegation.without(cache, deviceId);
+        if (remaining != delegation) {
             // 包装操作符保留原订阅语义，只在最终到达目标实例时停止再次追逐缓存。
-            subscribeResolved(new CacheResolvedSubscriber(actual, delegation.parent));
+            subscribeResolved(new CacheResolvedSubscriber(actual, remaining));
             return;
         }
         Mono<DeviceOperator> cached = getCached();
@@ -196,12 +199,12 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
     private static final class CacheResolvedSubscriber implements CoreSubscriber<DeviceOperator> {
 
         private final CoreSubscriber<? super DeviceOperator> actual;
-        private final CacheDelegation parent;
+        private final CacheDelegation delegation;
 
         private CacheResolvedSubscriber(CoreSubscriber<? super DeviceOperator> actual,
-                                        CacheDelegation parent) {
+                                        CacheDelegation delegation) {
             this.actual = actual;
-            this.parent = parent;
+            this.delegation = delegation;
         }
 
         @Override
@@ -228,9 +231,9 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
         @Nonnull
         public Context currentContext() {
             Context context = actual.currentContext();
-            return parent == null
+            return delegation == null
                 ? context.delete(CACHE_DELEGATION_KEY)
-                : context.put(CACHE_DELEGATION_KEY, parent);
+                : context.put(CACHE_DELEGATION_KEY, delegation);
         }
     }
 
@@ -250,6 +253,36 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
 
         private boolean matches(Object cache, String deviceId) {
             return this.cache == cache && this.deviceId.equals(deviceId);
+        }
+
+        private CacheDelegation without(Object cache, String deviceId) {
+            CacheDelegation matched = this;
+            int depth = 0;
+            while (matched != null && !matched.matches(cache, deviceId)) {
+                matched = matched.parent;
+                depth++;
+            }
+            if (matched == null) {
+                return this;
+            }
+
+            CacheDelegation remaining = matched.parent;
+            if (depth == 0) {
+                return remaining;
+            }
+
+            // 未命中和顶层命中不分配，仅在祖先命中时迭代重建需要保留的前缀。
+            CacheDelegation[] retained = new CacheDelegation[depth];
+            CacheDelegation current = this;
+            for (int index = 0; index < depth; index++) {
+                retained[index] = current;
+                current = current.parent;
+            }
+            for (int index = depth - 1; index >= 0; index--) {
+                current = retained[index];
+                remaining = new CacheDelegation(current.cache, current.deviceId, remaining);
+            }
+            return remaining;
         }
     }
 
