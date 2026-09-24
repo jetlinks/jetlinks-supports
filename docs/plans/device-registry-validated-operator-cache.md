@@ -53,6 +53,7 @@ mvn clean package \
 - 风险：并发替换期间单次请求使用已读取的合法缓存快照，不继续追逐绝对最新值；后续请求仍读取当前缓存，保持最终收敛。
 - 验证：覆盖缓存条目持续交替、普通 `Mono` 委托、错误、取消和 Context 传播，并运行设备缓存与 Registry 定向测试。
 - 结果：修复前缓存条目持续交替用例稳定触发 `StackOverflowError`，修复后相关 4 个测试类共 38 项全部通过，0 failure、0 error；`git diff --check` 通过。
+- 交付：实现提交 `5e1ea80`，Pull Request：https://github.com/jetlinks/jetlinks-supports/pull/44
 
 ### 性能结果
 
