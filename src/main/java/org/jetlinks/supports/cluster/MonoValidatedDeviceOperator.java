@@ -66,13 +66,18 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
     @Override
     public void subscribe(@Nonnull CoreSubscriber<? super DeviceOperator> actual) {
         CacheDelegation delegation = actual.currentContext().getOrDefault(CACHE_DELEGATION_KEY, null);
-        CacheDelegation remaining = delegation == null
-            ? null
-            : delegation.without(cache, deviceId);
-        if (remaining != delegation) {
-            // 包装操作符保留原订阅语义，只在最终到达目标实例时停止再次追逐缓存。
-            subscribeResolved(new CacheResolvedSubscriber(actual, remaining));
-            return;
+        if (delegation != null) {
+            if (delegation.matches(cache, deviceId)) {
+                // 顶层命中是缓存包装的常用路径，直接恢复父委托，避免进入祖先遍历。
+                subscribeResolved(new CacheResolvedSubscriber(actual, delegation.parent));
+                return;
+            }
+            CacheDelegation remaining = delegation.withoutAncestor(cache, deviceId);
+            if (remaining != delegation) {
+                // 包装操作符保留原订阅语义，只在最终到达目标实例时停止再次追逐缓存。
+                subscribeResolved(new CacheResolvedSubscriber(actual, remaining));
+                return;
+            }
         }
         Mono<DeviceOperator> cached = getCached();
         if (cached != this) {
@@ -255,9 +260,9 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
             return this.cache == cache && this.deviceId.equals(deviceId);
         }
 
-        private CacheDelegation without(Object cache, String deviceId) {
-            CacheDelegation matched = this;
-            int depth = 0;
+        private CacheDelegation withoutAncestor(Object cache, String deviceId) {
+            CacheDelegation matched = parent;
+            int depth = 1;
             while (matched != null && !matched.matches(cache, deviceId)) {
                 matched = matched.parent;
                 depth++;
@@ -267,11 +272,7 @@ final class MonoValidatedDeviceOperator extends Mono<DeviceOperator> implements 
             }
 
             CacheDelegation remaining = matched.parent;
-            if (depth == 0) {
-                return remaining;
-            }
-
-            // 未命中和顶层命中不分配，仅在祖先命中时迭代重建需要保留的前缀。
+            // 未命中不分配，仅在祖先命中时迭代重建需要保留的前缀。
             CacheDelegation[] retained = new CacheDelegation[depth];
             CacheDelegation current = this;
             for (int index = 0; index < depth; index++) {
