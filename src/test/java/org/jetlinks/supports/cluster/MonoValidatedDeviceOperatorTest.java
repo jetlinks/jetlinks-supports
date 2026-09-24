@@ -5,12 +5,14 @@ import com.google.common.cache.CacheBuilder;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.DeviceProductOperator;
 import org.junit.Test;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 import reactor.util.context.Context;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -206,6 +208,149 @@ public class MonoValidatedDeviceOperatorTest {
                     .verifyComplete();
 
         assertEquals(2, lookups.get());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void shouldNotRecursivelyDelegateWhenPutIfAbsentLosesRace() {
+        Cache<String, Mono<DeviceOperator>> cache = mock(Cache.class);
+        ConcurrentMap<String, Mono<DeviceOperator>> entries = mock(ConcurrentMap.class);
+        when(cache.asMap()).thenReturn(entries);
+        DeviceOperator cachedDevice = mock(DeviceOperator.class);
+        MonoValidatedDeviceOperator cached = new MonoValidatedDeviceOperator(
+            "test",
+            cachedDevice,
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        AtomicInteger lookups = new AtomicInteger();
+        when(cache.getIfPresent("test")).thenAnswer(ignored ->
+            lookups.getAndIncrement() == 0 ? null : source);
+        when(entries.putIfAbsent("test", source)).thenReturn(cached);
+
+        StepVerifier.create(source)
+                    .expectNext(cachedDevice)
+                    .verifyComplete();
+
+        assertEquals(2, lookups.get());
+    }
+
+    @Test
+    public void shouldDelegateThroughAssemblyWrapperWithoutRecursion() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        DeviceOperator cachedDevice = mock(DeviceOperator.class);
+        AtomicReference<String> contextValue = new AtomicReference<>();
+        AtomicInteger contextSize = new AtomicInteger();
+        MonoValidatedDeviceOperator cached = new MonoValidatedDeviceOperator(
+            "test",
+            cachedDevice,
+            Mono.deferContextual(context -> {
+                contextValue.set(context.get("trace"));
+                contextSize.set(context.size());
+                return Mono.just(mock(DeviceProductOperator.class));
+            }),
+            cache
+        );
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+
+        Hooks.onOperatorDebug();
+        try {
+            cache.put("test", cached.hide());
+            StepVerifier.create(source.contextWrite(Context.of("trace", "assembly")))
+                        .expectNext(cachedDevice)
+                        .verifyComplete();
+        } finally {
+            Hooks.resetOnOperatorDebug();
+        }
+        assertEquals("assembly", contextValue.get());
+        assertEquals(1, contextSize.get());
+    }
+
+    @Test
+    public void shouldScopeDelegationToCacheInstance() {
+        Cache<String, Mono<DeviceOperator>> firstCache = CacheBuilder.newBuilder().build();
+        Cache<String, Mono<DeviceOperator>> secondCache = CacheBuilder.newBuilder().build();
+        DeviceOperator expected = mock(DeviceOperator.class);
+        MonoValidatedDeviceOperator nested = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            secondCache
+        );
+        MonoValidatedDeviceOperator nestedCached = new MonoValidatedDeviceOperator(
+            "test",
+            expected,
+            Mono.just(mock(DeviceProductOperator.class)),
+            secondCache
+        );
+        secondCache.put("test", nestedCached);
+
+        MonoValidatedDeviceOperator cached = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            firstCache
+        );
+        firstCache.put("test", cached.then(nested));
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            firstCache
+        );
+
+        StepVerifier.create(source)
+                    .expectNext(expected)
+                    .verifyComplete();
+    }
+
+    @Test
+    public void shouldRevalidateDelegatedOperatorWhenInvalidatedBeforeDemand() {
+        Cache<String, Mono<DeviceOperator>> cache = CacheBuilder.newBuilder().build();
+        DeviceOperator cachedDevice = mock(DeviceOperator.class);
+        AtomicReference<Mono<DeviceProductOperator>> validation = new AtomicReference<>(
+            Mono.just(mock(DeviceProductOperator.class))
+        );
+        AtomicInteger subscriptions = new AtomicInteger();
+        MonoValidatedDeviceOperator cached = new MonoValidatedDeviceOperator(
+            "test",
+            cachedDevice,
+            Mono.defer(() -> {
+                subscriptions.incrementAndGet();
+                return validation.get();
+            }),
+            cache
+        );
+        cache.put("test", cached);
+        assertSame(cachedDevice, cached.block());
+
+        MonoValidatedDeviceOperator source = new MonoValidatedDeviceOperator(
+            "test",
+            mock(DeviceOperator.class),
+            Mono.just(mock(DeviceProductOperator.class)),
+            cache
+        );
+        StepVerifier.create(source, 0)
+                    .then(() -> {
+                        validation.set(Mono.empty());
+                        cached.invalidate();
+                    })
+                    .thenRequest(1)
+                    .verifyComplete();
+
+        assertEquals(2, subscriptions.get());
+        assertNull(cache.getIfPresent("test"));
     }
 
     @Test
