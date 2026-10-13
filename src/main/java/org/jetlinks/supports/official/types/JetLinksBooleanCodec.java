@@ -12,6 +12,7 @@ import static java.util.Optional.ofNullable;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksBooleanCodec extends AbstractDataTypeCodec<BooleanType> {
 
     @Override

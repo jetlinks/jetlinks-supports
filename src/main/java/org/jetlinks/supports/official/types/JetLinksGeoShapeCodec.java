@@ -6,6 +6,7 @@ import org.jetlinks.core.metadata.types.GeoShapeType;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksGeoShapeCodec extends AbstractDataTypeCodec<GeoShapeType> {
 
     @Override

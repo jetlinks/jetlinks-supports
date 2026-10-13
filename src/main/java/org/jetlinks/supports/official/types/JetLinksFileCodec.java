@@ -10,6 +10,7 @@ import java.util.Optional;
 
 @Getter
 @Setter
+@Deprecated
 public class JetLinksFileCodec extends AbstractDataTypeCodec<FileType> {
 
     @Override

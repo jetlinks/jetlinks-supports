@@ -1,13 +1,17 @@
 package org.jetlinks.supports.official;
 
+import com.alibaba.fastjson.JSONObject;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.DataTypeCodec;
+import org.jetlinks.core.metadata.types.DataTypes;
+import org.jetlinks.core.utils.SerializeUtils;
 import org.jetlinks.supports.official.types.*;
 
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Deprecated
 public class JetLinksDataTypeCodecs {
 
     private static final Map<String, DataTypeCodec<? extends DataType>> codecMap = new ConcurrentHashMap<>();
@@ -45,20 +49,28 @@ public class JetLinksDataTypeCodecs {
         return Optional.ofNullable((DataTypeCodec) codecMap.get(typeId));
     }
 
+    /**
+     * @deprecated 使用 {@link DataTypes#fromJson(JSONObject)}代替
+     */
+    @Deprecated
     public static DataType decode(DataType type, Map<String, Object> config) {
         if (type == null) {
             return null;
         }
         return getCodec(type.getId())
-                .map(codec -> codec.decode(type, config))
-                .orElse(type);
+            .map(codec -> codec.decode(type, config))
+            .orElse(type);
     }
 
+    /**
+     * @deprecated 使用 {@link DataType#toJson()} 代替
+     */
+    @Deprecated
     public static Optional<Map<String, Object>> encode(DataType type) {
         if (type == null) {
             return Optional.empty();
         }
         return getCodec(type.getId())
-                .map(codec -> codec.encode(type));
+            .map(codec -> codec.encode(type));
     }
 }
