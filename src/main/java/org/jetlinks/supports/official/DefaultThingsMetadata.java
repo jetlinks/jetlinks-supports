@@ -14,6 +14,9 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
+ * 默认 JSON 物模型，按需解析属性与可选关系/模块目录。
+ * 目录只包含声明，不加载关系目标或执行来源操作。
+ *
  * @author zhouhao
  * @since 1.1.9
  */
@@ -30,6 +33,10 @@ public class DefaultThingsMetadata implements ThingMetadata {
     private volatile Map<String, PropertyMetadata> tags;
 
     private volatile List<PropertyMetadata> propertyMetadataList;
+
+    private volatile List<RelationMetadata> relations;
+
+    private volatile List<ThingMetadata> modules;
 
     @Getter
     @Setter
@@ -52,14 +59,16 @@ public class DefaultThingsMetadata implements ThingMetadata {
     }
 
     public DefaultThingsMetadata(JSONObject jsonObject) {
-        this.jsonObject = jsonObject;
+        fromJson(jsonObject);
     }
 
     public DefaultThingsMetadata(ThingMetadata another) {
         this.id = another.getId();
         this.name = another.getName();
         this.description = another.getDescription();
-        this.expands = another.getExpands();
+        this.expands = another.getExpands() == null ? null : new LinkedHashMap<>(another.getExpands());
+        this.relations = another.getRelationMetadata();
+        this.modules = another.getModules();
         this.properties = another
             .getProperties()
             .stream()
@@ -88,6 +97,45 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     static JSONObject toJSONObject(Object obj) {
         return (JSONObject) JSONObject.toJSON(obj);
+    }
+
+    /**
+     * @return 非空关系定义目录；不递归展开另一端的对象模型
+     * @since 1.3.3
+     */
+    @Override
+    public List<RelationMetadata> getRelationMetadata() {
+        if (relations == null) {
+            List<RelationMetadata> parsed = new ArrayList<>();
+            List<?> definitions = jsonObject == null ? null : jsonObject.getJSONArray("relations");
+            if (definitions != null) {
+                for (Object value : definitions) {
+                    RelationMetadata relation = new RelationMetadata();
+                    relation.fromJson(toJSONObject(value));
+                    parsed.add(relation);
+                }
+            }
+            relations = Collections.unmodifiableList(parsed);
+        }
+        return relations;
+    }
+
+    /**
+     * @return 非空的嵌套模块目录，沿用本模型的 JSON 解析规则
+     * @since 1.3.3
+     */
+    @Override
+    public List<ThingMetadata> getModules() {
+        if (modules == null) {
+            List<ThingMetadata> parsed = new ArrayList<>();
+            if (jsonObject != null && jsonObject.getJSONArray("modules") != null) {
+                for (Object value : jsonObject.getJSONArray("modules")) {
+                    parsed.add(new DefaultThingsMetadata(toJSONObject(value)));
+                }
+            }
+            modules = Collections.unmodifiableList(parsed);
+        }
+        return modules;
     }
 
     @Override
@@ -262,16 +310,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     @Override
     public JSONObject toJson() {
-        JSONObject json = new JSONObject();
-        json.put("id", id);
-        json.put("name", name);
-        json.put("description", description);
-        json.put("properties", getProperties().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        json.put("functions", getFunctions().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        json.put("events", getEvents().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        json.put("tags", getTags().stream().map(Jsonable::toJson).collect(Collectors.toList()));
-        json.put("expands", expands);
-        return json;
+        return ThingMetadata.super.toJson();
     }
 
     @Override
@@ -281,6 +320,9 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.events = null;
         this.functions = null;
         this.tags = null;
+        this.propertyMetadataList = null;
+        this.relations = null;
+        this.modules = null;
         this.id = json.getString("id");
         this.name = json.getString("name");
         this.description = json.getString("description");
@@ -313,6 +355,11 @@ public class DefaultThingsMetadata implements ThingMetadata {
     @Override
     public <T extends ThingMetadata> ThingMetadata merge(T metadata, MergeOption... options) {
         DefaultThingsMetadata deviceMetadata = copy();
+        CompositeThingMetadata combined = new CompositeThingMetadata(this, metadata);
+        deviceMetadata.relations = combined.getRelationMetadata();
+        deviceMetadata.modules = combined.getModules();
+        Map<String, Object> mergedExpands = combined.getExpands();
+        deviceMetadata.expands = mergedExpands == null ? null : new LinkedHashMap<>(mergedExpands);
 
         if (MergeOption.has(MergeOption.overwriteProperty, options)) {
             deviceMetadata.properties.clear();
