@@ -3,50 +3,113 @@
   "name": "Pump",
   "description": "Pump metadata with telemetry module",
   "expands": {
-    "semanticTypes": ["resource", "urn:example:pump"],
-    "future": {"revision": 2}
+    "semanticTypes": [
+      "resource",
+      "urn:example:pump"
+    ],
+    "future": {
+      "revision": 2
+    }
   },
   "properties": [
     {
       "id": "temperature",
       "name": "Temperature",
-      "valueType": {"type": "double", "unit": "celsius"},
-      "expands": {"semanticRole": "result"}
+      "valueType": {
+        "type": "double",
+        "unit": "celsius"
+      },
+      "expands": {
+        "semanticRole": "result"
+      }
     }
   ],
   "functions": [
     {
       "id": "stop",
       "name": "Stop",
-      "inputs": [{"id": "reason", "name": "Reason", "valueType": {"type": "string"}}],
-      "output": {"type": "boolean"},
-      "expands": {"functionKind": "action"}
+      "inputs": [
+        {
+          "id": "reason",
+          "name": "Reason",
+          "valueType": {
+            "type": "string"
+          }
+        }
+      ],
+      "output": {
+        "type": "boolean"
+      },
+      "expands": {
+        "functionKind": "action"
+      }
     }
   ],
-  "events": [{"id": "overheat", "name": "Overheat", "valueType": {"type": "double"}}],
-  "tags": [{"id": "batch", "name": "Batch", "valueType": {"type": "string"}}],
-  "relations": {
-    "space": [
-      {
-        "id": "located",
-        "name": "Located in",
-        "reverseName": "Contains",
-        "reverse": false,
-        "expands": {"semantic": "structural", "future": "urn:example:location"}
+  "events": [
+    {
+      "id": "overheat",
+      "name": "Overheat",
+      "valueType": {
+        "type": "double"
       }
-    ]
-  },
+    }
+  ],
+  "tags": [
+    {
+      "id": "batch",
+      "name": "Batch",
+      "valueType": {
+        "type": "string"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "targetType": "space",
+      "id": "located",
+      "name": "Located in",
+      "reverseName": "Contains",
+      "reverse": false,
+      "expands": {
+        "semantic": "structural",
+        "future": "urn:example:location"
+      }
+    }
+  ],
   "modules": [
     {
       "id": "telemetry",
       "name": "Telemetry",
-      "expands": {"semanticTypes": ["observation", "result"]},
+      "expands": {
+        "semanticTypes": [
+          "observation",
+          "result"
+        ]
+      },
       "properties": [
-        {"id": "observedAt", "name": "Observed at", "valueType": {"type": "long"}, "expands": {"semanticRole": "observedAt"}}
+        {
+          "id": "observedAt",
+          "name": "Observed at",
+          "valueType": {
+            "type": "long"
+          },
+          "expands": {
+            "semanticRole": "observedAt"
+          }
+        }
       ],
-      "relations": {
-        "device": [{"id": "target", "name": "Target", "reverseName": "Observations", "reverse": false, "expands": {"semantic": "about"}}]
-      }
+      "relations": [
+        {
+          "targetType": "device",
+          "id": "target",
+          "name": "Target",
+          "reverseName": "Observations",
+          "reverse": false,
+          "expands": {
+            "semantic": "about"
+          }
+        }
+      ]
     }
   ]
 }

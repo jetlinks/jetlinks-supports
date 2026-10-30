@@ -11,7 +11,7 @@ JetLinks 提供的一些默认实现以及集成
 物模型主要由: 属性(properties),功能(function),事件(event).组成
 
 默认 Codec 同时保留模型身份、`expands` 和可选的 `relations`、`modules` 目录。
-关系复用 core 的 `Relation` 定义，只描述另一端类型及关系含义，不加载目标实例。
+关系目录复用 core 的 `RelationMetadata`，JSON 为带 `targetType` 的列表；只描述另一端类型及关系含义，不加载目标实例。原关系 SPI 的 Map 接口不变。
 缺省目录为空，旧模型的 JSON 不额外输出空目录；设备和通用物模型使用同一解析实现。
 与包含这些通用目录的 core 版本配套使用，语义词及未知扩展键按原值往返。
 

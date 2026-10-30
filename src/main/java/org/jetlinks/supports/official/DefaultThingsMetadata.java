@@ -6,7 +6,6 @@ import lombok.Setter;
 import org.apache.commons.collections.CollectionUtils;
 import org.jetlinks.core.metadata.*;
 import org.jetlinks.core.things.ThingMetadata;
-import org.jetlinks.core.things.relation.Relation;
 import reactor.function.Function3;
 
 import java.util.*;
@@ -35,7 +34,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     private volatile List<PropertyMetadata> propertyMetadataList;
 
-    private volatile Map<String, List<Relation>> relations;
+    private volatile List<RelationMetadata> relations;
 
     private volatile List<ThingMetadata> modules;
 
@@ -68,7 +67,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.name = another.getName();
         this.description = another.getDescription();
         this.expands = another.getExpands() == null ? null : new LinkedHashMap<>(another.getExpands());
-        this.relations = another.getRelations();
+        this.relations = another.getRelationMetadata();
         this.modules = another.getModules();
         this.properties = another
             .getProperties()
@@ -105,20 +104,18 @@ public class DefaultThingsMetadata implements ThingMetadata {
      * @since 1.3.3
      */
     @Override
-    public Map<String, List<Relation>> getRelations() {
+    public List<RelationMetadata> getRelationMetadata() {
         if (relations == null) {
-            Map<String, List<Relation>> parsed = new LinkedHashMap<>();
-            JSONObject definitions = jsonObject == null ? null : jsonObject.getJSONObject("relations");
+            List<RelationMetadata> parsed = new ArrayList<>();
+            List<?> definitions = jsonObject == null ? null : jsonObject.getJSONArray("relations");
             if (definitions != null) {
-                definitions.forEach((type, ignored) -> {
-                    List<Relation> values = new ArrayList<>();
-                    for (Object value : definitions.getJSONArray(type)) {
-                        values.add(Relation.parse(toJSONObject(value)));
-                    }
-                    parsed.put(type, Collections.unmodifiableList(values));
-                });
+                for (Object value : definitions) {
+                    RelationMetadata relation = new RelationMetadata();
+                    relation.fromJson(toJSONObject(value));
+                    parsed.add(relation);
+                }
             }
-            relations = Collections.unmodifiableMap(parsed);
+            relations = Collections.unmodifiableList(parsed);
         }
         return relations;
     }
@@ -359,7 +356,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
     public <T extends ThingMetadata> ThingMetadata merge(T metadata, MergeOption... options) {
         DefaultThingsMetadata deviceMetadata = copy();
         CompositeThingMetadata combined = new CompositeThingMetadata(this, metadata);
-        deviceMetadata.relations = combined.getRelations();
+        deviceMetadata.relations = combined.getRelationMetadata();
         deviceMetadata.modules = combined.getModules();
         Map<String, Object> mergedExpands = combined.getExpands();
         deviceMetadata.expands = mergedExpands == null ? null : new LinkedHashMap<>(mergedExpands);

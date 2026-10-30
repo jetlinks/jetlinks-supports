@@ -39,13 +39,13 @@ public class MetadataDirectoryTest {
         DefaultThingsMetadata model = new DefaultThingsMetadata(JSON.parseObject(source()));
         assertModel(new DefaultThingsMetadata(model));
         JSONObject additional = JSON.parseObject("{\"id\":\"other\",\"expands\":{\"newKey\":\"newValue\"},"
-            + "\"relations\":{\"device\":[{\"id\":\"related\",\"reverse\":true,"
-            + "\"expands\":{\"semantic\":\"urn:example:future\"}}]},\"modules\":[{\"id\":\"metrics\"}]}");
+            + "\"relations\":[{\"targetType\":\"device\",\"id\":\"related\",\"reverse\":true,"
+            + "\"expands\":{\"semantic\":\"urn:example:future\"}}],\"modules\":[{\"id\":\"metrics\"}]}");
         ThingMetadata merged = model.merge(new DefaultThingsMetadata(additional));
         assertModel(merged);
         assertEquals("newValue", merged.getExpands().get("newKey"));
-        assertEquals(2, merged.getRelations().size());
-        assertTrue(merged.getRelations("device").get(0).isReverse());
+        assertEquals(2, merged.getRelationMetadata().size());
+        assertTrue(merged.getRelationMetadata("device").get(0).isReverse());
         assertEquals(2, merged.getModules().size());
 
         // 已读取的目录和属性缓存不能污染后续 fromJson 的模型身份与定义。
@@ -53,9 +53,9 @@ public class MetadataDirectoryTest {
         assertEquals("other", model.getId());
         assertTrue(model.getProperties().isEmpty());
         assertTrue(model.getFunctions().isEmpty());
-        assertTrue(model.getRelations("space").isEmpty());
+        assertTrue(model.getRelationMetadata("space").isEmpty());
         assertEquals("metrics", model.getModules().get(0).getId());
-        assertEquals("urn:example:future", model.getRelations("device").get(0).getExpands().get("semantic"));
+        assertEquals("urn:example:future", model.getRelationMetadata("device").get(0).getExpands().get("semantic"));
     }
 
     @Test
@@ -65,7 +65,7 @@ public class MetadataDirectoryTest {
         assertEquals("legacy", encoded.getString("id"));
         assertFalse(encoded.containsKey("relations"));
         assertFalse(encoded.containsKey("modules"));
-        assertTrue(model.getRelations().isEmpty());
+        assertTrue(model.getRelationMetadata().isEmpty());
         assertTrue(model.getModules().isEmpty());
     }
 
@@ -84,11 +84,11 @@ public class MetadataDirectoryTest {
         assertEquals("boolean", model.getFunctionOrNull("stop").getOutput().getId());
         assertNotNull(model.getEventOrNull("overheat"));
         assertNotNull(model.getTagOrNull("batch"));
-        assertEquals("urn:example:location", model.getRelations("space").get(0).getExpands().get("future"));
+        assertEquals("urn:example:location", model.getRelationMetadata("space").get(0).getExpands().get("future"));
         ThingMetadata telemetry = model.getModule("telemetry").orElseThrow();
         assertEquals(PropertySemanticRole.observedAt,
             MetadataSemantics.propertyRole(telemetry.getPropertyOrNull("observedAt")).orElseThrow());
-        assertEquals("about", telemetry.getRelations("device").get(0).getExpands().get("semantic"));
+        assertEquals("about", telemetry.getRelationMetadata("device").get(0).getExpands().get("semantic"));
     }
 
     private static String source() throws Exception {
