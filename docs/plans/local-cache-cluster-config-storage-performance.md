@@ -47,7 +47,7 @@ JMH 使用同一原实现基线与最终 basic 实现，2 forks，3 × 1 s 预�
 
 容量探针在 768 MiB 最大堆下创建 100 万个 storage，其中 1 万个各缓存 8 Key：计数为 100 万 storage/8 万条目，16 个有界切片完成；最长切片 3.398 ms，调用线程扫描 CPU 合计 20.877 ms。扫描直接驱动而非等待真实 1 s 调度，验证容量和单次预算，不作为周期调度长稳证据。JOL 中 monitor 可达图为 1368 → 1368 字节，storage/Cache 对象在基线和候选均为 48 字节；该结果描述监控对象与单个业务对象布局，不等于整个 manager 的 retained heap。JMX `Statistics` Java 序列化为 3131 字节。
 
-原始本地结果：`/private/tmp/local-cache-monitor-{base-recheck,final}-t1.json`、`/private/tmp/local-cache-monitor-{base,final}-t8.json`、`/private/tmp/local-cache-monitor-{base,final}-single-ttl.json`、`/private/tmp/local-cache-monitor-capacity.log`。生产读取路径采用这些 basic 结果对应的实现；定向回归最终再次编译确认。未执行真实设备链路 CPU/input、P99 A/B、32 线程热点争用和 24 小时 churn/GC/RSS 长稳；既有缓存优化的历史 A/B 不能替代本轮成本验收。提交与 PR 尚未生成。
+原始本地结果：`/private/tmp/local-cache-monitor-{base-recheck,final}-t1.json`、`/private/tmp/local-cache-monitor-{base,final}-t8.json`、`/private/tmp/local-cache-monitor-{base,final}-single-ttl.json`、`/private/tmp/local-cache-monitor-capacity.log`。生产读取路径采用这些 basic 结果对应的实现；定向回归最终再次编译确认。未执行真实设备链路 CPU/input、P99 A/B、32 线程热点争用和 24 小时 churn/GC/RSS 长稳；既有缓存优化的历史 A/B 不能替代本轮成本验收。实现提交：`ff21c3c`；交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
 
 ## 双、三键全 L1 命中复核
 
