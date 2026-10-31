@@ -1,10 +1,12 @@
 package org.jetlinks.supports.config;
 
+import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
+import org.jetlinks.core.cluster.ClusterManager;
+import org.jetlinks.supports.event.InternalEventBus;
 import org.openjdk.jmh.annotations.*;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,6 +29,16 @@ import static org.mockito.Mockito.when;
 @Measurement(iterations = 5, time = 1)
 @Fork(2)
 public class LocalCacheClusterConfigStorageBenchmark {
+
+    @Benchmark
+    public Value singlePositiveHit(PositiveHit2State state) {
+        return state.storage.getConfig("k0").block();
+    }
+
+    @Benchmark
+    public Value singleNegativeHit(NegativeHitState state) {
+        return state.storage.getConfig("missing").block();
+    }
 
     @Benchmark
     public Values positiveHit2(PositiveHit2State state) {
@@ -63,10 +75,17 @@ public class LocalCacheClusterConfigStorageBenchmark {
         return state.storage.getConfigs(state.keys).block();
     }
 
-    abstract static class BaseState {
+    @State(Scope.Benchmark)
+    public abstract static class BaseState {
+        @Param({"-1"})
+        public long ttlMillis;
+        @Param({"basic", "sampled"})
+        public String monitoring;
+
         LocalCacheClusterConfigStorage storage;
         List<String> keys;
         Map<String, Object> backend;
+        EventBusStorageManager manager;
 
         void initialize(int presentKeys) {
             keys = Arrays.asList("k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7");
@@ -80,14 +99,14 @@ public class LocalCacheClusterConfigStorageBenchmark {
             when(clusterCache.get(any(Collection.class)))
                 .thenAnswer(invocation -> load(invocation.getArgument(0)));
 
-            EventBusStorageManager manager = mock(EventBusStorageManager.class);
-            when(manager.doNotify(any())).thenReturn(Mono.empty());
+            manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
+            manager.monitor.setReadSamplingEnabled("sampled".equals(monitoring));
 
             storage = new LocalCacheClusterConfigStorage(
                 "benchmark",
                 manager,
                 clusterCache,
-                -1,
+                ttlMillis,
                 null,
                 new ConcurrentHashMap<>()
             );
@@ -104,6 +123,11 @@ public class LocalCacheClusterConfigStorageBenchmark {
 
         void warmCache() {
             storage.getConfigs(keys).block();
+        }
+
+        @TearDown(Level.Trial)
+        public void dispose() {
+            manager.dispose();
         }
     }
 

@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
+import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.supports.event.InternalEventBus;
 import org.junit.Test;
 import reactor.core.Disposable;
@@ -163,8 +164,7 @@ public class LocalCacheClusterConfigStorageTest {
     }
 
     private static LocalCacheClusterConfigStorage createStorage(ClusterCache<String, Object> clusterCache) {
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
         return new LocalCacheClusterConfigStorage(
             "test",
             manager,
@@ -202,8 +202,7 @@ public class LocalCacheClusterConfigStorageTest {
     @SuppressWarnings("unchecked")
     public void testGetConfigsConfusion() {
         ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
         when(clusterCache.putAll(anyMap())).thenReturn(Mono.just(true));
 
         LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
@@ -270,8 +269,7 @@ public class LocalCacheClusterConfigStorageTest {
         LocalCacheClusterConfigStorage.addSharedKey("sharedKey1", "sharedKey2");
 
         ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
         when(clusterCache.put(anyString(), any())).thenReturn(Mono.just(true));
         when(clusterCache.get(anyString())).thenReturn(Mono.empty());
 
@@ -312,8 +310,7 @@ public class LocalCacheClusterConfigStorageTest {
     @SuppressWarnings("unchecked")
     public void testAwaitLeakOnCompleteMismatch() {
         ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
 
         LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
             "test",
@@ -359,8 +356,7 @@ public class LocalCacheClusterConfigStorageTest {
     @SuppressWarnings("unchecked")
     public void testAwaitLeakOnError() {
         ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
 
         LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
             "test",
@@ -387,8 +383,7 @@ public class LocalCacheClusterConfigStorageTest {
         ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
         when(clusterCache.get(anyString())).thenReturn(Mono.empty());
         when(clusterCache.get(anyCollection())).thenAnswer(inv -> Flux.empty());
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
 
         LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
             "test", manager, clusterCache, -1, null
@@ -418,8 +413,7 @@ public class LocalCacheClusterConfigStorageTest {
         when(clusterCache.get(anyString())).thenReturn(Mono.empty());
         when(clusterCache.get(anyCollection())).thenAnswer(inv -> Flux.empty());
         when(clusterCache.clear()).thenReturn((Mono) Mono.just(true));
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
 
         LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
             "test", manager, clusterCache, -1, null
@@ -457,8 +451,7 @@ public class LocalCacheClusterConfigStorageTest {
         ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
         when(clusterCache.get(anyString())).thenReturn(Mono.empty());
         when(clusterCache.get(anyCollection())).thenAnswer(inv -> Flux.empty());
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
 
         // 设置极短的过期时间
         long expires = 10;
@@ -498,8 +491,7 @@ public class LocalCacheClusterConfigStorageTest {
         // 使用 answer 确保返回类型一致
         when(clusterCache.get(anyCollection())).thenAnswer(inv -> Flux.empty());
         when(clusterCache.clear()).thenReturn((Mono) Mono.just(true));
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
         when(clusterCache.put(anyString(), any())).thenReturn((Mono) Mono.just(true));
         when(clusterCache.putAll(anyMap())).thenReturn((Mono) Mono.just(true));
         when(clusterCache.remove(anyString())).thenReturn((Mono) Mono.just(true));
@@ -541,8 +533,7 @@ public class LocalCacheClusterConfigStorageTest {
     @SuppressWarnings("unchecked")
     public void testLateResponseOverride() {
         ClusterCache<String, Object> clusterCache = mock(ClusterCache.class);
-        EventBusStorageManager manager = mock(EventBusStorageManager.class);
-        when(manager.doNotify(any())).thenReturn(Mono.empty());
+        EventBusStorageManager manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
         when(clusterCache.put(anyString(), any())).thenReturn(Mono.just(true));
 
         LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
