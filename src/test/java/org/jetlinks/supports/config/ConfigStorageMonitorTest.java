@@ -26,12 +26,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -83,8 +86,6 @@ public class ConfigStorageMonitorTest {
         assertTrue(writing.join());
         assertEquals("new", oldReader.join().asString());
         assertEquals("new", f.storage.getConfig("name").block().asString());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
-        assertEquals(1, f.manager.monitor.loadCancellations.sum());
     }
 
     @Test
@@ -99,9 +100,6 @@ public class ConfigStorageMonitorTest {
         assertEquals("old", oldRead.block().asString());
         assertEquals("new", f.storage.getConfig("name").block().asString());
         verify(f.backend, times(2)).get("name");
-        assertEquals(1, f.manager.monitor.invalidatedLoads.sum());
-        assertEquals(1, f.manager.monitor.notificationsReceived.sum());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
     }
 
     @Test
@@ -135,34 +133,30 @@ public class ConfigStorageMonitorTest {
         Mono<Values> read = f.storage.getConfigs(Collections.singleton("name"));
         assertEquals("value", read.retry(1).block().getString("name", ""));
         assertEquals("value", read.block().getString("name", ""));
-        assertEquals(3, f.manager.monitor.loadRequests.sum());
-        assertEquals(2, f.manager.monitor.loadSuccesses.sum());
-        assertEquals(1, f.manager.monitor.loadFailures.sum());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+        assertEquals(1, f.manager.monitor.loadErrors.sum());
     }
 
     @Test
-    public void loadSnapshotsDescribeSamplesAndDoNotClaimReadCounts() {
+    public void statisticsExposeCapacityAndFaultsWithoutLoadActivityMetrics() {
         Fixture f = fixture(-1, new InternalEventBus());
-        f.manager.monitor.loadSampleMask = 1023;
-        CompositeData defaults = bean(f).getStatistics();
-        assertEquals(1024L, defaults.get("loadSampleInterval"));
-        assertFalse(defaults.containsKey("loadRequests"));
-        assertFalse(defaults.containsKey("loadsInFlight"));
-        assertFalse(defaults.containsKey("valueHitKeys"));
-        assertFalse(defaults.containsKey("readSampleInterval"));
-        f.manager.monitor.loadSampleMask = 0;
         when(f.backend.get(anyCollection())).thenReturn(Flux.just(
             new AbstractMap.SimpleImmutableEntry<>("name", "value")));
         f.storage.getConfigs(Arrays.asList("name", "missing")).block();
         f.storage.getConfig("name").block();
         f.storage.getConfigs(Arrays.asList("name", "missing", "name")).block();
-        CompositeData sampled = bean(f).getStatistics();
-        assertEquals(1L, sampled.get("loadSampleInterval"));
-        assertEquals(1L, sampled.get("sampledLoadRequests"));
-        assertEquals(2L, sampled.get("sampledLoadKeys"));
-        assertEquals(1L, sampled.get("sampledLoadSuccesses"));
-        assertEquals(0L, sampled.get("sampledLoadsInFlight"));
+        CompositeData statistics = bean(f).getStatistics();
+        assertEquals(new HashSet<>(Arrays.asList(
+            "schemaVersion", "instanceId", "capturedAt", "storageCount", "localEntryCount",
+            "countCapturedAt", "idleTtlMillis", "namespace", "notificationSubscriptionActive",
+            "loadErrors", "staleFallbacks", "invalidationErrors", "listenerErrors",
+            "lastErrorStage", "lastErrorType", "lastErrorAt")), statistics.getCompositeType().keySet());
+        assertEquals(0L, statistics.get("loadErrors"));
+        assertEquals(0L, statistics.get("staleFallbacks"));
+        assertEquals(0L, statistics.get("invalidationErrors"));
+        assertEquals(0L, statistics.get("listenerErrors"));
+        assertEquals("", statistics.get("lastErrorStage"));
+        assertEquals("", statistics.get("lastErrorType"));
+        assertEquals(0L, statistics.get("lastErrorAt"));
     }
 
     @Test
@@ -193,13 +187,11 @@ public class ConfigStorageMonitorTest {
             : Flux.just(new AbstractMap.SimpleImmutableEntry<>("name", "current"))));
         Values result = f.storage.getConfigs(Arrays.asList("old", "name")).retry(1).block();
         assertEquals(Collections.singletonMap("name", "current"), result.getAllValues());
-        assertEquals(2, f.manager.monitor.loadRequests.sum());
-        assertEquals(1, f.manager.monitor.loadFailures.sum());
-        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
+        assertEquals(1, f.manager.monitor.loadErrors.sum());
     }
 
     @Test
-    public void downstreamCompletionFailureDoesNotFinishBatchStatisticsTwice() {
+    public void batchDeliveryErrorsAreReportedWithoutChangingErrorPropagation() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get(anyCollection())).thenReturn(Flux.just(
             new AbstractMap.SimpleImmutableEntry<>("name", "value")));
@@ -227,54 +219,45 @@ public class ConfigStorageMonitorTest {
         });
         assertNotNull(failure.get());
         assertEquals("consumer failed", failure.get().getMessage());
-        assertEquals(1, f.manager.monitor.loadRequests.sum());
-        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
-        assertEquals(0, f.manager.monitor.loadFailures.sum());
-        assertEquals(0, f.manager.monitor.loadCancellations.sum());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+        assertEquals(1, f.manager.monitor.loadErrors.sum());
+        assertEquals("load", bean(f).getStatistics().get("lastErrorStage"));
     }
 
     @Test
-    public void sharedReadersDoNotStartAnotherLoadSample() {
+    public void sharedReadersUseOneBackendLoad() {
         Fixture f = fixture(-1, new InternalEventBus());
         Sinks.One<Object> source = Sinks.one();
         when(f.backend.get("name")).thenReturn(source.asMono());
         Mono<Value> first = f.storage.getConfig("name");
         Mono<Value> second = f.storage.getConfig("name");
-        assertEquals(1, f.manager.monitor.loadRequests.sum());
         source.emitValue("value", Sinks.EmitFailureHandler.FAIL_FAST);
         assertEquals("value", first.block().asString());
         assertEquals("value", second.block().asString());
+        verify(f.backend, times(1)).get("name");
+        assertEquals(0, f.manager.monitor.loadErrors.sum());
     }
 
     @Test
-    public void singleValueAndEmptyCompletionFinishOnceBeforeInternalCancellation() {
+    public void successfulAndEmptyLoadsDoNotReportErrors() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get("name")).thenReturn(Mono.just("value"));
         when(f.backend.get("missing")).thenReturn(Mono.empty());
         assertEquals("value", f.storage.getConfig("name").block().asString());
         assertNull(f.storage.getConfig("missing").block());
-        assertEquals(2, f.manager.monitor.loadRequests.sum());
-        assertEquals(2, f.manager.monitor.loadSuccesses.sum());
-        assertEquals(0, f.manager.monitor.loadCancellations.sum());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
-        assertEquals(2, Arrays.stream(f.manager.monitor.loadBuckets).mapToLong(bucket -> bucket.sum()).sum());
+        assertEquals(0, f.manager.monitor.loadErrors.sum());
     }
 
     @Test
-    public void singleLoadCoversTheExistingFallbackUntilItsTerminalSignal() {
+    public void singleLoadWaitsForTheExistingFallback() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get("name")).thenReturn(Mono.empty());
         Sinks.One<Object> fallback = Sinks.one();
         Mono<Value> read = f.storage.getConfig("name", fallback.asMono());
-        assertEquals(1, f.manager.monitor.loadRequests.sum());
-        assertEquals(1, f.manager.monitor.loadsInFlight.get());
-        assertEquals(0, f.manager.monitor.loadSuccesses.sum());
+        CompletableFuture<Value> result = read.toFuture();
+        assertFalse(result.isDone());
         fallback.emitValue("value", Sinks.EmitFailureHandler.FAIL_FAST);
-        assertEquals("value", read.block().asString());
-        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
-        assertEquals(0, f.manager.monitor.loadCancellations.sum());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+        assertEquals("value", result.join().asString());
+        assertEquals(0, f.manager.monitor.loadErrors.sum());
         verify(f.backend, times(1)).get("name");
     }
 
@@ -286,11 +269,7 @@ public class ConfigStorageMonitorTest {
         StepVerifier.create(f.storage.getConfig("error", Mono.error(new IllegalStateException("fallback failed"))))
             .expectErrorMessage("fallback failed")
             .verify();
-        assertEquals(2, f.manager.monitor.loadRequests.sum());
-        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
-        assertEquals(1, f.manager.monitor.loadFailures.sum());
-        assertEquals(0, f.manager.monitor.loadCancellations.sum());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+        assertEquals(1, f.manager.monitor.loadErrors.sum());
     }
 
     @Test
@@ -300,37 +279,42 @@ public class ConfigStorageMonitorTest {
         when(f.backend.put("name", "new")).thenReturn(Mono.just(true));
         AtomicInteger cancellations = new AtomicInteger();
         Mono<Value> read = f.storage.getConfig("name", Mono.never().doOnCancel(cancellations::incrementAndGet));
-        assertEquals(1, f.manager.monitor.loadsInFlight.get());
         assertTrue(f.storage.setConfig("name", "new").block());
         assertEquals("new", read.block().asString());
         assertEquals(1, cancellations.get());
-        assertEquals(1, f.manager.monitor.loadCancellations.sum());
-        assertEquals(0, f.manager.monitor.loadSuccesses.sum());
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
     }
 
     @Test
-    public void cancelledBatchReleasesItsInFlightCount() {
+    public void cancelledBatchCancelsTheBackendWithoutReportingAnError() {
         Fixture f = fixture(-1, new InternalEventBus());
-        when(f.backend.get(anyCollection())).thenReturn(Flux.never());
+        AtomicInteger cancellations = new AtomicInteger();
+        when(f.backend.get(anyCollection())).thenReturn(
+            Flux.<Map.Entry<String, Object>>never().doOnCancel(cancellations::incrementAndGet));
         Disposable reader = f.storage.getConfigs(Collections.singleton("name")).subscribe();
-        assertEquals(1, f.manager.monitor.loadsInFlight.get());
         reader.dispose();
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
-        assertEquals(1, f.manager.monitor.loadCancellations.sum());
+        assertEquals(1, cancellations.get());
+        assertEquals(0, f.manager.monitor.loadErrors.sum());
     }
 
     @Test
     public void staleFallbackIsVisibleInsteadOfHidingAReadFailure() {
-        Fixture f = fixture(60_000, new InternalEventBus());
-        when(f.backend.get("name")).thenReturn(Mono.just("old"), Mono.error(new IllegalStateException("down")));
-        f.storage.getConfig("name").block();
-        f.entries.get("name").t = System.currentTimeMillis() - 60_001;
-        assertEquals("old", f.storage.getConfig("name").block().asString());
-        assertEquals(1, f.manager.monitor.staleFallbacks.sum());
-        assertEquals(1, f.manager.monitor.loadFailures.sum());
-        assertEquals(IllegalStateException.class.getName(), f.manager.monitor.lastErrorType);
-        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+        for (boolean hasOldValue : new boolean[]{true, false}) {
+            Fixture f = fixture(60_000, new InternalEventBus());
+            when(f.backend.get("name")).thenReturn(hasOldValue ? Mono.just("old") : Mono.empty(),
+                Mono.error(new IllegalStateException("down")));
+            f.storage.getConfig("name").block();
+            f.entries.get("name").t = System.currentTimeMillis() - 60_001;
+            Value result = f.storage.getConfig("name").block();
+            if (hasOldValue) {
+                assertEquals("old", result.asString());
+            } else {
+                assertNull(result);
+            }
+            assertEquals(1, f.manager.monitor.staleFallbacks.sum());
+            assertEquals(1, f.manager.monitor.loadErrors.sum());
+            assertEquals(IllegalStateException.class.getName(), bean(f).getStatistics().get("lastErrorType"));
+            assertEquals("load", bean(f).getStatistics().get("lastErrorStage"));
+        }
     }
 
     @Test
@@ -360,7 +344,6 @@ public class ConfigStorageMonitorTest {
         long oldTime = System.currentTimeMillis() - 61_000;
         f.entries.values().forEach(entry -> entry.t = oldTime);
         EventBusStorageManager.ConfigStorageManagerMbean bean = bean(f);
-        long reads = f.manager.monitor.loadRequests.sum();
         f.manager.scanCounts(System.currentTimeMillis());
         assertEquals(2L, bean.getStatistics().get("localEntryCount"));
         assertEquals(1L, bean.getStatistics().get("storageCount"));
@@ -373,7 +356,6 @@ public class ConfigStorageMonitorTest {
         assertEquals(0, bean.inspect("not-held", 128).length);
         assertEquals(1, f.manager.cache.size());
         f.entries.values().forEach(entry -> assertEquals(oldTime, entry.t));
-        assertEquals(reads, f.manager.monitor.loadRequests.sum());
         verify(f.backend, times(1)).get(anyCollection());
     }
 
@@ -387,13 +369,13 @@ public class ConfigStorageMonitorTest {
         long now = System.currentTimeMillis();
         f.manager.scanCounts(now);
         assertEquals(-1L, bean(f).getStatistics().get("localEntryCount"));
-        assertEquals(false, bean(f).getStatistics().get("countScanComplete"));
-        for (int i = 0; i < 200 && !(boolean) bean(f).getStatistics().get("countScanComplete"); i++) {
+        assertEquals(0L, bean(f).getStatistics().get("countCapturedAt"));
+        for (int i = 0; i < 200 && (long) bean(f).getStatistics().get("countCapturedAt") == 0; i++) {
             f.manager.scanCounts(now + i + 1);
         }
-        assertEquals(true, bean(f).getStatistics().get("countScanComplete"));
+        assertTrue((long) bean(f).getStatistics().get("countCapturedAt") > 0);
         assertEquals(0L, bean(f).getStatistics().get("localEntryCount"));
-        assertEquals(70_001L, bean(f).getStatistics().get("countVisitedStorages"));
+        assertEquals(70_001L, bean(f).getStatistics().get("storageCount"));
     }
 
     @Test
@@ -464,14 +446,14 @@ public class ConfigStorageMonitorTest {
             f.manager.cache.put(id, new LocalCacheClusterConfigStorage(id, f.manager, f.backend, -1, null));
         }
         f.manager.scanCounts(now + 30_000);
-        assertEquals(false, bean(f).getStatistics().get("countScanComplete"));
+        assertEquals(now, bean(f).getStatistics().get("countCapturedAt"));
         f.manager.scanCounts(now + 150_000);
         CompositeData timedOut = bean(f).getStatistics();
         assertEquals(1L, timedOut.get("localEntryCount"));
-        assertEquals(now, timedOut.get("countScanCompletedAt"));
+        assertEquals(now, timedOut.get("countCapturedAt"));
         f.manager.dispose();
         f.manager.scanCounts(now + 180_000);
-        assertEquals(now, bean(f).getStatistics().get("countScanCompletedAt"));
+        assertEquals(now, bean(f).getStatistics().get("countCapturedAt"));
     }
 
     @Test
@@ -487,8 +469,10 @@ public class ConfigStorageMonitorTest {
         assertFalse(statistics.containsKey("writeFailures"));
         assertFalse(statistics.containsKey("notificationsSent"));
         assertFalse(statistics.containsKey("notificationFailures"));
-        assertEquals(1L, statistics.get("loadSampleInterval"));
-        assertTrue(statistics.containsKey("sampledLoadRequests"));
+        assertFalse(statistics.containsKey("loadSampleInterval"));
+        assertTrue(statistics.containsKey("loadErrors"));
+        assertTrue(statistics.containsKey("invalidationErrors"));
+        assertTrue(statistics.containsKey("listenerErrors"));
         assertFalse(Arrays.stream(server.getMBeanInfo(name).getAttributes())
             .anyMatch(attribute -> "ReadSamplingEnabled".equals(attribute.getName())));
         assertFalse(Arrays.stream(server.getMBeanInfo(name).getOperations())
@@ -504,12 +488,90 @@ public class ConfigStorageMonitorTest {
         assertFalse(server.isRegistered(name));
     }
 
+    @Test
+    public void localInvalidationErrorsDoNotPreventListenersOrBecomeLoadErrors() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        LocalCacheClusterConfigStorage failing = spy(f.storage);
+        doThrow(new IllegalStateException("invalidation failed")).when(failing).clearLocalCache(any(CacheNotify.class));
+        f.manager.cache.put("device:test", failing);
+        AtomicInteger notifications = new AtomicInteger();
+        f.manager.listenCacheNotify(ignored -> notifications.incrementAndGet());
+        f.manager.handleNotify(CacheNotify.expires("device:test", Collections.singleton("name")));
+        CompositeData statistics = bean(f).getStatistics();
+        assertEquals(1, notifications.get());
+        assertEquals(1L, statistics.get("invalidationErrors"));
+        assertEquals(0L, statistics.get("listenerErrors"));
+        assertEquals(0L, statistics.get("loadErrors"));
+        assertEquals("invalidation", statistics.get("lastErrorStage"));
+        assertEquals(IllegalStateException.class.getName(), statistics.get("lastErrorType"));
+        assertTrue((long) statistics.get("lastErrorAt") > 0);
+    }
+
+    @Test
+    public void listenerFailureDoesNotMeanLocalInvalidationFailed() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        when(f.backend.get("name")).thenReturn(Mono.just("old"), Mono.just("new"));
+        assertEquals("old", f.storage.getConfig("name").block().asString());
+        f.manager.listenCacheNotify(ignored -> {
+            throw new IllegalArgumentException("listener failed");
+        });
+        f.manager.handleNotify(CacheNotify.expires("device:test", Collections.singleton("name")));
+        assertEquals("new", f.storage.getConfig("name").block().asString());
+        CompositeData statistics = bean(f).getStatistics();
+        assertEquals(0L, statistics.get("invalidationErrors"));
+        assertEquals(1L, statistics.get("listenerErrors"));
+        assertEquals(0L, statistics.get("loadErrors"));
+        assertEquals("listener", statistics.get("lastErrorStage"));
+        assertEquals(IllegalArgumentException.class.getName(), statistics.get("lastErrorType"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void subscriptionFailureRemainsRetryableAndHasItsOwnErrorStage() {
+        EventBus bus = mock(EventBus.class);
+        when(bus.subscribe(any(org.jetlinks.core.event.Subscription.class), any(Function.class)))
+            .thenThrow(new IllegalStateException("subscribe failed"));
+        Fixture f = fixture(-1, bus);
+        for (int i = 0; i < 2; i++) {
+            try {
+                f.manager.getStorage("device:test");
+                fail("The subscription failure must reach the caller");
+            } catch (IllegalStateException expected) {
+                assertEquals("subscribe failed", expected.getMessage());
+            }
+        }
+        verify(bus, times(2)).subscribe(any(org.jetlinks.core.event.Subscription.class), any(Function.class));
+        CompositeData statistics = bean(f).getStatistics();
+        assertEquals(false, statistics.get("notificationSubscriptionActive"));
+        assertEquals("subscription", statistics.get("lastErrorStage"));
+        assertEquals(0L, statistics.get("loadErrors"));
+        assertEquals(0L, statistics.get("invalidationErrors"));
+    }
+
+    @Test
+    public void failedCountScanRetainsAnUninitializedSnapshotAndCanRecover() {
+        ConcurrentMap<String, Object> entries = spy(new ConcurrentHashMap<>());
+        EventBusStorageManager manager = new EventBusStorageManager(
+            mock(ClusterManager.class), new InternalEventBus(), () -> entries);
+        managers.add(manager);
+        doThrow(new IllegalStateException("scan failed")).when(entries).values();
+        long now = System.currentTimeMillis();
+        manager.scanCounts(now);
+        EventBusStorageManager.ConfigStorageManagerMbean bean = manager.new ConfigStorageManagerMbeanImpl();
+        assertEquals(-1L, bean.getStatistics().get("localEntryCount"));
+        assertEquals(0L, bean.getStatistics().get("countCapturedAt"));
+        assertEquals("countScan", bean.getStatistics().get("lastErrorStage"));
+        doCallRealMethod().when(entries).values();
+        manager.scanCounts(now + 30_000);
+        assertEquals(0L, bean.getStatistics().get("localEntryCount"));
+        assertEquals(now + 30_000, bean.getStatistics().get("countCapturedAt"));
+    }
+
     @SuppressWarnings("unchecked")
     private Fixture fixture(long ttl, EventBus bus) {
         Fixture f = new Fixture();
         f.backend = mock(ClusterCache.class);
         f.manager = new EventBusStorageManager(mock(ClusterManager.class), bus, ttl);
-        f.manager.monitor.loadSampleMask = 0;
         managers.add(f.manager);
         f.entries = new ConcurrentHashMap<>();
         f.storage = new LocalCacheClusterConfigStorage("device:test", f.manager, f.backend, ttl, null, f.entries);

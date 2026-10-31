@@ -2,78 +2,72 @@
 
 ## 一级缓存观测与一致性
 
-观测归属 `src/main/java/org/jetlinks/supports/config/`，复用 `EventBusStorageManager` 注册的标准 MBean：
+观测只回答三个运维问题：缓存是否持续膨胀、配置读取是否因错误使用旧结果、本地失效及监听链路是否异常。实现归属 `src/main/java/org/jetlinks/supports/config/`，复用：
 
 `org.jetlinks:type=ConfigStorage,name=LocalCacheClusterConfigStorage`
 
-性能预算优先：相对 `a160079` 无观测基线，1/8/32 线程共享命中与持续加载吞吐回退最多 5%。用户已确认移除命中抽样，将加载指标收敛为固定 1/1024 的样本统计。读取 API 和命中路径不执行观测判定、随机数、计数或观测计时；不新增 Mono/Flux 包装、观测操作符、独立 Load 对象或 Key 级监控字段。写入成功后更新 L1 的 `doOnSuccess` 负责业务可见性，继续保留。
-
-`ConfigStorageMonitor` 只负责同步计数与快照；现有 `Cache.Loader`、`MultiCacheLoader` 在开始时随机选择 1/1024 的加载，未选中的正常加载不读取观测时钟、不写共享计数、不做终态 CAS；异常仍沿原调用链传播并记录错误上下文。选中的开始时间同时作为终态所有权，CAS 置零只结算一次，不另加终态状态字段。单键更新值会取消自身，`BaseSubscriber` 完成回调异常后也可能调用错误回调，因此样本仍须去重；无样本时零值直接跳过。默认单键读取移除空 fallback 的 `switchIfEmpty`：无 fallback 直接订阅 L2，显式 fallback 继续在 L2 空完成时订阅；命中、空完成、错误、共享读取及 fallback 语义均保持。
+正常命中、成功/空加载、取消和失效通知均不执行观测工作。已删除读取/加载抽样、成功/取消/在途/耗时统计、随机数判定和 Loader 的计时/终态观测字段、CAS 及回调。5% 性能影响仍为验收上限；实现不通过增加采样间隔、特判 L2 或额外包装来维持画像统计。
 
 ### 运维契约
 
-`CacheSize` 保持 storage 数量口径。`Statistics` 为标准 JMX `CompositeData`：
+`CacheSize` 仍表示 storage 数量。`Statistics` 为标准 JMX `CompositeData`：
 
-- 规模：`storageCount`、`localEntryCount`、扫描起止时间、已访问 storage 数和完成标志；条目数包括负缓存、加载中和未清理条目，首次完整扫描前为 -1。
-- 加载采样：`loadSampleInterval=1024`；`sampledLoadRequests`、`sampledLoadKeys`、`sampledLoadSuccesses`、`sampledLoadFailures`、`sampledLoadCancellations`、`sampledLoadsInFlight`、`sampledLoadNanos`，以及 `sampledLoadDurationBucket0..5`（非累计桶：≤1 ms、≤5 ms、≤20 ms、≤100 ms、≤1 s、>1 s，覆盖所有样本结果）。这些全部是样本原值，未乘以 1024，不能当作全量次数或全量在途数。零样本不等于零请求；估算需明确比例、样本数与窗口，不承诺小样本误差。
-- 加载范围：每个现有 subscriber 选择一次，重试/重复订阅独立选择，共享加载不新增尝试。单键包括原 `switchIfEmpty` fallback 的等待、失败和取消；空完成也算成功，指标不是精确 Redis 请求数。`lastSampledLoadSuccessAt` 只表示最近一次选中样本的成功时间。
-- 失效：接收、处理异常、本地未持有 storage、失效条目、单 Key 失效时发现的在途单键加载、过期清理和刷新仍记录实际事件；另有旧值兜底与版本冲突计数。全量清空的失效条目数为并发近似值。
-- 上下文：`schemaVersion`、`instanceId`、`capturedAt`、namespace、空闲 TTL、通知订阅句柄状态、最近通知处理和错误时间及错误类型。重启以 `instanceId` 区分累计窗口；订阅句柄存活不代表通知必达。
+| 运维目标 | 字段 | 解释与动作 |
+| --- | --- | --- |
+| 容量趋势 | `storageCount`、`localEntryCount`、`countCapturedAt` | 条目包括正/负缓存、加载中和未清理项；结合堆内存趋势检查生命周期、TTL 和清理策略，不据此伪造精确内存字节数。 |
+| 加载与旧结果兜底 | `loadErrors`、`staleFallbacks` | 异常路径全量记录；旧值兜底包括返回旧正值或旧负结果。正常取消不是错误。 |
+| 本地失效 | `invalidationErrors`、`notificationSubscriptionActive` | 接收通知时的本地失效处理异常与本地订阅句柄状态；存活不证明跨节点通知必达，尚未发起订阅也不等于故障。 |
+| 外部监听器 | `listenerErrors` | 与本地失效异常分开；监听器抛错不代表已完成的本地失效失败。 |
+| 最近错误 | `lastErrorStage`、`lastErrorType`、`lastErrorAt` | 原子发布有界的阶段/异常类型/时间快照，不保留 Throwable、Key 或配置值；详细原因沿原异常传播和现有日志定位。 |
 
-本 PR 尚未发布的读取抽样字段、`ReadSamplingEnabled`、`configureReadSampling` 和全量加载字段已移除，不保留中间形态的兼容分支。写入/通知发布成功失败继续沿原调用链传播，不为计数添加操作符。前端尚未接入专用配置缓存视图；通用 MBean 工具可读取当前属性。
+`loadErrors` 包含配置加载、结果处理/交付及本地缓存冲突的异常，不是 Redis 请求失败数。批量下游交付抛异常时也会计入，并保持原异常传播；重试每次异常处理分别记账，不采样、不换算为请求总数或失败率。订阅创建失败和规模扫描失败分别标记 `subscription`、`countScan` 阶段；加载、本地失效、监听器分别为 `load`、`invalidation`、`listener`。
 
-规模扫描只汇总已有 map 大小，复用共享调度器，每秒最多处理 65536 个 storage 或协作预算 5 ms，目标每 30 秒刷新完整快照，单轮超过 120 秒终止。getter 不启动扫描，部分结果不覆盖上次完整总量；完整扫描也是弱一致快照。关闭时释放迭代器、调度和本实例注册的 MBean，不抢占同名注册。
+`invalidationErrors` 覆盖 `handleNotify` 中接收通知后的本地处理错误；它与监听器失败一样，原本由异步处理器捕获，不能只依赖调用方发现。公开写入、主动失效与通知发布失败继续沿原调用链传播，不为凑齐操作成功/失败次数增加包装或改写控制流。
 
-`inspect(storageId,maxKeys)` 只查看已持有的本地条目，最多 128 条，Key 最多 512 字符并标记截断；不返回配置值，不创建 storage、不续期、不访问 L2。两种固定 JMX schema 只保留字段名和类型，不持有运行时值、业务 Key 或 manager。旧 `search` 保持兼容，不能作为被动周期统计。TTL 仍为空闲过期，不保证热 Key 的最大陈旧时间。
+上下文还包含 `schemaVersion`、`instanceId`、`capturedAt`、`namespace`、`idleTtlMillis`。计数器为生命周期累计值，判断新故障应比较增量/最近时间，重启通过 instanceId 区分；计数与容量为弱一致统计。最近错误不随一次成功自动清除，也不单独代表当前健康状态。
 
-### 一致性与批量状态
+首次完整规模扫描前 `localEntryCount=-1`、`countCapturedAt=0`。后台扫描只汇总已有 map 大小，复用共享调度器，每秒最多处理 65536 个 storage 或协作预算 5 ms，目标每 30 秒刷新，单轮 120 秒超时。部分、超时或失败扫描不覆盖上一次完整结果及其时间；getter 不启动扫描。不再暴露扫描进度字段，观察方应根据快照时间判断新鲜度。
 
-失效会移除加载中的条目，旧请求允许结束，但迟到的单键/批量正负结果只能写入脱离当前 map 的旧对象。本地新值仅在 L2 写入成功后可见，未订阅/失败/取消不暴露未提交值；L2 已提交但通知失败仍向调用方报错，不伪装回滚。
+`inspect(storageId,maxKeys)` 仅用于按需排障，最多返回 128 条本地 Key 状态，Key 最多 512 字符并标记截断；不返回值、不创建 storage、不续期、不访问 L2，不周期遍历 Key。版本冲突、无对应 storage 的广播、正常过期与刷新不计为默认异常。旧 `search` 保持原语义，不作为被动采集来源。
 
-批量 Mono 保留只读的加载目标和可选 L1 初值，每次订阅仅创建自身结果 Map，不复制或消费目标 Map，也不为全未命中提前创建空结果种子。通过 `putIfAbsent` 合并重复判断与首次结果写入，只有缓存并发更新导致返回值变化时才覆盖；重复/未知记录忽略。显式负值使用仅在订阅内可见的标记，返回前移除，不泄露为配置值。剩余正值数避免完整正值加载后的二次遍历；重试和重复订阅始终拥有独立结果，部分失败不能污染下次订阅。
+中间形态的读取开关、采样字段、加载画像和过程计数均未随本 PR 发布，直接移除，不增加兼容分支。MBean 固定 schema 只缓存字段名与类型；关闭时释放扫描、订阅及自己注册的 MBean，不抢占同名注册。前端专用视图不在本次范围，通用 MBean 工具仍可读取属性。
+
+### 一致性与业务路径
+
+失效移除加载中的条目，旧请求允许结束；迟到的单键/批量结果只更新脱离当前 map 的旧对象。L2 写成功后才更新 L1，未订阅/失败/取消不暴露未提交值；L2 已提交但通知失败仍向调用方报错。业务所需的 `doOnSuccess` 保留，不添加观测操作符或包装。
+
+默认单键读取省去空 fallback 的 `switchIfEmpty`；显式 fallback 保持原语义。批量 Mono 保留只读目标和可选 L1 初值，每次订阅只创建自身结果 Map；`putIfAbsent` 合并重复判断与首次写入，仅在并发缓存值变化时覆盖。显式负值的内部标记在返回前移除；未知/重复记录忽略，重试和重复订阅状态独立。
+
+不新增 Key 级字段、独立 Load 对象、响应式包装或逐条 TraceHolder 埋点。现有异常传播和链路追踪保留，正常业务路径不为观测创建 span。
 
 ### 验证与性能预算
 
-隔离副本 Maven 编译和 43 项定向回归通过（观测 24、存储 15、含真实 Redis 的管理器 4），零失败/错误/跳过。覆盖写入未订阅/失败/取消、通知部分成功、加载中失效及迟到正负结果、重试/取消、单键 fallback 全部结果、完成回调异常后的去重、被动查看与扫描/MBean 生命周期。新增覆盖部分结果后重试、重复和显式负值记录的订阅隔离，以及 OpenData 只暴露明确的样本口径。
+Maven 编译及 47 项定向测试通过（观测/故障边界 28、存储 15、含真实 Redis 的管理器 4），零失败/错误/跳过。覆盖写入与失效竞态、迟到正负结果、共享加载、重试/取消、fallback、下游交付错误、被动查看、快照超时及 MBean 生命周期；新增分别验证本地失效、监听器、订阅创建及扫描失败的计数/阶段与恢复语义。
 
 ```bash
 mvn -o -Dtest=LocalCacheClusterConfigStorageTest,EventBusStorageManagerTest,ConfigStorageMonitorTest test
 ```
 
-并发夹具为 `src/test/java/org/jetlinks/supports/config/ConfigStorageConcurrencyBenchmark.java`。同一编译夹具分别加载 `a160079` 和候选生产类；命中共享同一 storage/Key，持续加载每线程清空自身 L1、共享同一 manager。L2 为同步内存实现，测量含清空 L1，不含失效通知、扫描或 JMX 轮询，不代替 Redis 或设备消息链路。
+生产代码 SHA-256 前 16 位：`ConfigStorageMonitor=df7af0408f401af7`、`EventBusStorageManager=7a5e411fd4e26750`、`LocalCacheClusterConfigStorage=a6b0d24bed9c2653`。源码核对确认读取 API、L1 命中、TTL 与负缓存读取路径和 808de76 逐字一致，复用已有相应边界证据；本轮重新验收修改过的加载路径，不重跑无关构建。
 
-性能预算尚未验收通过。JDK 21.0.10、512 MiB 固定堆，JMH 3 forks、3×1 s 预热、4×1 s 测量、GC profiler。下表为最终候选相对 `a160079` 的吞吐变化，负数表示回退；32 线程为超过本机 18 个逻辑 CPU 的超额订阅。
+加载性能对照使用同一候选编译的 `ConfigStorageConcurrencyBenchmark` 夹具和依赖，只切换 `a160079` 无观测基线与候选生产类，JDK 21、512 MiB 固定堆。共享一个 manager，每线程清空自己的 L1，L2 为同步内存代理；不包含通知、扫描/JMX 轮询或真实 Redis/设备链路。每进程 1 fork、4 × 1 s 预热、5 × 1 s 测量，GC profiler；1/8 线程各 3 组、32 线程 4 组，按预定顺序交替运行。
 
-| 场景 | 1 线程 | 8 线程 | 32 线程 |
-| --- | ---: | ---: | ---: |
-| 单键热命中 | +3.59% | -1.26% | -6.32% |
-| 8 键热命中 | -2.66% | +9.26% | -0.23% |
-| 单键持续加载 | +14.23% | +7.43% | -13.38% |
-| 8 键持续加载 | +1.53% | +14.52% | +2.96% |
+| 线程 | 场景 | 平均吞吐，百万次/s：基线 → 当前 | 吞吐变化 | 各组变化 |
+| --- | --- | ---: | ---: | --- |
+| 1 | 单键加载 | 10.259 → 11.608 | +13.14% | +15.10%、+11.14%、+13.32% |
+| 8 | 单键加载 | 62.970 → 72.965 | +15.87% | +2.09%、+20.17%、+25.76% |
+| 32 | 单键加载 | 108.648 → 118.343 | +8.92% | +2.73%、-3.52%、+12.06%、+25.29% |
+| 1 | 8 键批量加载 | 2.407 → 2.426 | +0.81% | +0.36%、-0.42%、+2.57% |
+| 8 | 8 键批量加载 | 10.188 → 12.970 | +27.30% | +17.24%、+33.27%、+32.07% |
+| 32 | 8 键批量加载 | 22.243 → 20.263 | **-8.90%** | -3.43%、-9.76%、-4.62%、-16.97% |
 
-单键热命中零分配；单键加载约 448→392 B/op，8 键加载约 2696→2712 B/op。8 键命中路径未变化，复用同一夹具的有效切片 `/private/tmp/config-five-final-{baseline,optimized}-t{1,8,32}.json`；其余为 `/private/tmp/config-five-put-{baseline,optimized}-t{1,8,32}.json`，没有删除超预算结果。
+单键分配约 448 → 384 B/op，批量约 2696 → 2704 B/op。另以 32 线程、2 forks、3 × 1 s 预热、4 × 1 s 测量运行 sample-time：单键 P99 为 0.792 → 0.833 µs（+5.18%），批量 P99 为 2.664 → 2.624 µs（-1.50%）。结果保留在 `/private/tmp/config-operational-{singleReload,batchReload8}-t{1,8,32}-{baseline,optimized}-{pair}.json`、`/private/tmp/config-operational-sample-{baseline,optimized}.json`。
 
-32 线程固定同一候选重复运行时，单键命中从约 44.68 亿变化到 56.96 亿次/秒，相差约 27%；不能把该宿主的整段顺序测试直接解释为确定的实现成本。进一步预先固定四组交替顺序、逐场景运行的独立 JVM 对照（每组每版本 1 fork，4×1 s 预热、5×1 s 测量）：单键命中各组 -1.20%、-1.77%、+2.05%、+0.81%，汇总 -0.09%；单键加载各组 -8.23%、-0.49%、+34.71%、+10.55%，汇总 +7.62%。结果为 `/private/tmp/config-five-final32-{singleHit,singleReload}-{baseline,optimized}-{1,2,3,4}.json`。加载仍有超预算组和较大方差，不能以均值改善或置信区间重叠宣称严格达标；需在隔离环境继续验收，目标仍为最多 5% 回退。
+**5% 上限尚未通过全部场景验收**：32 线程批量吞吐回退 8.90%，单键采样 P99 增加 5.18%。不能用其他场景的均值改善、置信区间重叠或本机波动解释为通过。正常加载源码已没有观测工作；对照仍包含本 PR 的批量重复订阅/失效隔离等一致性修复，现有数据不能把差异单独归因于观测。保留这些正确性修复，不为基准回退到会污染缓存的实现。最终测试源码补充旧正值/负值兜底后，单独重跑 `ConfigStorageMonitorTest` 28 项通过，生产指纹未变化，复用前述存储/管理器证据。
 
-生产代码指纹（SHA-256 前 16 位）：`ConfigStorageMonitor=a3acd43e641ecb35`、`EventBusStorageManager=08e22bab3ea6fb71`、`LocalCacheClusterConfigStorage=7b453a4f24bcdf90`。无稳定收益的终态字段与热命中分支实验已撤回，测试和最终基准使用上述同一实现。
+上一版 808de76 的 32 线程顺序对照曾有 -6.32% 热命中、-13.38% 单键加载，以及 +5.18% 单键加载 P99；同一代码重复运行也有约 27% 波动。这些是已撤除加载抽样的旧版本数据，不作为当前版本结论；原始数据仍在 `/private/tmp/config-five-put-*.json` 和 `/private/tmp/config-five-final32-*.json`，未将失败改写为通过。
 
-补充 32 线程边界（2 forks，其余预热、测量及堆参数同主矩阵）：逐线程 fixture 的 1 键批量负缓存、单键负缓存、双键正值、三键正值吞吐分别 +13.34%、+2.77%、+6.67%、+2.32%；共享热点启用 TTL=60000 ms 后，单键与 8 键命中分别 -0.75%、-1.33%。数据为 `/private/tmp/config-five-put-{fast,ttl}-{baseline,optimized}-t32.json`，未出现超过 5% 的吞吐回退。这些结果不覆盖失效风暴或真实 L2 延迟。
-
-相同 32 线程、2 forks 的 JMH sample-time 诊断中，单键加载 P99 为 0.792→0.833 μs（+5.18%），8 键加载为 2.416→2.456 μs（+1.66%）；数据为 `/private/tmp/config-five-put-sample-{baseline,optimized}-t32.json`。单键尾延迟点估计仍超过预算，不能四舍五入为达标；该样本是同步内存 L2 的方法延迟，不是 Redis 或真实设备链路 P99。
-
-复测：先分别编译基线和候选生产类，再仅使用候选编译的 `target/test-classes` 和同一依赖 classpath。令 `cache_runtime` 指向被测版本、`cache_fixture` 指向候选、`cache_benchmark_cp` 为依赖 classpath，`cache_threads` 依次为 1、8、32：
-
-```bash
-java -cp "$cache_fixture/target/test-classes:$cache_runtime/target/classes:$cache_benchmark_cp" \
-  org.openjdk.jmh.Main 'ConfigStorageConcurrencyBenchmark.(singleHit|batchHit8|singleReload|batchReload8)' \
-  -p monitoring=basic -p ttlMillis=-1 -t "$cache_threads" \
-  -f 3 -wi 3 -i 4 -w 1s -r 1s -bm thrpt -tu s \
-  -jvmArgs '-Xms512m -Xmx512m' -prof gc -rf json -rff "$cache_output.json"
-```
-
-对不稳定场景按上述交替顺序复核，不并发运行其他 CPU 密集任务；隔离环境仍须覆盖负缓存、双/三键命中、TTL、实际 Redis 和真实设备消息负载，不以同步内存基准代替端到端性能上限。
-
-扫描算法未变，复用容量证据：768 MiB 最大堆下创建 100 万 storage、8 万条目，16 个切片完成，最长 3.398 ms，调用线程扫描 CPU 合计 20.877 ms。直接驱动扫描不等于真实周期调度长稳。真实设备链路 CPU/input、P99 A/B 和 24 小时 churn/GC/RSS 尚未执行；历史缓存优化数据不能替代这些未覆盖项。交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
+容量扫描的访问/时间预算未扩大，删除了仅用于显示进度的字段和更新。真实 Redis/设备链路 CPU/input、端到端 P99 A/B、24 小时 churn/GC/RSS 尚未验证；本机同步 L2 基准不能保证所有生产负载的性能上限。交付继续使用 [jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
 
 ## 双、三键全 L1 命中复核
 

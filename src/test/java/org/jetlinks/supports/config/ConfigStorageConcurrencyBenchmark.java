@@ -9,18 +9,16 @@ import org.openjdk.jmh.annotations.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.mockito.Mockito.mock;
 
 /**
  * Shared-key hits and per-thread cache reloads share one production manager. The latter
- * isolates manager counter contention from unrelated concurrent invalidation semantics.
+ * measures load processing independently of concurrent invalidation semantics.
  * The same compiled fixture runs against pre-observation and current production classes.
  * L2 is synchronous and in-process: measured latency is not Redis or device-message latency.
  */
@@ -29,8 +27,6 @@ import static org.mockito.Mockito.mock;
 public class ConfigStorageConcurrencyBenchmark {
     @State(Scope.Benchmark)
     public static class Shared {
-        @Param({"basic"})
-        public String monitoring;
         @Param({"-1"})
         public long ttlMillis;
         EventBusStorageManager manager;
@@ -59,19 +55,8 @@ public class ConfigStorageConcurrencyBenchmark {
         }
 
         @TearDown(Level.Trial)
-        public void dispose() throws Exception {
-            try {
-                Field monitorField = EventBusStorageManager.class.getDeclaredField("monitor");
-                monitorField.setAccessible(true);
-                Object monitor = monitorField.get(manager);
-                Field inFlightField = monitor.getClass().getDeclaredField("loadsInFlight");
-                inFlightField.setAccessible(true);
-                if (((AtomicLong) inFlightField.get(monitor)).get() != 0) throw new AssertionError("Loads in flight leaked");
-            } catch (NoSuchFieldException originalWithoutMonitoring) {
-                // The pre-observation baseline has no counters to inspect.
-            } finally {
-                manager.dispose();
-            }
+        public void dispose() {
+            manager.dispose();
         }
     }
 

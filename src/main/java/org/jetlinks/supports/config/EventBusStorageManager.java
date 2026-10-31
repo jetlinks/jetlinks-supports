@@ -63,10 +63,8 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     private Iterator<LocalCacheClusterConfigStorage> countIterator;
     private long scanStartedAt;
     private long scannedEntries;
-    private long visitedStorages;
     private long nextScanAt;
-    private volatile boolean countScanComplete;
-    private volatile CountSnapshot counts = new CountSnapshot(-1, 0, 0, 0);
+    private volatile CountSnapshot counts = new CountSnapshot(-1, 0);
 
     private final Disposable.Composite disposable = Disposables.composite();
 
@@ -165,22 +163,18 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     }
 
     void handleNotify(CacheNotify cacheNotify) {
-        monitor.notificationsReceived.increment();
         try {
             LocalCacheClusterConfigStorage storage = cache.get(cacheNotify.getName());
             if (storage != null) {
                 log.trace("clear local cache :{}", cacheNotify);
                 storage.clearLocalCache(cacheNotify);
             } else {
-                monitor.notificationsWithoutStorage.increment();
                 log.trace("ignore clear local cache :{}", cacheNotify);
             }
         } catch (Throwable error) {
-            monitor.notificationProcessingFailures.increment();
-            monitor.error(error);
+            monitor.invalidationError(error);
             log.warn("clear local cache error", error);
         }
-        monitor.lastNotificationAt = System.currentTimeMillis();
         notifyListeners(cacheNotify);
     }
 
@@ -211,15 +205,13 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             try {
                 listener.accept(notify);
             } catch (Throwable error) {
-                monitor.notificationProcessingFailures.increment();
-                monitor.error(error);
+                monitor.listenerError(error);
                 log.warn("handle config cache notify error", error);
             }
         }
     }
 
     public void refreshAll() {
-        monitor.refreshes.increment();
         for (Map.Entry<String, LocalCacheClusterConfigStorage> entry : cache.entrySet()) {
             CacheNotify notify = CacheNotify.expiresAll(entry.getKey());
             entry.getValue().clearLocalCache(notify);
@@ -262,7 +254,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
                 disposable.add(clusterSubscription);
             } catch (RuntimeException error) {
                 CLUSTER_SUBSCRIBER.set(false);
-                monitor.error(error);
+                monitor.error("subscription", error);
                 throw error;
             }
         }
@@ -279,8 +271,6 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
                 countIterator = cache.values().iterator();
                 scanStartedAt = now;
                 scannedEntries = 0;
-                visitedStorages = 0;
-                countScanComplete = false;
             }
             if (now - scanStartedAt >= 120_000) {
                 countIterator = null;
@@ -291,37 +281,30 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             int visited = 0;
             while (countIterator.hasNext() && visited < 65_536) {
                 scannedEntries += countIterator.next().localEntryCount();
-                visitedStorages++;
                 if ((++visited & 255) == 0 && System.nanoTime() >= deadline) {
                     return;
                 }
             }
             if (!countIterator.hasNext()) {
-                counts = new CountSnapshot(scannedEntries, visitedStorages, scanStartedAt, now);
-                countScanComplete = true;
+                counts = new CountSnapshot(scannedEntries, now);
                 countIterator = null;
                 nextScanAt = now + 30_000;
             }
         } catch (RuntimeException error) {
             countIterator = null;
-            countScanComplete = false;
             nextScanAt = now + 30_000;
-            monitor.error(error);
+            monitor.error("countScan", error);
             log.warn("count local config storage entries error", error);
         }
     }
 
     private static final class CountSnapshot {
         final long entries;
-        final long storages;
-        final long startedAt;
-        final long completedAt;
+        final long capturedAt;
 
-        CountSnapshot(long entries, long storages, long startedAt, long completedAt) {
+        CountSnapshot(long entries, long capturedAt) {
             this.entries = entries;
-            this.storages = storages;
-            this.startedAt = startedAt;
-            this.completedAt = completedAt;
+            this.capturedAt = capturedAt;
         }
     }
 
@@ -333,10 +316,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             Map<String, Object> values = new LinkedHashMap<>();
             values.put("storageCount", (long) cache.size());
             values.put("localEntryCount", current.entries);
-            values.put("countVisitedStorages", current.storages);
-            values.put("countScanStartedAt", current.startedAt);
-            values.put("countScanCompletedAt", current.completedAt);
-            values.put("countScanComplete", countScanComplete);
+            values.put("countCapturedAt", current.capturedAt);
             values.put("idleTtlMillis", ttl);
             values.put("namespace", namespace);
             Disposable subscription = clusterSubscription;
@@ -428,7 +408,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     /** Node-level observations; counts are weakly consistent, inspection never loads or renews L1. */
     public interface ConfigStorageManagerMbean {
 
-        /** Load fields are sample values with an explicit interval; zero samples do not mean zero traffic. */
+        /** Capacity snapshots and fault counters; countCapturedAt is zero until the first complete scan. */
         CompositeData getStatistics();
 
         /** At most 128 local keys and their states, without values or a read from Redis. */

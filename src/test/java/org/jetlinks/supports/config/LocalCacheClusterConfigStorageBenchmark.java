@@ -79,8 +79,6 @@ public class LocalCacheClusterConfigStorageBenchmark {
     public abstract static class BaseState {
         @Param({"-1"})
         public long ttlMillis;
-        @Param({"basic"})
-        public String monitoring;
 
         LocalCacheClusterConfigStorage storage;
         List<String> keys;
