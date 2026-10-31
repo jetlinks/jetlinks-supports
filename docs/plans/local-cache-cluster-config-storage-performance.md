@@ -49,7 +49,39 @@ mvn -o -Dtest=LocalCacheClusterConfigStorageTest,EventBusStorageManagerTest,Conf
 
 扫描算法未变，复用既有容量证据：768 MiB 最大堆下创建 100 万个 storage，其中 1 万个各缓存 8 Key，计数为 100 万 storage/8 万条目，16 个有界切片完成；最长切片 3.398 ms，调用线程扫描 CPU 合计 20.877 ms。探针直接驱动扫描，验证容量和单次预算，不作为真实周期调度长稳证据；初版 monitor 布局和统计序列化大小不再作为当前数据。
 
-真实设备链路 CPU/input、P99 A/B、32 线程共享热点争用和 24 小时 churn/GC/RSS 长稳尚未执行；既有缓存优化的历史 A/B 不能替代本轮验收。初始实现提交：`ff21c3c`；交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)，完整性能验收前保持草稿。
+32 线程共享热点成本补测见下节。真实设备链路 CPU/input、P99 A/B 和 24 小时 churn/GC/RSS 长稳尚未执行；既有缓存优化的历史 A/B 不能替代这些验收。初始实现提交：`ff21c3c`；交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)，当前已按用户要求提交评审，评审与合并决策需保留未完成的性能验收边界。
+
+### 高并发成本复核
+
+结论：默认模式的共享 L1 命中未观察到稳定的 32 线程吞吐差异，但持续加载路径存在显著的 manager 共享记账瓶颈，不能把先前单线程观测结果概括为整体低开销；开启读取抽样还会明显影响无 TTL 的单键热命中。
+
+新增可重复夹具 `src/test/java/org/jetlinks/supports/config/ConfigStorageConcurrencyBenchmark.java`，同一份编译产物分别加载无观测基线 `a160079` 和生产文件与 `fa9e3b9` 一致的候选。命中场景所有线程读取同一 storage/Key；加载场景每线程清空自身 L1，再调用真实存储读取，共享同一 manager，避免把原有并发失效差异混入统计争用。L2 为无 Mockito 调用的同步内存实现，不模拟 Redis 时延；测量包含 L1 清空成本，不包含失效通知发布。manager 未注册 MBean，此轮不测扫描与 JMX 轮询干扰。
+
+JDK 21.0.10、18 个逻辑 CPU、固定 512 MiB 堆；32 线程超过本机逻辑 CPU 数。JMH throughput，1/8/32 线程、2 forks、2 × 1 s 预热、3 × 1 s 测量、GC profiler，版本顺序部分反转；默认 TTL=-1，另测 60 s 空闲 TTL。每次 fork 结束校验候选在途加载归零。下表吞吐单位为百万次/秒，每次批量操作包含 8 Key。
+
+候选复测入口（基线使用同一夹具，但生产类路径切换至 `a160079` 构建产物，且只选 `monitoring=basic`）：
+
+```bash
+mvn -o -DskipTests test-compile dependency:build-classpath -Dmdep.outputFile=/tmp/config-concurrency-cp.txt
+java -cp "target/test-classes:target/classes:$(cat /tmp/config-concurrency-cp.txt)" org.openjdk.jmh.Main 'ConfigStorageConcurrencyBenchmark.*' -p monitoring=basic,sampled -p ttlMillis=-1 -t 32 -f 2 -wi 2 -i 3 -w 1s -r 1s -bm thrpt -tu s -jvmArgs '-Xms512m -Xmx512m' -prof gc
+```
+
+| 场景 | 8 线程：无观测 → basic | 32 线程：无观测 → basic | 32 线程 basic 吞吐变化 | 32 线程抽样相对 basic |
+| --- | ---: | ---: | ---: | ---: |
+| 单键 L1 正值命中 | 2630.117 → 2371.518 | 4579.298 → 4116.127 | -10.1% | -46.8% |
+| 8 键 L1 正值命中 | 115.639 → 108.732 | 179.548 → 173.852 | -3.2% | -12.2% |
+| 单键持续加载 | 51.104 → 7.960 | 106.567 → 9.800 | -90.8% | +5.3% |
+| 8 键持续加载 | 11.726 → 5.406 | 21.919 → 7.505 | -65.8% | -1.7% |
+
+32 线程两条 basic 命中的置信区间均重叠，不能把表中点估计认定为稳定回退或全部 3% 成本目标通过。单键命中仍为 0 B/次，8 键命中约 416 B/次。8 键加载为约 2696 → 3192 B/次，增加约 496 B；包含本 PR 为重复订阅/重试隔离而复制的两个 Map，不能全部归因于计数器。单键加载的分配受 fork 中逃逸分析影响，观测值约 448 → 456–484 B/次，不作为固定对象大小。
+
+反序复测单键加载（先候选、后基线）为 101.177 ± 6.949 → 10.844 ± 0.583 百万次/秒，仍下降约 89.3%。独立 sample-time 模式测得本地加载 P99：单键 0.792 → 3.040 μs，8 键 2.288 → 3.832 μs；这些是内存 L2 和本机调度下的操作延迟，不是 Redis 请求或设备消息链路 P99。
+
+TTL=60000 的 32 线程对照中，单键命中为 20.761 → 21.363 百万次/秒，8 键命中为 1.253 → 1.206 百万次/秒，置信区间重叠。TTL 自身包含时钟读取和共享条目续期写入，不能与无 TTL 数据混合。运行时装配在未设置 `configStorageTtl` 时使用 -1，两种口径均需保留。
+
+临时归因探针直接调用共享观测对象的 `loadStarted/loadFinished`，仅在 `/private/tmp` 的副本中分别去除在途原子更新、改为分片计数或去除成功时间写入，不改变交付代码。当前记账本身在 32 线程约 10.864 百万次/秒；仅改分片 gauge 为 13.209，去除 gauge 为 12.409，去除时间戳为 11.792。再以分片 gauge 为对照，去除成功时间写入得到 13.028 ± 2.229 → 20.005 ± 3.525 百万次/秒，约 +53.6%；仍只是记账探针，未证明完整加载路径恢复。瓶颈需从共享记账整体收敛，不能只替换一个计数器就宣称解决；后续应约束共享原子写入和成功时间发布频率，并在完整加载路径复验，不引入响应式观测包装或 Key 级状态。
+
+原始结果为 `/private/tmp/config-concurrency-{baseline,basic,sampled}-t{1,8,32}.json`，补测为 `/private/tmp/config-concurrency-{ttl,sample,recheck}-*-t32.json`，归因为 `/private/tmp/config-concurrency-counter-{ablation,combined}-t32.json`。所有运行顺序执行，无失败 fork，基准未修改生产代码；后端 42 项行为回归按相同生产源码指纹复用。真实 Redis、多节点与长稳仍是未覆盖范围，当前结果已经足以否定持续加载场景的低开销假设。
 
 ## 双、三键全 L1 命中复核
 
