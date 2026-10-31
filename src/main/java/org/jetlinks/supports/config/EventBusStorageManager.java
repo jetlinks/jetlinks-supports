@@ -197,11 +197,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
                 .fromArray(notifyTopics)
                 .flatMap(t -> eventBus.publish(t, notify), notifyTopics.length)
                 .then();
-        }).doOnSuccess(ignored -> monitor.notificationsSent.increment())
-          .doOnError(error -> {
-              monitor.notificationFailures.increment();
-              monitor.error(error);
-          });
+        });
     }
 
     @Override

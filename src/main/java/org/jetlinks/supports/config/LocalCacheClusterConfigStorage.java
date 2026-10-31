@@ -56,6 +56,12 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private static final AtomicReferenceFieldUpdater<Cache, Disposable> CACHE_LOADING = AtomicReferenceFieldUpdater
         .newUpdater(Cache.class, Disposable.class, "loading");
 
+    private static final AtomicIntegerFieldUpdater<MultiCacheLoader> MULTI_LOAD_ENDED = AtomicIntegerFieldUpdater
+        .newUpdater(MultiCacheLoader.class, "loadEnded");
+
+    private static final AtomicIntegerFieldUpdater<Cache.Loader> SINGLE_LOAD_ENDED = AtomicIntegerFieldUpdater
+        .newUpdater(Cache.Loader.class, "loadEnded");
+
     private static final Map<Value, Value> shared = new ConcurrentReferenceHashMap<>(1024);
 
     private static final Set<String> sharedKey = ConcurrentHashMap.newKeySet();
@@ -69,7 +75,6 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private final Map<String, Cache> caches;
     final String id;
     private final EventBusStorageManager manager;
-    private final ConfigStorageMonitor monitor;
 
     private final ClusterCache<String, Object> clusterCache;
 
@@ -86,7 +91,6 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                                    Map<String, Cache> cacheContainer) {
         this.id = id;
         this.manager = manager;
-        this.monitor = manager.monitor;
         this.clusterCache = clusterCache;
         this.expires = expires;
         this.doOnClear = doOnClear;
@@ -133,7 +137,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             caches.forEach((k, v) -> {
                 if (v.isExpired()) {
                     if (caches.remove(k, v)) {
-                        monitor.expiredEntries.increment();
+                        manager.monitor.expiredEntries.increment();
                     }
                 }
             });
@@ -142,7 +146,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     void error(Throwable err) {
         this.lastError = err;
-        monitor.error(err);
+        manager.monitor.error(err);
     }
 
     private Cache createCache(String key) {
@@ -170,7 +174,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
-        ConfigStorageMonitor.ReadCounters sample = monitor.sampleRead();
+        ConfigStorageMonitor.ReadCounters sample = manager.monitor.sampleRead();
         Mono<Values> cachedValues = getCachedValues(keys, sample);
         if (cachedValues != null) {
             return cachedValues;
@@ -290,7 +294,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         if (CollectionUtils.isEmpty(values)) {
             return Reactors.ALWAYS_TRUE;
         }
-        return monitor.observeWrite(clusterCache.putAll(values))
+        return clusterCache.putAll(values)
             // Never expose an uncommitted value when the returned write fails or is not subscribed.
             .doOnSuccess(ignored -> values.forEach(this::trySetLocalValue))
             .then(notify(CacheNotify.expires(id, values.keySet())))
@@ -305,7 +309,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         if (value == null) {
             return remove(key);
         }
-        return monitor.observeWrite(clusterCache.put(key, value))
+        return clusterCache.put(key, value)
             .doOnSuccess(ignored -> trySetLocalValue(key, value))
             .then(notifyRemoveKey(key))
             .then(Reactors.ALWAYS_TRUE);
@@ -323,35 +327,35 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Boolean> remove(String key) {
-        return monitor.observeWrite(clusterCache.remove(key))
+        return clusterCache.remove(key)
             .then(notifyRemoveKey(key))
             .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
     public Mono<Value> getAndRemove(String key) {
-        return monitor.observeWrite(clusterCache.getAndRemove(key))
+        return clusterCache.getAndRemove(key)
             .flatMap(res -> notify(CacheNotify.expires(id, Collections.singleton(key))).thenReturn(res))
             .map(Value::simple);
     }
 
     @Override
     public Mono<Boolean> remove(Collection<String> key) {
-        return monitor.observeWrite(clusterCache.remove(key))
+        return clusterCache.remove(key)
             .then(notify(CacheNotify.expires(id, key)))
             .then(Reactors.ALWAYS_TRUE);
     }
 
     @Override
     public Mono<Boolean> clear() {
-        return monitor.observeWrite(clusterCache.clear())
+        return clusterCache.clear()
             .then(notify(CacheNotify.clear(id)))
             .then(Reactors.ALWAYS_TRUE);
     }
 
     void clearLocalCache(CacheNotify notify) {
         if (CollectionUtils.isEmpty(notify.getKeys())) {
-            monitor.invalidatedEntries.add(caches.size());
+            manager.monitor.invalidatedEntries.add(caches.size());
             caches.clear();
         } else {
             for (String key : notify.getKeys()) {
@@ -360,9 +364,9 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 if (cache == null) {
                     continue;
                 }
-                monitor.invalidatedEntries.increment();
+                manager.monitor.invalidatedEntries.increment();
                 if (CACHE_LOADING.get(cache) != null) {
-                    monitor.invalidatedLoads.increment();
+                    manager.monitor.invalidatedLoads.increment();
                 }
             }
         }
@@ -436,18 +440,27 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         @Override
         public void subscribe(@Nonnull CoreSubscriber<? super Values> actual) {
             // A retry/subscription must not reuse maps consumed by an earlier attempt.
-            monitor.observeLoad(source, keys.size()).subscribe(
+            source.subscribe(
                 new MultiCacheLoader(new HashMap<>(keys), new HashMap<>(container), actual)
             );
         }
 
     }
 
-    @AllArgsConstructor
     class MultiCacheLoader extends BaseSubscriber<Map.Entry<String, Object>> implements Scannable {
         private final Map<String, Cache> keys;
         private final Map<String, Object> container;
         private final CoreSubscriber<? super Values> actual;
+        private final long loadStarted;
+        volatile int loadEnded;
+
+        MultiCacheLoader(Map<String, Cache> keys, Map<String, Object> container,
+                         CoreSubscriber<? super Values> actual) {
+            this.keys = keys;
+            this.container = container;
+            this.actual = actual;
+            this.loadStarted = manager.monitor.loadStarted(keys.size());
+        }
 
         @Override
         protected void hookOnSubscribe(@Nonnull Subscription subscription) {
@@ -486,11 +499,13 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         @Override
         protected void hookOnError(@Nonnull Throwable throwable) {
+            finishLoad(throwable, false);
             actual.onError(throwable);
         }
 
         @Override
         protected void hookOnComplete() {
+            finishLoad(null, false);
             //还有配置没加载出来,说明这些配置不存在，则全部设置为null
             if (!keys.isEmpty()) {
                 for (Map.Entry<String, Cache> entry : keys.entrySet()) {
@@ -506,6 +521,19 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             }
             actual.onNext(container.isEmpty() ? EMPTY_VALUES : Values.of(container));
             actual.onComplete();
+        }
+
+        @Override
+        protected void hookFinally(@Nonnull SignalType type) {
+            if (type == SignalType.CANCEL) {
+                finishLoad(null, true);
+            }
+        }
+
+        private void finishLoad(Throwable error, boolean cancelled) {
+            if (MULTI_LOAD_ENDED.compareAndSet(this, 0, 1)) {
+                manager.monitor.loadFinished(loadStarted, error, cancelled);
+            }
         }
 
         @Override
@@ -546,7 +574,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         @SuppressWarnings("unchecked")
         Mono<Value> getRef(Mono<Object> loader) {
-            ConfigStorageMonitor.ReadCounters sample = monitor.sampleRead();
+            ConfigStorageMonitor.ReadCounters sample = manager.monitor.sampleRead();
             Mono<Value> ref = CACHE_REF.get(this);
             if (isExpired() || ref == null) {
                 if (sample != null) {
@@ -616,7 +644,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             Value cached = CACHED.get(this);
             int currentVersion = this.version;
             if (currentVersion > version) {
-                monitor.rejectedLoadResults.increment();
+                manager.monitor.rejectedLoadResults.increment();
                 if (log.isDebugEnabled()) {
                     log.debug(
                         "local cache [id=`{},`key=`{}` value={}] version not match, expect:<= {},actual:{}",
@@ -638,7 +666,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 }
                 return true;
             } else {
-                monitor.rejectedLoadResults.increment();
+                manager.monitor.rejectedLoadResults.increment();
                 if (log.isDebugEnabled()) {
                     log.debug(
                         "local cache [id=`{},`key=`{}` value={}] version not match, expect:{},actual:{}",
@@ -677,7 +705,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     if (old != null) {
                         old.dispose();
                     }
-                    monitor.observeLoad(clusterCache.get(key))
+                    clusterCache.get(key)
                         .switchIfEmpty(loader)
                         .subscribe(_loader);
                     return ref;
@@ -723,7 +751,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             Sinks.One<Value> await = AWAIT.getAndSet(Cache.this, null);
             if (await != null) {
                 if (cached != null) {
-                    monitor.staleFallbacks.increment();
+                    manager.monitor.staleFallbacks.increment();
                     log.warn("load cache [{} {}] failed,use cached value:{} ,ver:{}", id, key, cached, version, error);
                     if (cached.get() == null) {
                         await.emitEmpty(Reactors.emitFailureHandler());
@@ -746,6 +774,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         private class Loader extends BaseSubscriber<Object> {
             private final int loadingVersion;
             private boolean hasValue;
+            private final long loadStarted = manager.monitor.loadStarted(1);
+            volatile int loadEnded;
 
             @Override
             protected void hookOnSubscribe(@Nonnull Subscription subscription) {
@@ -755,6 +785,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
             @Override
             protected void hookOnNext(@Nonnull Object value) {
+                // setValue cancels this subscriber; record the Mono result first, once.
+                finishLoad(null, false);
                 hasValue = true;
                 if (!setValue(await(), this, loadingVersion, value)) {
                     //版本不一致,清空缓存,下次重新加载最新数据.
@@ -764,6 +796,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
             @Override
             protected void hookOnComplete() {
+                finishLoad(null, false);
                 Sinks.One<Value> await = await();
                 if (await == null) {
                     return;
@@ -777,12 +810,22 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
             @Override
             protected void hookOnError(@Nonnull Throwable throwable) {
+                finishLoad(throwable, false);
                 Cache.this.error(throwable);
             }
 
             @Override
             protected void hookFinally(@Nonnull SignalType type) {
+                if (type == SignalType.CANCEL) {
+                    finishLoad(null, true);
+                }
                 CACHE_LOADING.compareAndSet(Cache.this, this, null);
+            }
+
+            private void finishLoad(Throwable error, boolean cancelled) {
+                if (SINGLE_LOAD_ENDED.compareAndSet(this, 0, 1)) {
+                    manager.monitor.loadFinished(loadStarted, error, cancelled);
+                }
             }
         }
     }

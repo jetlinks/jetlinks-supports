@@ -6,12 +6,14 @@
 
 `org.jetlinks:type=ConfigStorage,name=LocalCacheClusterConfigStorage`
 
+`ConfigStorageMonitor` 只负责同步计数与快照，没有 Reactor 依赖。现有单键 `Cache.Loader` 和 `MultiCacheLoader` 直接访问 parent manager 的观测对象，不增加 Mono/Flux 包装、观测操作符或独立 Load 对象；开始时间和终态去重状态位于既有短期 subscriber，不放入常驻 Cache。单键发出结果后会为更新缓存取消自身订阅，必须先记录成功，再用终态 CAS 防止误计取消。写入成功后更新 L1 的 `doOnSuccess` 负责业务可见性，继续保留。
+
 `CacheSize` 保持缓存对象（storage）数量的既有口径。新增 `Statistics` 返回标准 JMX `CompositeData`，包含以下节点级累计量和状态：
 
 - 规模：`storageCount`、`localEntryCount` 与计数扫描的起止时间、已访问 storage 数和完成标志；条目数包含负缓存、加载中和尚未清理的条目，首次完整扫描前为 `-1`。
 - 读取：默认 `ReadSamplingEnabled=false`、`readSampleInterval=0`，此时读取样本不可用，不能把零样本解释为零命中率。`configureReadSampling(true)` 开启固定 `1/1024` 调用抽样；仅读取计数在开关切换时更换 `statisticsEpoch`，回源和失效累计量保留到 manager 结束。
-- 回源：实际 L2 请求次数、Key 数、成功、失败、取消、在途、累计纳秒和六个非累计耗时桶（≤1 ms、≤5 ms、≤20 ms、≤100 ms、≤1 s、>1 s），空结果完成也属于一次成功的 L2 请求。自定义 fallback loader 不计为 Redis 请求。
-- 写入与失效：L2 写成功/失败、通知发送成功/失败、远端接收/处理异常/本地未持有 storage、失效条目、单 Key 失效时发现的在途单键加载、过期清理和刷新次数；另有加载失败使用旧值与版本冲突计数。全量清空的失效条目数为并发下的近似值。
+- 加载：配置加载尝试次数、Key 数、成功、失败、取消、在途、累计纳秒和六个非累计耗时桶（≤1 ms、≤5 ms、≤20 ms、≤100 ms、≤1 s、>1 s）。每个现有加载 subscriber 开始时记一次，重复订阅/重试分别统计，共享加载不新增尝试。单键范围包含已有 `switchIfEmpty` 自定义 fallback，空完成也算成功；因此不是精确 Redis 请求数。自定义 fallback 的等待、失败和取消均属于这次配置加载。
+- 失效：远端接收、处理异常、本地未持有 storage、失效条目、单 Key 失效时发现的在途单键加载、过期清理和刷新次数；另有加载失败使用旧值与版本冲突计数。全量清空的失效条目数为并发下的近似值。写入和通知发布的成功/失败仍由原调用链传播，不额外包装流来计数；`writeSuccesses/writeFailures/notificationsSent/notificationFailures` 不属于当前快照。
 - 上下文：实例身份、快照时间、namespace、空闲 TTL、通知订阅句柄状态、最近成功回源/通知处理/错误时间及错误类型。发布成功不代表全部远端节点已处理，订阅句柄存活也不代表通知必达。
 
 读取抽样按真实 L1 判定计正值、负值和未命中 Key；共享正在进行的加载属于未命中。批量按输入位置计量，双/三键快路径回退只计一次。命中率为 `(valueHitKeys + negativeHitKeys) / (valueHitKeys + negativeHitKeys + missKeys)`；代次变化应重新建立读取窗口。
@@ -20,19 +22,30 @@
 
 `inspect(storageId,maxKeys)` 只查看已持有的本地条目状态，返回 1–128 个条目，Key 最多 512 字符并标记截断；不返回配置值，不创建 storage、不续期、不访问 L2。旧 `search` 的行为保持兼容，不能作为被动周期统计来源。TTL 仍是空闲过期，不保证热 Key 的最大陈旧时间。
 
-失效会移除正在加载的条目，旧请求允许结束，但迟到的单键或批量正/负结果只能写入脱离当前 map 的旧对象。批量每次订阅独立持有加载状态，重试不能复用已消费的 map。本地新值仅在 L2 写入成功后可见；未订阅、取消或失败不暴露未提交值。L2 已提交但通知发布失败仍向调用方报错，并分别计入写成功和通知失败，不伪装为回滚。
+失效会移除正在加载的条目，旧请求允许结束，但迟到的单键或批量正/负结果只能写入脱离当前 map 的旧对象。批量每次订阅独立持有加载状态，重试不能复用已消费的 map。本地新值仅在 L2 写入成功后可见；未订阅、取消或失败不暴露未提交值。L2 已提交但通知发布失败仍向调用方报错，不伪装为回滚。
 
 实现不新增 Key 级监控字段、Span、日志或周期回源，不扩展通知 wire 格式，不提供分布式一致性承诺、诊断任务系统或前端页面。读取抽样因快路径成本默认关闭，按需启用时应重新评估业务负载。
 
 ### 本轮验证与限制
 
-隔离副本完成 Maven 编译与 36 项定向测试（`ConfigStorageMonitorTest` 17、原存储测试 15、含真实 Redis 的管理器测试 4），零失败/跳过。覆盖未订阅/失败/取消写入、通知发布失败的部分成功、加载中单 Key/整组失效、迟到单键与批量正负结果、重试/取消、正负抽样与回退记账、被动查看不续期不回源、数量/Key 长度上限、扫描预算/超时及 MBean 注册归属和关闭。
+隔离副本完成 Maven 编译与 40 项定向测试（`ConfigStorageMonitorTest` 21、原存储测试 15、含真实 Redis 的管理器测试 4），零失败/跳过。覆盖未订阅/失败/取消写入、通知发布失败的部分成功、加载中单 Key/整组失效、迟到单键与批量正负结果、重试/取消、正负抽样与回退记账、被动查看不续期不回源、数量/Key 长度上限、扫描预算/超时及 MBean 注册归属和关闭；同时覆盖去除包装后的单键有值/空值终态、自取消去重、自定义 fallback 的等待、成功、空完成、失败及被写入取消。
 
 ```bash
 mvn -o -Dtest=LocalCacheClusterConfigStorageTest,EventBusStorageManagerTest,ConfigStorageMonitorTest test
 ```
 
-JMH 使用同一原实现基线与最终 basic 实现，2 forks，3 × 1 s 预热，4–5 × 1 s 测量及 GC profiler。1/8 线程结果分别为每线程独立缓存，不冒充共享热点争用或真实设备吞吐。
+去除包装后的对照以同一 PR 初版为基线：JMH 1 线程、2 forks、3 × 1 s 预热、4 × 1 s 测量、GC profiler，默认 basic、TTL 关闭，模拟 L2。现有生产命中/未命中夹具未修改。
+
+| 路径 | 包装版 → 直接记录 ns/op | 包装版 → 直接记录 B/op |
+| --- | ---: | ---: |
+| 8 键全部未命中 | 3334.912 → 2884.411 | 5800.172 → 5520.142 |
+| 8 键部分未命中 | 2905.182 → 2709.334 | 4240.144 → 3968.132 |
+| 8 键稳定命中 | 56.433 → 56.101 | 416.014 → 416.014 |
+| 单键 `getConfig` 稳定命中 | 3.143 → 3.276 | 0 → 0 |
+
+两条未命中路径分配减少约 280/272 B/次，耗时分别约 -13.5%/-6.7%；单键命中增加约 0.133 ns（+4.2%），不将微基准噪声或模拟 L2 收益转述为生产设备吞吐。结果位于 `/private/tmp/local-cache-monitor-{wrapped,direct}-t1.json`，测试日志为 `/private/tmp/local-cache-monitor-direct-tests.log`。本轮没有重新证明相对无观测原版的全部 1/8/32 线程门槛。
+
+下面保留初版有观测包装时的成本对照，基于同一原实现基线，2 forks，3 × 1 s 预热，4–5 × 1 s 测量及 GC profiler。1/8 线程结果分别为每线程独立缓存，不冒充共享热点争用或真实设备吞吐。
 
 | 稳定命中路径 | 1 线程 ns/op 基线 → basic | 8 线程 ns/op 基线 → basic | B/op 基线 → basic |
 | --- | ---: | ---: | ---: |
@@ -47,7 +60,7 @@ JMH 使用同一原实现基线与最终 basic 实现，2 forks，3 × 1 s 预�
 
 容量探针在 768 MiB 最大堆下创建 100 万个 storage，其中 1 万个各缓存 8 Key：计数为 100 万 storage/8 万条目，16 个有界切片完成；最长切片 3.398 ms，调用线程扫描 CPU 合计 20.877 ms。扫描直接驱动而非等待真实 1 s 调度，验证容量和单次预算，不作为周期调度长稳证据。JOL 中 monitor 可达图为 1368 → 1368 字节，storage/Cache 对象在基线和候选均为 48 字节；该结果描述监控对象与单个业务对象布局，不等于整个 manager 的 retained heap。JMX `Statistics` Java 序列化为 3131 字节。
 
-原始本地结果：`/private/tmp/local-cache-monitor-{base-recheck,final}-t1.json`、`/private/tmp/local-cache-monitor-{base,final}-t8.json`、`/private/tmp/local-cache-monitor-{base,final}-single-ttl.json`、`/private/tmp/local-cache-monitor-capacity.log`。生产读取路径采用这些 basic 结果对应的实现；定向回归最终再次编译确认。未执行真实设备链路 CPU/input、P99 A/B、32 线程热点争用和 24 小时 churn/GC/RSS 长稳；既有缓存优化的历史 A/B 不能替代本轮成本验收。实现提交：`ff21c3c`；交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
+原始本地结果：`/private/tmp/local-cache-monitor-{base-recheck,final}-t1.json`、`/private/tmp/local-cache-monitor-{base,final}-t8.json`、`/private/tmp/local-cache-monitor-{base,final}-single-ttl.json`、`/private/tmp/local-cache-monitor-capacity.log`。这些是初版带包装实现的成本记录，不能冒充无包装实现的最终性能数据；扫描算法未变，容量计数/切片证据可复用。未执行真实设备链路 CPU/input、P99 A/B、32 线程热点争用和 24 小时 churn/GC/RSS 长稳；既有缓存优化的历史 A/B 不能替代本轮成本验收。初始实现提交：`ff21c3c`；交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
 
 ## 双、三键全 L1 命中复核
 

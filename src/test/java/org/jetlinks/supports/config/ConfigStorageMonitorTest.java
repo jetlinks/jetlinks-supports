@@ -65,8 +65,6 @@ public class ConfigStorageMonitorTest {
         StepVerifier.create(batchWrite).expectError(IllegalStateException.class).verify();
         assertEquals("old", f.storage.getConfig("name").block().asString());
         assertEquals(1, writes.get());
-        assertEquals(2, f.manager.monitor.writeFailures.sum());
-        assertEquals(0, f.manager.monitor.notificationsSent.sum());
     }
 
     @Test
@@ -177,6 +175,68 @@ public class ConfigStorageMonitorTest {
     }
 
     @Test
+    public void singleValueAndEmptyCompletionFinishOnceBeforeInternalCancellation() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        when(f.backend.get("name")).thenReturn(Mono.just("value"));
+        when(f.backend.get("missing")).thenReturn(Mono.empty());
+        assertEquals("value", f.storage.getConfig("name").block().asString());
+        assertNull(f.storage.getConfig("missing").block());
+        assertEquals(2, f.manager.monitor.loadRequests.sum());
+        assertEquals(2, f.manager.monitor.loadSuccesses.sum());
+        assertEquals(0, f.manager.monitor.loadCancellations.sum());
+        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+        assertEquals(2, Arrays.stream(f.manager.monitor.loadBuckets).mapToLong(bucket -> bucket.sum()).sum());
+    }
+
+    @Test
+    public void singleLoadCoversTheExistingFallbackUntilItsTerminalSignal() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        when(f.backend.get("name")).thenReturn(Mono.empty());
+        Sinks.One<Object> fallback = Sinks.one();
+        Mono<Value> read = f.storage.getConfig("name", fallback.asMono());
+        assertEquals(1, f.manager.monitor.loadRequests.sum());
+        assertEquals(1, f.manager.monitor.loadsInFlight.get());
+        assertEquals(0, f.manager.monitor.loadSuccesses.sum());
+        fallback.emitValue("value", Sinks.EmitFailureHandler.FAIL_FAST);
+        assertEquals("value", read.block().asString());
+        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
+        assertEquals(0, f.manager.monitor.loadCancellations.sum());
+        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+        verify(f.backend, times(1)).get("name");
+    }
+
+    @Test
+    public void fallbackEmptyAndErrorAreConfigurationLoadOutcomes() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        when(f.backend.get(anyString())).thenReturn(Mono.empty());
+        assertNull(f.storage.getConfig("empty", Mono.empty()).block());
+        StepVerifier.create(f.storage.getConfig("error", Mono.error(new IllegalStateException("fallback failed"))))
+            .expectErrorMessage("fallback failed")
+            .verify();
+        assertEquals(2, f.manager.monitor.loadRequests.sum());
+        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
+        assertEquals(1, f.manager.monitor.loadFailures.sum());
+        assertEquals(0, f.manager.monitor.loadCancellations.sum());
+        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+    }
+
+    @Test
+    public void committedWriteCancelsAnActiveFallbackOnce() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        when(f.backend.get("name")).thenReturn(Mono.empty());
+        when(f.backend.put("name", "new")).thenReturn(Mono.just(true));
+        AtomicInteger cancellations = new AtomicInteger();
+        Mono<Value> read = f.storage.getConfig("name", Mono.never().doOnCancel(cancellations::incrementAndGet));
+        assertEquals(1, f.manager.monitor.loadsInFlight.get());
+        assertTrue(f.storage.setConfig("name", "new").block());
+        assertEquals("new", read.block().asString());
+        assertEquals(1, cancellations.get());
+        assertEquals(1, f.manager.monitor.loadCancellations.sum());
+        assertEquals(0, f.manager.monitor.loadSuccesses.sum());
+        assertEquals(0, f.manager.monitor.loadsInFlight.get());
+    }
+
+    @Test
     public void cancelledBatchReleasesItsInFlightCount() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get(anyCollection())).thenReturn(Flux.never());
@@ -216,10 +276,7 @@ public class ConfigStorageMonitorTest {
         StepVerifier.create(f.storage.setConfig("name", "new")).expectError(IllegalStateException.class).verify();
         assertEquals("new", committed.get());
         assertEquals("new", f.storage.getConfig("name").block().asString());
-        assertEquals(1, f.manager.monitor.notificationFailures.sum());
-        assertEquals(1, f.manager.monitor.writeSuccesses.sum());
-        assertEquals(0, f.manager.monitor.writeFailures.sum());
-        assertEquals(0, f.manager.monitor.notificationsSent.sum());
+        verify(f.backend, times(1)).put("name", "new");
     }
 
     @Test
@@ -278,8 +335,6 @@ public class ConfigStorageMonitorTest {
         single.dispose();
         batch.dispose();
         assertEquals("old", f.storage.getConfig("name").block().asString());
-        assertEquals(0, f.manager.monitor.writeSuccesses.sum());
-        assertEquals(0, f.manager.monitor.notificationsSent.sum());
     }
 
     @Test
@@ -355,6 +410,10 @@ public class ConfigStorageMonitorTest {
         first.manager.registerMbean();
         CompositeData statistics = (CompositeData) server.getAttribute(name, "Statistics");
         assertEquals(1L, statistics.get("schemaVersion"));
+        assertFalse(statistics.containsKey("writeSuccesses"));
+        assertFalse(statistics.containsKey("writeFailures"));
+        assertFalse(statistics.containsKey("notificationsSent"));
+        assertFalse(statistics.containsKey("notificationFailures"));
         assertEquals(0L, statistics.get("readSampleInterval"));
         assertEquals(false, server.getAttribute(name, "ReadSamplingEnabled"));
         server.invoke(name, "configureReadSampling", new Object[]{true}, new String[]{"boolean"});
