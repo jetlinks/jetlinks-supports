@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.LongAdder;
  */
 final class ConfigStorageMonitor {
 
+    private static volatile CompositeType statisticsType;
+
     final LongAdder loadRequests = new LongAdder();
     final LongAdder loadKeys = new LongAdder();
     final LongAdder loadSuccesses = new LongAdder();
@@ -132,10 +134,15 @@ final class ConfigStorageMonitor {
         values.put("lastNotificationAt", lastNotificationAt);
         values.put("lastErrorAt", lastErrorAt);
         values.put("lastErrorType", lastErrorType);
-        return openData("ConfigStorageStatistics", values);
+        CompositeType type = statisticsType;
+        if (type == null) {
+            statisticsType = type = createType("ConfigStorageStatistics", values);
+        }
+        return openData(type, values);
     }
 
-    static CompositeData openData(String name, Map<String, Object> values) {
+    // Fixed schemas contain only field names/types, never runtime values or business keys.
+    static CompositeType createType(String name, Map<String, Object> values) {
         String[] names = values.keySet().toArray(new String[0]);
         OpenType<?>[] types = new OpenType<?>[names.length];
         for (int i = 0; i < names.length; i++) {
@@ -144,10 +151,17 @@ final class ConfigStorageMonitor {
                 : value instanceof Boolean ? SimpleType.BOOLEAN : SimpleType.LONG;
         }
         try {
-            CompositeType type = new CompositeType(name, name, names, names, types);
-            return new CompositeDataSupport(type, values);
+            return new CompositeType(name, name, names, names, types);
         } catch (OpenDataException error) {
             throw new IllegalStateException("Invalid config storage statistics schema", error);
+        }
+    }
+
+    static CompositeData openData(CompositeType type, Map<String, Object> values) {
+        try {
+            return new CompositeDataSupport(type, values);
+        } catch (OpenDataException error) {
+            throw new IllegalStateException("Invalid config storage statistics values", error);
         }
     }
 

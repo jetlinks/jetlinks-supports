@@ -7,9 +7,11 @@ import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.lang.SharedPathString;
 import org.jetlinks.supports.event.InternalEventBus;
+import org.reactivestreams.Subscription;
 import org.junit.After;
 import org.junit.Test;
 import reactor.core.Disposable;
+import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -156,6 +158,63 @@ public class ConfigStorageMonitorTest {
         assertEquals(5, r.valueHits.sum());
         assertEquals(4, r.negativeHits.sum());
         assertEquals(1, r.misses.sum());
+    }
+
+    @Test
+    public void sampledGeneralPathCountsInputPositionsAndSingleCachedReads() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        when(f.backend.get(anyCollection())).thenReturn(Flux.just(
+            new AbstractMap.SimpleImmutableEntry<>("name", "value")));
+        f.storage.getConfigs(Arrays.asList("name", "absent", "other")).block();
+        f.manager.monitor.reads = new ConfigStorageMonitor.ReadCounters(1);
+        Values values = f.storage.getConfigs(Arrays.asList("name", "absent", "name", "other", "fresh")).block();
+        assertEquals("value", values.getString("name", ""));
+        assertFalse(values.getValue("fresh").isPresent());
+        f.storage.getConfigs(Collections.emptyList()).block();
+        assertEquals("value", f.storage.getConfig("name").block().asString());
+        assertNull(f.storage.getConfig("absent").block());
+        assertNull(f.storage.getConfig("fresh").block());
+        ConfigStorageMonitor.ReadCounters reads = f.manager.monitor.reads;
+        assertEquals(5, reads.calls.sum());
+        assertEquals(3, reads.valueHits.sum());
+        assertEquals(4, reads.negativeHits.sum());
+        assertEquals(1, reads.misses.sum());
+    }
+
+    @Test
+    public void downstreamCompletionFailureDoesNotFinishBatchStatisticsTwice() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        when(f.backend.get(anyCollection())).thenReturn(Flux.just(
+            new AbstractMap.SimpleImmutableEntry<>("name", "value")));
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        f.storage.getConfigs(Collections.singleton("name")).subscribe(new CoreSubscriber<Values>() {
+            @Override
+            public void onSubscribe(Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(Values values) {
+                throw new IllegalStateException("consumer failed");
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                failure.set(error);
+            }
+
+            @Override
+            public void onComplete() {
+                fail("The failed consumer must receive onError");
+            }
+        });
+        assertNotNull(failure.get());
+        assertEquals("consumer failed", failure.get().getMessage());
+        assertEquals(1, f.manager.monitor.loadRequests.sum());
+        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
+        assertEquals(0, f.manager.monitor.loadFailures.sum());
+        assertEquals(0, f.manager.monitor.loadCancellations.sum());
+        assertEquals(0, f.manager.monitor.loadsInFlight.get());
     }
 
     @Test

@@ -24,6 +24,7 @@ import reactor.util.context.Context;
 
 import javax.annotation.Nonnull;
 import javax.management.openmbean.CompositeData;
+import javax.management.openmbean.CompositeType;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
@@ -72,6 +73,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     private static final Mono<Values> EMPTY_VALUES_MONO = Mono.just(EMPTY_VALUES);
 
+    private static volatile CompositeType inspectionType;
+
     private final Map<String, Cache> caches;
     final String id;
     private final EventBusStorageManager manager;
@@ -115,6 +118,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     CompositeData[] inspect(int limit) {
         List<CompositeData> result = new ArrayList<>(Math.min(limit, caches.size()));
+        CompositeType type = inspectionType;
         for (Map.Entry<String, Cache> entry : caches.entrySet()) {
             Cache cache = entry.getValue();
             Map<String, Object> fields = new LinkedHashMap<>();
@@ -124,7 +128,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             fields.put("state", cache.isExpired() ? "expired" : cache.loading != null ? "loading"
                 : cache.cached == null ? "empty" : cache.cached == NULL ? "negative" : "value");
             fields.put("version", (long) cache.version);
-            result.add(ConfigStorageMonitor.openData("LocalConfigEntry", fields));
+            if (type == null) {
+                inspectionType = type = ConfigStorageMonitor.createType("LocalConfigEntry", fields);
+            }
+            result.add(ConfigStorageMonitor.openData(type, fields));
             if (result.size() == limit) {
                 break;
             }

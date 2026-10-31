@@ -26,41 +26,30 @@
 
 实现不新增 Key 级监控字段、Span、日志或周期回源，不扩展通知 wire 格式，不提供分布式一致性承诺、诊断任务系统或前端页面。读取抽样因快路径成本默认关闭，按需启用时应重新评估业务负载。
 
-### 本轮验证与限制
+复杂度与成本收敛只复用两种固定、不可变的 JMX schema；schema 仅持有字段名和类型，不保留运行时值、业务 Key 或 manager。读取方法保持既有实现，不增加快路径策略层。加载终态 CAS 仍然必要：`BaseSubscriber` 的完成回调抛异常后可能直接调用错误回调，单键更新值也会取消自身；两条路径都必须防止重复结算。
 
-隔离副本完成 Maven 编译与 40 项定向测试（`ConfigStorageMonitorTest` 21、原存储测试 15、含真实 Redis 的管理器测试 4），零失败/跳过。覆盖未订阅/失败/取消写入、通知发布失败的部分成功、加载中单 Key/整组失效、迟到单键与批量正负结果、重试/取消、正负抽样与回退记账、被动查看不续期不回源、数量/Key 长度上限、扫描预算/超时及 MBean 注册归属和关闭；同时覆盖去除包装后的单键有值/空值终态、自取消去重、自定义 fallback 的等待、成功、空完成、失败及被写入取消。
+### 验证与限制
+
+最终隔离副本完成 Maven 编译与 42 项定向测试（`ConfigStorageMonitorTest` 23、原存储测试 15、含真实 Redis 的管理器测试 4），零失败/错误/跳过。覆盖未订阅/失败/取消写入、通知发布失败的部分成功、加载中单 Key/整组失效、迟到单键与批量正负结果、重试/取消、正负抽样与回退记账、被动查看不续期不回源、数量/Key 长度上限、扫描预算/超时及 MBean 注册归属和关闭；包括自定义 fallback 的等待/成功/空完成/失败/取消、重复 Key 按输入位置计数，以及完成回调抛异常后转入错误回调时只结算一次。
 
 ```bash
 mvn -o -Dtest=LocalCacheClusterConfigStorageTest,EventBusStorageManagerTest,ConfigStorageMonitorTest test
 ```
 
-去除包装后的对照以同一 PR 初版为基线：JMH 1 线程、2 forks、3 × 1 s 预热、4 × 1 s 测量、GC profiler，默认 basic、TTL 关闭，模拟 L2。现有生产命中/未命中夹具未修改。
+本轮 JMH 以同一 PR 已去除观测包装的 `b382e14` 为基线。JDK 21、1 线程、2 forks、3 × 1 s 预热、4 × 1 s 测量及 GC profiler；默认 basic、关闭 TTL，查看夹具预热 128 个本地正值，不在测量中访问外部存储。
 
-| 路径 | 包装版 → 直接记录 ns/op | 包装版 → 直接记录 B/op |
+| 观测操作 | schema 每次构建 → 复用 μs/op | schema 每次构建 → 复用 B/op |
 | --- | ---: | ---: |
-| 8 键全部未命中 | 3334.912 → 2884.411 | 5800.172 → 5520.142 |
-| 8 键部分未命中 | 2905.182 → 2709.334 | 4240.144 → 3968.132 |
-| 8 键稳定命中 | 56.433 → 56.101 | 416.014 → 416.014 |
-| 单键 `getConfig` 稳定命中 | 3.143 → 3.276 | 0 → 0 |
+| `Statistics` 快照 | 4.965 → 3.122 | 8896.320 → 4808.187 |
+| `inspect` 查看 128 条目 | 29.638 → 18.703 | 149581.600 → 74826.891 |
 
-两条未命中路径分配减少约 280/272 B/次，耗时分别约 -13.5%/-6.7%；单键命中增加约 0.133 ns（+4.2%），不将微基准噪声或模拟 L2 收益转述为生产设备吞吐。结果位于 `/private/tmp/local-cache-monitor-{wrapped,direct}-t1.json`，测试日志为 `/private/tmp/local-cache-monitor-direct-tests.log`。本轮没有重新证明相对无观测原版的全部 1/8/32 线程门槛。
+这两个本地观测探针的平均耗时约降低 37%，分配分别降低约 46% 和 50%。8 键热命中分配仍为约 416 B/次，单键热命中仍为 0 B/次。连跑中的纳秒级耗时波动明显，因此另做候选先运行、基线后运行的反序复核：8 键热命中为 58.739 ± 1.371 → 58.375 ± 0.773 ns/次，置信区间重叠，没有稳定耗时差异。读取方法与该基线逐字一致；不为代码行数减少而保留未经证明的热路径重排，也不将微基准转述为业务吞吐收益或全部性能门槛通过。
 
-下面保留初版有观测包装时的成本对照，基于同一原实现基线，2 forks，3 × 1 s 预热，4–5 × 1 s 测量及 GC profiler。1/8 线程结果分别为每线程独立缓存，不冒充共享热点争用或真实设备吞吐。
+结果为 `/private/tmp/local-cache-monitor-review-{before,final}-t1.json`，反序复核为 `/private/tmp/local-cache-monitor-schema-control-{review,direct}.json`，观测探针为 `/private/tmp/ConfigStorageObservationBenchmark.java`；最终测试日志为 `/private/tmp/local-cache-monitor-review-final-tests.log`。先前去除包装已消除未命中链路的额外观测分配，本轮只测量固定 schema 复用的增量，未重新证明相对无观测原版的全部 1/8/32 线程门槛。读取抽样继续默认关闭；早期抽样微基准未满足快路径成本目标。
 
-| 稳定命中路径 | 1 线程 ns/op 基线 → basic | 8 线程 ns/op 基线 → basic | B/op 基线 → basic |
-| --- | ---: | ---: | ---: |
-| 批量 2 键正值 | 7.379 → 7.669 | 9.616 → 10.198 | 48 → 48 |
-| 批量 3 键正值 | 11.378 → 11.658 | 14.535 → 15.952 | 56 → 56 |
-| 批量 8 键正值 | 68.670 → 55.592 | 77.148 → 78.766 | 416 → 416 |
-| 批量 8 键混合 | 53.498 → 45.706 | 未复测 | 352 → 352 |
-| 单键 `getConfig` 正值 | 3.118 → 3.158 | 3.285 → 3.801 | 0 → 0 |
-| 单键 `getConfig` 负值 | 2.888 → 3.366 | 3.341 → 3.534 | 0 → 0 |
+扫描算法未变，复用既有容量证据：768 MiB 最大堆下创建 100 万个 storage，其中 1 万个各缓存 8 Key，计数为 100 万 storage/8 万条目，16 个有界切片完成；最长切片 3.398 ms，调用线程扫描 CPU 合计 20.877 ms。探针直接驱动扫描，验证容量和单次预算，不作为真实周期调度长稳证据；初版 monitor 布局和统计序列化大小不再作为当前数据。
 
-单线程开启 60 s 空闲 TTL 后，单键正值为 28.293 → 27.569 ns，负值为 28.181 → 28.055 ns，均 0 B/op。跨轮和多线程有噪声，上表不作为业务收益承诺。稳定命中分配不变，但 2/3 键等部分路径仍超过原 basic 3% 相对回退目标（例如 8 线程 3 键约 +9.7%，绝对 +1.42 ns）；不能宣称全部成本门槛通过。早期 `sampled(1/1024)` 对 2/3/8 键分别约 +22.7%/+16.2%/+31.4%，因此默认关闭读取抽样，保留一个可切换的低成本判定分支，不引入额外快路径策略层。
-
-容量探针在 768 MiB 最大堆下创建 100 万个 storage，其中 1 万个各缓存 8 Key：计数为 100 万 storage/8 万条目，16 个有界切片完成；最长切片 3.398 ms，调用线程扫描 CPU 合计 20.877 ms。扫描直接驱动而非等待真实 1 s 调度，验证容量和单次预算，不作为周期调度长稳证据。JOL 中 monitor 可达图为 1368 → 1368 字节，storage/Cache 对象在基线和候选均为 48 字节；该结果描述监控对象与单个业务对象布局，不等于整个 manager 的 retained heap。JMX `Statistics` Java 序列化为 3131 字节。
-
-原始本地结果：`/private/tmp/local-cache-monitor-{base-recheck,final}-t1.json`、`/private/tmp/local-cache-monitor-{base,final}-t8.json`、`/private/tmp/local-cache-monitor-{base,final}-single-ttl.json`、`/private/tmp/local-cache-monitor-capacity.log`。这些是初版带包装实现的成本记录，不能冒充无包装实现的最终性能数据；扫描算法未变，容量计数/切片证据可复用。未执行真实设备链路 CPU/input、P99 A/B、32 线程热点争用和 24 小时 churn/GC/RSS 长稳；既有缓存优化的历史 A/B 不能替代本轮成本验收。初始实现提交：`ff21c3c`；交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
+真实设备链路 CPU/input、P99 A/B、32 线程共享热点争用和 24 小时 churn/GC/RSS 长稳尚未执行；既有缓存优化的历史 A/B 不能替代本轮验收。初始实现提交：`ff21c3c`；交付 PR：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)，完整性能验收前保持草稿。
 
 ## 双、三键全 L1 命中复核
 
