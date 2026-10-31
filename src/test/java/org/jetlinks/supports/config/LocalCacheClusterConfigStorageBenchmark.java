@@ -79,7 +79,7 @@ public class LocalCacheClusterConfigStorageBenchmark {
     public abstract static class BaseState {
         @Param({"-1"})
         public long ttlMillis;
-        @Param({"basic", "sampled"})
+        @Param({"basic"})
         public String monitoring;
 
         LocalCacheClusterConfigStorage storage;
@@ -100,7 +100,6 @@ public class LocalCacheClusterConfigStorageBenchmark {
                 .thenAnswer(invocation -> load(invocation.getArgument(0)));
 
             manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
-            manager.monitor.setReadSamplingEnabled("sampled".equals(monitoring));
 
             storage = new LocalCacheClusterConfigStorage(
                 "benchmark",

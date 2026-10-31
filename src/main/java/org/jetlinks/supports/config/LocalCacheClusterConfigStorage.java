@@ -29,6 +29,7 @@ import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -57,11 +58,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private static final AtomicReferenceFieldUpdater<Cache, Disposable> CACHE_LOADING = AtomicReferenceFieldUpdater
         .newUpdater(Cache.class, Disposable.class, "loading");
 
-    private static final AtomicIntegerFieldUpdater<MultiCacheLoader> MULTI_LOAD_ENDED = AtomicIntegerFieldUpdater
-        .newUpdater(MultiCacheLoader.class, "loadEnded");
+    private static final AtomicLongFieldUpdater<MultiCacheLoader> MULTI_LOAD_STARTED = AtomicLongFieldUpdater
+        .newUpdater(MultiCacheLoader.class, "loadStarted");
 
-    private static final AtomicIntegerFieldUpdater<Cache.Loader> SINGLE_LOAD_ENDED = AtomicIntegerFieldUpdater
-        .newUpdater(Cache.Loader.class, "loadEnded");
+    private static final AtomicLongFieldUpdater<Cache.Loader> SINGLE_LOAD_STARTED = AtomicLongFieldUpdater
+        .newUpdater(Cache.Loader.class, "loadStarted");
 
     private static final Map<Value, Value> shared = new ConcurrentReferenceHashMap<>(1024);
 
@@ -170,7 +171,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Value> getConfig(String key) {
-        return getConfig(key, Mono.empty());
+        return getOrCreateCache(key).getRef(null);
     }
 
     @Override
@@ -181,8 +182,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
-        ConfigStorageMonitor.ReadCounters sample = manager.monitor.sampleRead();
-        Mono<Values> cachedValues = getCachedValues(keys, sample);
+        Mono<Values> cachedValues = getCachedValues(keys);
         if (cachedValues != null) {
             return cachedValues;
         }
@@ -190,9 +190,6 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         Map<String, Object> loaded = null;
         //获取二级缓存中加载的配置
         Map<String, Cache> cacheLoaded = null;
-        int hits = 0;
-        int negatives = 0;
-        int misses = 0;
         for (String key : keys) {
             Cache local = getOrCreateCache(key);
             Value cached = local.getCached();
@@ -200,22 +197,12 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 //命中一级缓存
                 Object value = cached.get();
                 if (value != null) {
-                    if (sample != null) {
-                        hits++;
-                    }
                     if (loaded == null) {
                         loaded = Maps.newHashMapWithExpectedSize(keys.size());
                     }
                     loaded.put(key, value);
-                } else {
-                    if (sample != null) {
-                        negatives++;
-                    }
                 }
             } else {
-                if (sample != null) {
-                    misses++;
-                }
                 if (cacheLoaded == null) {
                     cacheLoaded = Maps.newHashMapWithExpectedSize(remaining);
                 }
@@ -223,19 +210,12 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             }
             remaining--;
         }
-        if (sample != null) {
-            sample.record(hits, negatives, misses);
-        }
         //全部来自一级缓存则直接返回
         if (cacheLoaded == null) {
             return loaded == null
                 ? EMPTY_VALUES_MONO
                 : Mono.just(Values.of(loaded));
         }
-        if (loaded == null) {
-            loaded = Maps.newHashMapWithExpectedSize(cacheLoaded.size());
-        }
-
         //需要从二级缓存中加载的配置
         Set<String> needLoadKeys = cacheLoaded.keySet();
 
@@ -247,7 +227,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     }
 
-    private Mono<Values> getCachedValues(Collection<String> keys, ConfigStorageMonitor.ReadCounters sample) {
+    private Mono<Values> getCachedValues(Collection<String> keys) {
         int count = keys.size();
         if (count != 2 && count != 3) {
             return null;
@@ -266,10 +246,6 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         Object firstValue = first.get();
         Object secondValue = second.get();
         if (count == 2) {
-            if (sample != null) {
-                int negatives = (firstValue == null ? 1 : 0) + (secondValue == null ? 1 : 0);
-                sample.record(2 - negatives, negatives, 0);
-            }
             return firstValue == null && secondValue == null
                 ? EMPTY_VALUES_MONO
                 : Mono.just(Values.of(firstKey, firstValue, secondKey, secondValue));
@@ -280,11 +256,6 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             return null;
         }
         Object thirdValue = third.get();
-        if (sample != null) {
-            int negatives = (firstValue == null ? 1 : 0) + (secondValue == null ? 1 : 0)
-                + (thirdValue == null ? 1 : 0);
-            sample.record(3 - negatives, negatives, 0);
-        }
         return firstValue == null && secondValue == null && thirdValue == null
             ? EMPTY_VALUES_MONO
             : Mono.just(Values.of(firstKey, firstValue, secondKey, secondValue, thirdKey, thirdValue));
@@ -446,10 +417,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         @Override
         public void subscribe(@Nonnull CoreSubscriber<? super Values> actual) {
-            // A retry/subscription must not reuse maps consumed by an earlier attempt.
-            source.subscribe(
-                new MultiCacheLoader(new HashMap<>(keys), new HashMap<>(container), actual)
-            );
+            // Targets and L1 seeds stay immutable; only each subscription's result is mutable.
+            source.subscribe(new MultiCacheLoader(keys, container, actual));
         }
 
     }
@@ -458,14 +427,20 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         private final Map<String, Cache> keys;
         private final Map<String, Object> container;
         private final CoreSubscriber<? super Values> actual;
-        private final long loadStarted;
-        volatile int loadEnded;
+        volatile long loadStarted;
+        private int remaining;
 
         MultiCacheLoader(Map<String, Cache> keys, Map<String, Object> container,
                          CoreSubscriber<? super Values> actual) {
             this.keys = keys;
-            this.container = container;
+            this.container = Maps.newHashMapWithExpectedSize(keys.size() + (container == null ? 0 : container.size()));
+            if (container != null) {
+                this.container.putAll(container);
+                // A repeated input key can observe a miss and then a concurrent L1 update.
+                keys.keySet().forEach(this.container::remove);
+            }
             this.actual = actual;
+            this.remaining = keys.size();
             this.loadStarted = manager.monitor.loadStarted(keys.size());
         }
 
@@ -485,8 +460,9 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             String key = entry.getKey();
             Object value = entry.getValue();
             //加载到一级缓存中
-            Cache cache = keys.remove(key);
-            if (cache == null) {
+            Cache cache = keys.get(key);
+            // Claim and store the first result together; the map is private until completion.
+            if (cache == null || container.putIfAbsent(key, value == null ? NULL : value) != null) {
                 // Do not let an unexpected/duplicate L2 record resurrect an invalidated entry.
                 request(1);
                 return;
@@ -497,15 +473,19 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (val == null) {
                 val = value;
             }
-            //设置最新的值,防止并发更新导致不一致
-            if (val != null) {
+            // Only a concurrent cache update needs to replace the result already recorded above.
+            if (val != value) {
                 container.put(key, val);
+            }
+            if (val != null) {
+                remaining--;
             }
             request(1);
         }
 
         @Override
         protected void hookOnError(@Nonnull Throwable throwable) {
+            manager.monitor.error(throwable);
             finishLoad(throwable, false);
             actual.onError(throwable);
         }
@@ -514,9 +494,17 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         protected void hookOnComplete() {
             finishLoad(null, false);
             //还有配置没加载出来,说明这些配置不存在，则全部设置为null
-            if (!keys.isEmpty()) {
+            if (remaining != 0) {
                 for (Map.Entry<String, Cache> entry : keys.entrySet()) {
                     String needLoadKey = entry.getKey();
+                    Object received = container.get(needLoadKey);
+                    if (received == NULL) {
+                        container.remove(needLoadKey);
+                        continue;
+                    }
+                    if (received != null) {
+                        continue;
+                    }
                     Cache cache = entry.getValue();
                     cache.setValue(cache.version, null);
                     //设置最新的值,防止并发更新导致不一致
@@ -538,8 +526,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         }
 
         private void finishLoad(Throwable error, boolean cancelled) {
-            if (MULTI_LOAD_ENDED.compareAndSet(this, 0, 1)) {
-                manager.monitor.loadFinished(loadStarted, error, cancelled);
+            long started = loadStarted;
+            // Zero represents an unselected or already-finished sample; claim the timestamp once.
+            if (started != 0 && MULTI_LOAD_STARTED.compareAndSet(this, started, 0)) {
+                manager.monitor.loadFinished(started, error, cancelled);
             }
         }
 
@@ -581,32 +571,18 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
         @SuppressWarnings("unchecked")
         Mono<Value> getRef(Mono<Object> loader) {
-            ConfigStorageMonitor.ReadCounters sample = manager.monitor.sampleRead();
             Mono<Value> ref = CACHE_REF.get(this);
             if (isExpired() || ref == null) {
-                if (sample != null) {
-                    sample.record(0, 0, 1);
-                }
                 return reload(loader);
             }
             updateTime();
             Value cached = CACHED.get(this);
             if (cached != null && !(ref instanceof Callable)) {
-                if (sample != null) {
-                    sample.record(cached == NULL ? 0 : 1, cached == NULL ? 1 : 0, 0);
-                }
                 // 补偿，在某些极端情况下，await没有正确清理？
                 if (CACHE_LOADING.get(this) == null && AWAIT.get(this) != null) {
                     error(new BusinessException.NoStackTrace("conflict cache load"));
                 }
                 return cached.get() == null ? Mono.empty() : Mono.just(cached);
-            }
-            if (sample != null) {
-                if (cached != null) {
-                    sample.record(cached == NULL ? 0 : 1, cached == NULL ? 1 : 0, 0);
-                } else {
-                    sample.record(0, 0, 1);
-                }
             }
             return ref;
         }
@@ -712,9 +688,12 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     if (old != null) {
                         old.dispose();
                     }
-                    clusterCache.get(key)
-                        .switchIfEmpty(loader)
-                        .subscribe(_loader);
+                    Mono<Object> source = clusterCache.get(key);
+                    // A default read has no fallback: avoid constructing an empty switch chain.
+                    if (loader != null) {
+                        source = source.switchIfEmpty(loader);
+                    }
+                    source.subscribe(_loader);
                     return ref;
                 }
 
@@ -781,8 +760,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         private class Loader extends BaseSubscriber<Object> {
             private final int loadingVersion;
             private boolean hasValue;
-            private final long loadStarted = manager.monitor.loadStarted(1);
-            volatile int loadEnded;
+            volatile long loadStarted = manager.monitor.loadStarted(1);
 
             @Override
             protected void hookOnSubscribe(@Nonnull Subscription subscription) {
@@ -830,8 +808,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             }
 
             private void finishLoad(Throwable error, boolean cancelled) {
-                if (SINGLE_LOAD_ENDED.compareAndSet(this, 0, 1)) {
-                    manager.monitor.loadFinished(loadStarted, error, cancelled);
+                long started = loadStarted;
+                // setValue can cancel this subscriber; completion and cancellation share one claim.
+                if (started != 0 && SINGLE_LOAD_STARTED.compareAndSet(this, started, 0)) {
+                    manager.monitor.loadFinished(started, error, cancelled);
                 }
             }
         }

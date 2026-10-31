@@ -345,16 +345,6 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
         }
 
         @Override
-        public boolean isReadSamplingEnabled() {
-            return monitor.reads != null;
-        }
-
-        @Override
-        public void configureReadSampling(boolean enabled) {
-            monitor.setReadSamplingEnabled(enabled);
-        }
-
-        @Override
         public CompositeData[] inspect(String storageId, int maxKeys) {
             LocalCacheClusterConfigStorage storage = cache.get(storageId);
             return storage == null ? new CompositeData[0] : storage.inspect(Math.max(1, Math.min(128, maxKeys)));
@@ -438,12 +428,8 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     /** Node-level observations; counts are weakly consistent, inspection never loads or renews L1. */
     public interface ConfigStorageManagerMbean {
 
+        /** Load fields are sample values with an explicit interval; zero samples do not mean zero traffic. */
         CompositeData getStatistics();
-
-        boolean isReadSamplingEnabled();
-
-        /** Changes only read sampling; starting/stopping a sample window creates a new epoch. */
-        void configureReadSampling(boolean enabled);
 
         /** At most 128 local keys and their states, without values or a read from Redis. */
         CompositeData[] inspect(String storageId, int maxKeys);

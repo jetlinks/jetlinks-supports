@@ -142,43 +142,60 @@ public class ConfigStorageMonitorTest {
     }
 
     @Test
-    public void sampledDecisionsCountPositiveNegativeAndFastPathFallbackOnce() {
+    public void loadSnapshotsDescribeSamplesAndDoNotClaimReadCounts() {
         Fixture f = fixture(-1, new InternalEventBus());
+        f.manager.monitor.loadSampleMask = 1023;
+        CompositeData defaults = bean(f).getStatistics();
+        assertEquals(1024L, defaults.get("loadSampleInterval"));
+        assertFalse(defaults.containsKey("loadRequests"));
+        assertFalse(defaults.containsKey("loadsInFlight"));
+        assertFalse(defaults.containsKey("valueHitKeys"));
+        assertFalse(defaults.containsKey("readSampleInterval"));
+        f.manager.monitor.loadSampleMask = 0;
         when(f.backend.get(anyCollection())).thenReturn(Flux.just(
             new AbstractMap.SimpleImmutableEntry<>("name", "value")));
-        f.storage.getConfigs(Arrays.asList("name", "absent", "other")).block();
-        f.manager.monitor.reads = new ConfigStorageMonitor.ReadCounters(1);
-        f.storage.getConfigs(Arrays.asList("name", "absent")).block();
-        f.storage.getConfigs(Arrays.asList("name", "absent", "other")).block();
-        f.storage.getConfigs(Arrays.asList("name", "name", "name")).block();
-        f.storage.clearLocalCache(CacheNotify.expires("device:test", Collections.singleton("name")));
-        f.storage.getConfigs(Arrays.asList("name", "absent")).block();
-        ConfigStorageMonitor.ReadCounters r = f.manager.monitor.reads;
-        assertEquals(4, r.calls.sum());
-        assertEquals(5, r.valueHits.sum());
-        assertEquals(4, r.negativeHits.sum());
-        assertEquals(1, r.misses.sum());
+        f.storage.getConfigs(Arrays.asList("name", "missing")).block();
+        f.storage.getConfig("name").block();
+        f.storage.getConfigs(Arrays.asList("name", "missing", "name")).block();
+        CompositeData sampled = bean(f).getStatistics();
+        assertEquals(1L, sampled.get("loadSampleInterval"));
+        assertEquals(1L, sampled.get("sampledLoadRequests"));
+        assertEquals(2L, sampled.get("sampledLoadKeys"));
+        assertEquals(1L, sampled.get("sampledLoadSuccesses"));
+        assertEquals(0L, sampled.get("sampledLoadsInFlight"));
     }
 
     @Test
-    public void sampledGeneralPathCountsInputPositionsAndSingleCachedReads() {
+    public void repeatedBatchFiltersDuplicateAndNegativeRecordsWithoutMutatingTargets() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get(anyCollection())).thenReturn(Flux.just(
-            new AbstractMap.SimpleImmutableEntry<>("name", "value")));
-        f.storage.getConfigs(Arrays.asList("name", "absent", "other")).block();
-        f.manager.monitor.reads = new ConfigStorageMonitor.ReadCounters(1);
-        Values values = f.storage.getConfigs(Arrays.asList("name", "absent", "name", "other", "fresh")).block();
-        assertEquals("value", values.getString("name", ""));
-        assertFalse(values.getValue("fresh").isPresent());
-        f.storage.getConfigs(Collections.emptyList()).block();
-        assertEquals("value", f.storage.getConfig("name").block().asString());
-        assertNull(f.storage.getConfig("absent").block());
-        assertNull(f.storage.getConfig("fresh").block());
-        ConfigStorageMonitor.ReadCounters reads = f.manager.monitor.reads;
-        assertEquals(5, reads.calls.sum());
-        assertEquals(3, reads.valueHits.sum());
-        assertEquals(4, reads.negativeHits.sum());
-        assertEquals(1, reads.misses.sum());
+            new AbstractMap.SimpleImmutableEntry<>("name", "first"),
+            new AbstractMap.SimpleImmutableEntry<>("name", "duplicate"),
+            new AbstractMap.SimpleImmutableEntry<>("negative", null),
+            new AbstractMap.SimpleImmutableEntry<>("unexpected", "ignored")));
+        Mono<Values> read = f.storage.getConfigs(Arrays.asList("name", "negative", "missing"));
+        for (int i = 0; i < 2; i++) {
+            assertEquals(Collections.singletonMap("name", "first"), read.block().getAllValues());
+        }
+        assertFalse(f.entries.containsKey("unexpected"));
+        assertEquals(2, f.entries.get("name").version);
+        assertEquals(2, f.entries.get("negative").version);
+        assertEquals(2, f.entries.get("missing").version);
+    }
+
+    @Test
+    public void retryAfterPartialBatchDoesNotRetainAbandonedResults() {
+        Fixture f = fixture(-1, new InternalEventBus());
+        AtomicInteger attempt = new AtomicInteger();
+        when(f.backend.get(anyCollection())).thenReturn(Flux.defer(() -> attempt.incrementAndGet() == 1
+            ? Flux.concat(Flux.just(new AbstractMap.SimpleImmutableEntry<>("old", "abandoned")),
+                          Flux.error(new IllegalStateException("retry")))
+            : Flux.just(new AbstractMap.SimpleImmutableEntry<>("name", "current"))));
+        Values result = f.storage.getConfigs(Arrays.asList("old", "name")).retry(1).block();
+        assertEquals(Collections.singletonMap("name", "current"), result.getAllValues());
+        assertEquals(2, f.manager.monitor.loadRequests.sum());
+        assertEquals(1, f.manager.monitor.loadFailures.sum());
+        assertEquals(1, f.manager.monitor.loadSuccesses.sum());
     }
 
     @Test
@@ -218,15 +235,12 @@ public class ConfigStorageMonitorTest {
     }
 
     @Test
-    public void sharingALoadIsAMissAndDoesNotIssueAnotherPhysicalRead() {
+    public void sharedReadersDoNotStartAnotherLoadSample() {
         Fixture f = fixture(-1, new InternalEventBus());
-        f.manager.monitor.reads = new ConfigStorageMonitor.ReadCounters(1);
         Sinks.One<Object> source = Sinks.one();
         when(f.backend.get("name")).thenReturn(source.asMono());
         Mono<Value> first = f.storage.getConfig("name");
         Mono<Value> second = f.storage.getConfig("name");
-        assertEquals(2, f.manager.monitor.reads.misses.sum());
-        assertEquals(0, f.manager.monitor.reads.valueHits.sum());
         assertEquals(1, f.manager.monitor.loadRequests.sum());
         source.emitValue("value", Sinks.EmitFailureHandler.FAIL_FAST);
         assertEquals("value", first.block().asString());
@@ -473,17 +487,12 @@ public class ConfigStorageMonitorTest {
         assertFalse(statistics.containsKey("writeFailures"));
         assertFalse(statistics.containsKey("notificationsSent"));
         assertFalse(statistics.containsKey("notificationFailures"));
-        assertEquals(0L, statistics.get("readSampleInterval"));
-        assertEquals(false, server.getAttribute(name, "ReadSamplingEnabled"));
-        server.invoke(name, "configureReadSampling", new Object[]{true}, new String[]{"boolean"});
-        CompositeData enabled = (CompositeData) server.getAttribute(name, "Statistics");
-        assertEquals(1024L, enabled.get("readSampleInterval"));
-        assertNotEquals(statistics.get("statisticsEpoch"), enabled.get("statisticsEpoch"));
-        String epoch = (String) enabled.get("statisticsEpoch");
-        server.invoke(name, "configureReadSampling", new Object[]{false}, new String[]{"boolean"});
-        CompositeData disabled = (CompositeData) server.getAttribute(name, "Statistics");
-        assertEquals(0L, disabled.get("readSampleInterval"));
-        assertNotEquals(epoch, disabled.get("statisticsEpoch"));
+        assertEquals(1L, statistics.get("loadSampleInterval"));
+        assertTrue(statistics.containsKey("sampledLoadRequests"));
+        assertFalse(Arrays.stream(server.getMBeanInfo(name).getAttributes())
+            .anyMatch(attribute -> "ReadSamplingEnabled".equals(attribute.getName())));
+        assertFalse(Arrays.stream(server.getMBeanInfo(name).getOperations())
+            .anyMatch(operation -> "configureReadSampling".equals(operation.getName())));
         assertEquals(0, ((CompositeData[]) server.invoke(name, "inspect", new Object[]{"absent", 5},
             new String[]{String.class.getName(), "int"})).length);
         second.manager.registerMbean();
@@ -500,6 +509,7 @@ public class ConfigStorageMonitorTest {
         Fixture f = new Fixture();
         f.backend = mock(ClusterCache.class);
         f.manager = new EventBusStorageManager(mock(ClusterManager.class), bus, ttl);
+        f.manager.monitor.loadSampleMask = 0;
         managers.add(f.manager);
         f.entries = new ConcurrentHashMap<>();
         f.storage = new LocalCacheClusterConfigStorage("device:test", f.manager, f.backend, ttl, null, f.entries);

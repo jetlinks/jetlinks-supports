@@ -29,7 +29,7 @@ import static org.mockito.Mockito.mock;
 public class ConfigStorageConcurrencyBenchmark {
     @State(Scope.Benchmark)
     public static class Shared {
-        @Param({"basic", "sampled"})
+        @Param({"basic"})
         public String monitoring;
         @Param({"-1"})
         public long ttlMillis;
@@ -42,16 +42,6 @@ public class ConfigStorageConcurrencyBenchmark {
         @Setup(Level.Trial)
         public void setup() throws Exception {
             manager = new EventBusStorageManager(mock(ClusterManager.class), new InternalEventBus());
-            try {
-                Field monitorField = EventBusStorageManager.class.getDeclaredField("monitor");
-                monitorField.setAccessible(true);
-                Object monitor = monitorField.get(manager);
-                java.lang.reflect.Method method = monitor.getClass().getDeclaredMethod("setReadSamplingEnabled", boolean.class);
-                method.setAccessible(true);
-                method.invoke(monitor, "sampled".equals(monitoring));
-            } catch (NoSuchFieldException originalWithoutMonitoring) {
-                if (!"basic".equals(monitoring)) throw new IllegalArgumentException("Baseline has no sampled mode");
-            }
             backend = (ClusterCache<String, Object>) Proxy.newProxyInstance(
                 ClusterCache.class.getClassLoader(), new Class<?>[]{ClusterCache.class}, (proxy, method, arguments) -> {
                     if ("get".equals(method.getName())) {

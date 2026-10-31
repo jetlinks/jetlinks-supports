@@ -13,9 +13,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * Manager-scoped operational statistics. L1 decisions are sampled per API call; actual
- * loads and invalidations are recorded by their existing owners. This class only counts and
- * snapshots; it neither wraps publishers nor retains keys, values or errors. A load attempt
+ * Manager-scoped operational statistics; L1 hits have no observation work. Existing owners
+ * sample loads at 1/1024 and record invalidation events. Snapshots expose the sample interval,
+ * never full load counts. This class neither wraps publishers nor retains keys, values or errors.
+ * A load attempt
  * includes the single-key fallback, while shared readers do not create another attempt.
  */
 final class ConfigStorageMonitor {
@@ -42,29 +43,13 @@ final class ConfigStorageMonitor {
     final LongAdder staleFallbacks = new LongAdder();
     final LongAdder rejectedLoadResults = new LongAdder();
     private final String instanceId = UUID.randomUUID().toString();
-    // Disabled by default: the fastest L1 hits must not pay for random sampling.
-    volatile ReadCounters reads;
-    private volatile ReadCounters disabledReads = new ReadCounters(0);
-    volatile long lastLoadSuccessAt;
+    // Fixed production ratio; tests use zero to deterministically exercise all terminal paths.
+    int loadSampleMask = 1023;
+    // Keep sampled writes separate from the read-mostly sampling policy.
+    final AtomicLong lastLoadSuccessAt = new AtomicLong();
     volatile long lastNotificationAt;
     volatile long lastErrorAt;
     volatile String lastErrorType = "";
-
-    ReadCounters sampleRead() {
-        ReadCounters current = reads;
-        return current != null && ThreadLocalRandom.current().nextInt(current.interval) == 0 ? current : null;
-    }
-
-    synchronized void setReadSamplingEnabled(boolean enabled) {
-        if ((reads != null) != enabled) {
-            if (enabled) {
-                reads = new ReadCounters(1024);
-            } else {
-                disabledReads = new ReadCounters(0);
-                reads = null;
-            }
-        }
-    }
 
     void error(Throwable error) {
         lastErrorType = error.getClass().getName();
@@ -72,6 +57,9 @@ final class ConfigStorageMonitor {
     }
 
     long loadStarted(int keys) {
+        if ((ThreadLocalRandom.current().nextInt() & loadSampleMask) != 0) {
+            return 0;
+        }
         loadRequests.increment();
         loadKeys.add(keys);
         loadsInFlight.incrementAndGet();
@@ -88,7 +76,7 @@ final class ConfigStorageMonitor {
             error(error);
         } else {
             loadSuccesses.increment();
-            lastLoadSuccessAt = System.currentTimeMillis();
+            lastLoadSuccessAt.lazySet(System.currentTimeMillis());
         }
         long nanos = System.nanoTime() - started;
         loadNanos.add(nanos);
@@ -98,28 +86,19 @@ final class ConfigStorageMonitor {
     }
 
     CompositeData snapshot(Map<String, Object> values) {
-        ReadCounters sample = reads;
-        if (sample == null) {
-            sample = disabledReads;
-        }
         values.put("schemaVersion", 1L);
         values.put("instanceId", instanceId);
-        values.put("statisticsEpoch", sample.epoch);
         values.put("capturedAt", System.currentTimeMillis());
-        values.put("readSampleInterval", (long) sample.interval);
-        values.put("sampledReadCalls", sample.calls.sum());
-        values.put("valueHitKeys", sample.valueHits.sum());
-        values.put("negativeHitKeys", sample.negativeHits.sum());
-        values.put("missKeys", sample.misses.sum());
-        values.put("loadRequests", loadRequests.sum());
-        values.put("loadKeys", loadKeys.sum());
-        values.put("loadSuccesses", loadSuccesses.sum());
-        values.put("loadFailures", loadFailures.sum());
-        values.put("loadCancellations", loadCancellations.sum());
-        values.put("loadsInFlight", loadsInFlight.get());
-        values.put("loadNanos", loadNanos.sum());
+        values.put("loadSampleInterval", (long) loadSampleMask + 1);
+        values.put("sampledLoadRequests", loadRequests.sum());
+        values.put("sampledLoadKeys", loadKeys.sum());
+        values.put("sampledLoadSuccesses", loadSuccesses.sum());
+        values.put("sampledLoadFailures", loadFailures.sum());
+        values.put("sampledLoadCancellations", loadCancellations.sum());
+        values.put("sampledLoadsInFlight", loadsInFlight.get());
+        values.put("sampledLoadNanos", loadNanos.sum());
         for (int i = 0; i < loadBuckets.length; i++) {
-            values.put("loadDurationBucket" + i, loadBuckets[i].sum());
+            values.put("sampledLoadDurationBucket" + i, loadBuckets[i].sum());
         }
         values.put("notificationsReceived", notificationsReceived.sum());
         values.put("notificationProcessingFailures", notificationProcessingFailures.sum());
@@ -130,7 +109,7 @@ final class ConfigStorageMonitor {
         values.put("refreshes", refreshes.sum());
         values.put("staleFallbacks", staleFallbacks.sum());
         values.put("rejectedLoadResults", rejectedLoadResults.sum());
-        values.put("lastLoadSuccessAt", lastLoadSuccessAt);
+        values.put("lastSampledLoadSuccessAt", lastLoadSuccessAt.get());
         values.put("lastNotificationAt", lastNotificationAt);
         values.put("lastErrorAt", lastErrorAt);
         values.put("lastErrorType", lastErrorType);
@@ -163,28 +142,6 @@ final class ConfigStorageMonitor {
         } catch (OpenDataException error) {
             throw new IllegalStateException("Invalid config storage statistics values", error);
         }
-    }
-
-    /** One shared counter set per sampling epoch; a sampled read allocates no context object. */
-    static final class ReadCounters {
-        final String epoch = UUID.randomUUID().toString();
-        final int interval;
-        final LongAdder calls = new LongAdder();
-        final LongAdder valueHits = new LongAdder();
-        final LongAdder negativeHits = new LongAdder();
-        final LongAdder misses = new LongAdder();
-
-        ReadCounters(int interval) {
-            this.interval = interval;
-        }
-
-        void record(int hits, int negatives, int missing) {
-            calls.increment();
-            valueHits.add(hits);
-            negativeHits.add(negatives);
-            misses.add(missing);
-        }
-
     }
 
 }
