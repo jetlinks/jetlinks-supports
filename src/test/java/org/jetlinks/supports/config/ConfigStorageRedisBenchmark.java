@@ -54,6 +54,11 @@ public class ConfigStorageRedisBenchmark {
     }
 
     @Benchmark
+    public Object directSingle(Shared shared) {
+        return shared.backend.get("k0").block();
+    }
+
+    @Benchmark
     public Value singleReload(Shared shared, Reload state) {
         state.entries.clear();
         return state.storage.getConfig("k0").block();

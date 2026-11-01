@@ -156,6 +156,55 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
+    @Test public void cancellationDuringOnSubscribeDoesNotStartTheBackend() {
+        try (Fixture f = new Fixture()) {
+            f.storage.getConfig("key").doOnSubscribe(org.reactivestreams.Subscription::cancel).subscribe();
+            verify(f.backend, never()).get(anyString());
+            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+        }
+    }
+
+    @Test public void aJoinedReaderCanDriveAnUnsealedBatchWithItsContext() throws Exception {
+        CountDownLatch paused = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        AtomicBoolean armed = new AtomicBoolean(true);
+        Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<String, LocalCacheClusterConfigStorage.Cache>() {
+            @Override public LocalCacheClusterConfigStorage.Cache get(Object key) {
+                if ("b".equals(key) && armed.compareAndSet(true, false)) {
+                    paused.countDown();
+                    try { assertTrue(resume.await(3, TimeUnit.SECONDS)); }
+                    catch (InterruptedException error) { throw new AssertionError(error); }
+                }
+                return super.get(key);
+            }
+        };
+        AtomicInteger subscriptions = new AtomicInteger();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Fixture f = new Fixture(entries)) {
+            when(f.backend.get(anyCollection())).thenReturn(Flux.deferContextual(context -> {
+                subscriptions.incrementAndGet();
+                return Flux.just(new AbstractMap.SimpleImmutableEntry<>("a", context.get("driver")),
+                    new AbstractMap.SimpleImmutableEntry<>("b", context.get("driver")));
+            }));
+            Future<CompletableFuture<Values>> owner = executor.submit(() -> f.storage.getConfigs(Arrays.asList("a", "b"))
+                .contextWrite(context -> context.put("driver", "owner")).toFuture());
+            try {
+                assertTrue(paused.await(2, TimeUnit.SECONDS));
+                CompletableFuture<Value> joined = f.storage.getConfig("a")
+                    .contextWrite(context -> context.put("driver", "joined")).toFuture();
+                assertFalse(joined.isDone());
+                assertEquals(0, subscriptions.get());
+                resume.countDown();
+                assertEquals("joined", joined.get(2, TimeUnit.SECONDS).asString());
+                assertEquals("joined", owner.get(2, TimeUnit.SECONDS).get(2, TimeUnit.SECONDS).getString("b", ""));
+                assertEquals(1, subscriptions.get());
+            } finally { resume.countDown(); }
+        } finally {
+            resume.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     @Test public void aColdReadRacingEmptyCleanupRemainsRegisteredForInvalidation() throws Exception {
         CountDownLatch removing = new CountDownLatch(1);
         CountDownLatch resume = new CountDownLatch(1);

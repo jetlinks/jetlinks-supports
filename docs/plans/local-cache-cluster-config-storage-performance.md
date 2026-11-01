@@ -20,52 +20,52 @@ API 的命中探测只读取已有条目；miss 的 Cache 注册和 `ReadPlan` �
 
 冷 Key 创建与空 Storage 移除使用同一个 Storage 本地锁。已有 Storage 增加新 Key 只修改自己的缓存，不执行逐 Key 的 manager.cache.compute；清理/清空后的保留句柄仍按当前注册实例重入。命中路径不获取这个锁。
 
-单键共享请求直接保存 Pending，省去批量 Map 和快照 List；回源正值/空值用一个 doOnSuccess 完成一次。协调在驱动完成后跟随已有可重放结果，不再构造 never 驱动 Mono；保留入口 defer、共享执行和结果竞速以维持懒执行、重试、Context 与逐 Key 提前完成的语义。在途登记只保留未完成的请求，固定分组不随 Storage 数量增长，没有新的后台任务。
+加载链路由已有 ReadPlan 在结果订阅建立后驱动一次上游；已有 LoadGroup 作为 Reactor BaseSubscriber 接收上游终态并传播首个驱动者 Context。执行不再构造 execution.cache、结果竞速、重复结果订阅和 ready Sink。每个订阅只持有一次 lease，结果 Sink 负责背压与写入提前完成；批量封口前只保存驱动 Context，封口后启动一次。单键直接处理 L2 值和空完成，批量在收集成功后统一发布。上游订阅、取消和迟到 onSubscribe 使用 BaseSubscriber 的标准实现，没有新增超时、观测或独立协调器。
 
 `RedisClusterCache.getAndRemove` 使用单 hash-slot Lua 执行 HGET/HDEL，避免两条命令之间的并发写入被误删；参数和结果分别使用 hash key/hash value 序列化器，兼容其与顶层 value 序列化器不同的情况。
 
 ### 当前验证与性能边界
 
-编译及 86 项定向回归通过，零失败/错误/跳过。在既有 84 项基础上，新增反复创建/淘汰 Storage 不保留空登记、同 id 替换后旧请求结束不丢失新请求的验证；继续覆盖关闭/注册竞争、迟到上游取消、Context、重试、独立 fallback、写入提前完成和真实 Redis 序列化。命令同下节，日志为 `/private/tmp/config-load-partitions-tests.log`。生产指纹 SHA-256 前 16 位：`EventBusStorageManager=792fb7cb32cad156`、`LocalCacheClusterConfigStorage=f0f13414c60933d5`。
+编译及 88 项定向回归通过，零失败/错误/跳过。在既有 86 项基础上，新增订阅回调中立即取消不启动 L2、加入尚未封口批量的读者以自己的 Context 驱动一次 L2 的验证。继续覆盖背压、原子发布、重入重试、最后一个读者取消、写入提前完成、失效后关闭、收集期关闭、迟到 onSubscribe、独立 fallback 和真实 Redis 序列化。日志为 `/private/tmp/config-single-driver-final-tests.log`。
 
-固定分组只改变登记位置，沿用原并发 Set 的关闭前后检查；注册若晚于关闭扫描，二次检查会移除并取消请求。没有新增集合锁、关闭快照数组或逐 Storage 清理逻辑。JOL 0.16 在本机 JDK 21 下估算登记结构初始 5984 B，顺序创建并淘汰 1000/10000 个 Storage 后为 7872/8032 B，在途集合均为空。这是对象布局估算，不是完整缓存或 RSS；分组内部容量/计数结构仍可随并发峰值增长，终态后不保留请求或 Storage id。
+定向命令：`mvn -o -Dtest=ConfigStorageFollowupReviewTest,LocalCacheClusterConfigStorageTest,ConfigStorageMonitorTest,LocalCacheClusterConfigStorageLifecycleTest,EventBusStorageManagerTest,RedisClusterCacheTest -Dsurefire.forkedProcessTimeoutInSeconds=60 test`。生产指纹 SHA-256 前 16 位：`LocalCacheClusterConfigStorage=8acb14db7b0b2946`、`EventBusStorageManager=792fb7cb32cad156`。L1 命中 API、查找、TTL、值读取和 Snapshot 方法经 javap 归一化对照，与 f172221 字节码一致，复用既有命中路径证据。
 
-最终候选 T 对照本次修改前 B=`b3ac16c`：同一编译夹具、JDK 21、JMH 1.35、1 fork、4×1s 预热、5×1s 测量、512 MiB 固定堆和 GC profiler。1/32 线程同步 L2 分别按 B/T/T/B，每个 worker 使用独立 Storage id/L1，无并行构建或其他本任务压测。各版本两个样本均值如下：
+根因：原实现把一次加载拆成执行 Mono 和结果 Sink 两路，再用 execution.cache、firstWithSignal、then(result) 协调。JFR 的 32 线程单键样本可见 RaceCoordinator、FirstEmittingSubscriber、MonoCacheTime、MonoIgnoreThen 以及相应订阅/分配；这些不是观测工作。当前直接复用已有 ReadPlan/LoadGroup 作为 Publisher/Subscriber 边界，删除缓存执行链、ready Sink、结果竞速和重复结果订阅；单键直接接收 L2 值及空完成，不再经 doOnSuccess/then 转成 Void。结果 Sink 仍处理背压和逐 Key 提前完成，上游订阅/迟到取消由 Reactor BaseSubscriber 处理，没有手写响应式协议或增加新的生产协调类。候选 JFR 中未再采到这些竞速/执行缓存类的分配，剩余 CPU 样本主要是 map 读写、setOnce、Cache.complete 和夹具的清空 L1/block；JFR 为诊断样本，不与无录制的性能均值合并。录制为 `/private/tmp/config-single-f172221.jfr`、`/private/tmp/config-single-driver-final.jfr`。
 
-| 同步 L2 持续回源 | B → T，ns/op | 变化 | 分配 B → T，B/op |
-| --- | ---: | ---: | ---: |
-| 1 线程单键 | 360.726 → 369.917 | +2.55% | 1552.1 → 1552.1 |
-| 1 线程 8 键 | 1412.492 → 1429.475 | +1.20% | 6924.6 → 6924.6 |
-| 32 线程单键 | 3029.034 → 1500.103 | -50.48% | 1551.9 → 1550.6 |
-| 32 线程 8 键 | 6867.007 → 5641.992 | -17.84% | 6923.5 → 6942.4 |
+D=`d41e901` 为共享加载前原始基准，B=`f172221` 为本次修改前，C 为当前实现。同一编译夹具、JDK 21、JMH 1.35、1 fork、4×1s 预热、5×1s 测量、512 MiB 固定堆及 GC profiler。1/32 线程同步 L2 各按 D/B/C/C/B/D，每个 worker 使用独立 Storage id/L1，无并行构建或其他本任务压测。各版本两个样本均值：
 
-32 线程单键 B 为 2972.733/3085.335 ns，T 为 1465.531/1534.676 ns；批量 B 为 6820.937/6913.076 ns，T 为 5779.401/5504.583 ns。各候选样本均快于各修改前样本，支持全局登记竞争是明显下降的一个原因。分配没有明显减少，不能把耗时收益写成分配优化；单线程均值增加 1.20%–2.55%，这不构成生产开销上限承诺。原始文件为 `/private/tmp/config-load-groups-partitions-cpu-t{1,32}-{1-B,2-T,3-T,4-B}.json`。
+| 同步 L2 持续回源 | D → B → C，ns/op | C 相对 B | C 相对 D | 分配 D → B → C，B/op |
+| --- | ---: | ---: | ---: | ---: |
+| 1 线程单键 | 88.831 → 368.596 → 174.598 | -52.63% | +96.55% | 384.0 → 1552.1 → 672.1 |
+| 1 线程 8 键 | 425.084 → 1429.695 → 1122.364 | -21.50% | +164.03% | 2704.2 → 6944.6 → 6040.5 |
+| 32 线程单键 | 246.108 → 1130.931 → 663.396 | -41.34% | +169.56% | 384.0 → 1551.6 → 671.2 |
+| 32 线程 8 键 | 1278.194 → 5120.945 → 4331.876 | -15.41% | +238.91% | 2703.2 → 6936.1 → 6063.3 |
 
-共享加载前 D=`d41e901` 的同夹具上一组 32 线程结果为单键 253.187 ns、批量 1236.658 ns（`/private/tmp/config-load-groups-stripes-cpu-{1-D,6-D}.json`）；该组与最终 T 不是同一轮对照，不能用于判断细微差异，但剩余协调和分配成本明显，不能全部归于本机波动。原始 D 的单键/批量分配约 384/2704 B/op，当前约 1552/6944 B/op。
+32 线程单键 B 为 1143.633/1118.229 ns，C 为 621.391/705.400 ns；批量 B 为 5243.664/4998.225 ns，C 为 4477.469/4186.283 ns，各候选样本均快于各修改前样本。1 线程单键减少 880 B/op（56.70%），批量减少 904 B/op（13.02%），删除了实际协调分配；分配变化和耗时变化分别报告，不能用前一轮相对基准的改善替代本轮同轮结果。原始文件为 `/private/tmp/config-single-driver-cpu-t{1,32}-{1-D,2-B,3-C,4-C,5-B,6-D}.json`。
 
-真实 Redis 5 采用共享加载前原始 D=`d41e901` 对照最终 T，按 D/T/T/D 运行，其他参数相同：
+真实 Redis 5 使用同一参数按 D/B/C/C/B/D 运行，各版本两个样本均值：
 
-| 真实 Redis，D → T | 对照 → 当前，µs/op | 变化 | 分配 B/op |
-| --- | ---: | ---: | ---: |
-| 32 线程单键 | 339.988 → 317.663 | -6.57% | 14386.9 → 15571.3 |
-| 32 线程 8 键 | 417.106 → 406.160 | -2.62% | 57590.6 → 61870.8 |
+| 32 线程真实 Redis | D → B → C，µs/op | C 相对 B | C 相对 D | 分配 D → B → C，B/op |
+| --- | ---: | ---: | ---: | ---: |
+| 单键 | 322.955 → 324.661 → 396.609 | +22.16% | +22.81% | 14444.0 → 15631.3 → 14615.0 |
+| 8 键 | 368.624 → 481.203 → 384.886 | -20.02% | +4.41% | 57574.6 → 61887.5 → 60986.8 |
 
-D 的单键样本为 373.346/306.629 µs，T 为 312.599/322.726 µs；批量 D 为 458.169/376.043 µs，T 为 426.241/386.080 µs。同一原始 D 存在明显进程间波动，均值改善不证明生产开销上限，也不能用于分离登记优化与共享加载的各自贡献。原始文件为 `/private/tmp/config-load-groups-partitions-redis-{1-D,2-T,3-T,4-D}.json`。
+保留负向结果：单键 B 为 318.086/331.237 µs，C 为 339.027/454.192 µs；批量 B 为 385.334/577.072 µs，C 为 381.411/388.361 µs。不能用同步 L2 的收益证明 Redis 全面改善；原始文件为 `/private/tmp/config-single-driver-redis-{1-D,2-B,3-C,4-C,5-B,6-D}.json`。
 
-`ConfigStorageChurnBenchmark` 包含每次构造新 Storage、首次加载和清理，1/32 线程分别按 B/T/T/B，其他参数相同：
+为区分 Storage 与 L2/进程波动，新增 directSingle 直接调用同一个 RedisClusterCache.get().block()，不经过 Storage；仅编译夹具，核对生产 config 类字节码未变化，复用 88 项回归。按 B/C/C/B 运行 directSingle 和 singleReload，其他参数相同，分别在各自 fork 中测量，结果不能作逐操作配对或直接相减：
 
-| 新建/加载/清理，B → T | 对照 → 当前，ns/op | 变化 | 分配 B/op |
-| --- | ---: | ---: | ---: |
-| 1 线程单键 | 404.832 → 396.836 | -1.98% | 1776.1 → 1776.1 |
-| 1 线程 8 键 | 1416.842 → 1455.162 | +2.70% | 7168.6 → 7168.6 |
-| 32 线程单键 | 3304.360 → 2168.981 | -34.36% | 1775.7 → 1775.0 |
-| 32 线程 8 键 | 6359.849 → 5876.723 | -7.60% | 7168.2 → 7167.6 |
+| 32 线程复核 | B → C，µs/op | 变化 | B 样本 | C 样本 |
+| --- | ---: | ---: | ---: | ---: |
+| 直接 L2 | 311.207 → 392.615 | +26.16% | 305.669/316.744 | 376.317/408.913 |
+| 经过 Storage | 347.006 → 332.024 | -4.32% | 360.819/333.194 | 327.945/336.104 |
 
-1 线程新建批量首轮为 1414.760 → 1495.595 ns（+5.71%），反向为 1418.925 → 1414.729 ns（-0.30%）；合并均值 +2.70% 没有删除首轮负向数据，也不等于严格 5% 通过。32 线程单键 B 为 3259.032/3349.689 ns，T 为 2387.818/1950.143 ns；批量 B 为 6309.386/6410.312 ns，T 为 5905.678/5847.767 ns。原始文件为 `/private/tmp/config-load-groups-partitions-churn-t{1,32}-{1-B,2-T,3-T,4-B}.json`。此场景包含全局实例注册和移除，不能当作既有 Storage 的纯回源成本。
+直接 L2 的路径没有执行本次变更的加载代码，也出现 26.16% 进程间差异，而经过 Storage 的对照方向反转。这支持环境/JVM/远端链路波动足以影响当前样本，但未捕获首轮具体干扰源，不能将首轮 +22.16% 全部定性为本地服务造成。首轮负向数据不删除、不与复核混合成通过结论；Redis 严格 5% 上限继续未通过。原始文件为 `/private/tmp/config-single-driver-redis-control-{1-B,2-C,3-C,4-B}.json`，相关 Redis/manager 生产类及直接读取夹具在两个运行时逐字节相同。
 
-**相对原始 D 的整体 5% 上限仍未通过**，不以局部收益替代整体验收；命中路径未改，设备消息端到端 P99 和 24 小时长稳尚未验证。交付继续使用 [#48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
+**原始基准的整体 5% 目标仍未通过**：当前同步单键仍为原始 D 的约 1.97 倍（1 线程）、2.70 倍（32 线程），批量也明显高于 D，不能将这部分差距写成已解决或全部归于本机波动。D 是提前订阅 L2 的旧实现，未提供当前的懒执行/Context 和完整共享取消/关闭保证；当前还保留加载认领、lease、在途登记、值/版本原子发布及逐 Key 结果协调，未为追平旧实现而撤销这些行为。设备消息端到端 P99 和 24 小时长稳尚未验证，交付继续使用 [#48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
 
-选型保留的反例：按 id 保留空分组额外占用约 126.6 B/Storage，且无法跟随自定义缓存容器的独立淘汰，未采用。固定 HashSet 加显式锁虽改善高并发，但 1 线程 B/S/S/B 批量回源为 1397.931 → 1515.154 ns（+8.39%），因此未交付；原始文件为 `/private/tmp/config-load-groups-stripes-single-{1-B,2-S,3-S,4-B}.json`。最终 T 使用既有 ConcurrentHashMap Set，保留这些负向证据，没有继续调整分组数量寻优。
+固定 64 个登记分组和 manager 生产代码保持 f172221 原样。该结构在顺序淘汰 10000 个 Storage 后 JOL 估算约 8 KB，在途集合为空；并发峰值仍可扩张分组内部容量/计数结构。复用原登记阶段证据 `/private/tmp/config-load-partitions-tests.log`、`/private/tmp/config-load-groups-partitions-{cpu-t{1,32},churn-t{1,32}}-{1-B,2-T,3-T,4-B}.json`、`/private/tmp/config-load-groups-partitions-redis-{1-D,2-T,3-T,4-D}.json`；其时延不能替代本次新的订阅链实测。
+
+未采用方案保留的反例：按 id 保留空登记会增加约 126.6 B/Storage，且不能跟随自定义容器独立淘汰；固定 HashSet 显式锁在单线程批量持续回源对照中回退约 8.4%（`/private/tmp/config-load-groups-stripes-single-{1-B,2-S,3-S,4-B}.json`）。没有采用这些方案或调整分组数量反复寻优。
 
 ### b3ac16c 的验证与性能边界（固定分组前）
 
