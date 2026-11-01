@@ -157,17 +157,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         Cache cache = getOrCreateCache(key);
         Snapshot state = cache.cachedState();
         if (state != null) return state.result;
-        ReadPlan<Value> plan = new ReadPlan<>(true);
-        try {
-            Mono<Value> result = plan.read(cache);
-            plan.seal();
-            return plan.run(result).filter(value -> value != NULL);
-        } catch (Throwable error) {
-            Exceptions.throwIfFatal(error);
-            plan.seal();
-            plan.release();
-            return Mono.error(error);
-        }
+        Pending pending = cache.acquire(null);
+        return pending == null ? cache.current.result : pending;
     }
 
     private Mono<Value> fallbackRead(String key, Mono<Object> fallback) {
@@ -206,20 +197,11 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
     private Mono<Values> batchRead(List<String> keys) {
-        ReadPlan<Values> plan = new ReadPlan<>(false);
+        ReadPlan plan = new ReadPlan(keys);
         try {
-            List<Mono<Value>> results = new ArrayList<>(keys.size());
-            for (String key : keys) results.add(plan.read(getOrCreateCache(key)));
+            for (int i = 0; i < keys.size(); i++) plan.read(getOrCreateCache(keys.get(i)), i);
             plan.seal();
-            Mono<Values> result = Mono.zip(results, values -> {
-                Map<String, Object> container = Maps.newHashMapWithExpectedSize(keys.size());
-                for (int i = 0; i < values.length; i++) {
-                    Object value = ((Value) values[i]).get();
-                    if (value != null) container.put(keys.get(i), value);
-                }
-                return container.isEmpty() ? EMPTY_VALUES : Values.of(container);
-            });
-            return plan.run(result);
+            return plan.run();
         } catch (Throwable error) {
             Exceptions.throwIfFatal(error);
             plan.seal();
@@ -377,12 +359,12 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             deliverFallbacks(defaults, null);
         }
 
-        Pending acquire(ReadPlan<?> plan) {
+        Pending acquire(ReadPlan plan) {
             synchronized (this) {
                 Snapshot state = current;
                 if (state.value != null && !isExpired()) return null;
-                if (loading != null && plan.retain(loading.group)) return loading;
-                LoadGroup candidate = plan.candidate();
+                if (loading != null && (plan == null ? loading.group.retain() : plan.retain(loading.group))) return loading;
+                LoadGroup candidate = plan == null ? new LoadGroup(true) : plan.candidate();
                 Pending pending = new Pending(this, state, candidate);
                 candidate.add(pending);
                 loading = pending;
@@ -526,36 +508,70 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         @Override public boolean isDisposed() { return outcome != null; }
     }
 
-    /** Per-key ownership, shared by single and batch plans; each lease belongs to a subscriber. */
-    private final class Pending {
+    /** Per-key terminal ownership. Batch owners allocate key sinks only for joining readers. */
+    private static final class Pending extends Mono<Value> {
         final Cache cache;
         final Snapshot start;
         final LoadGroup group;
-        final Sinks.One<Value> result = Sinks.one();
+        private volatile Sinks.One<Value> result;
+        private boolean delivered;
+        // Only the serialized L2 subscriber writes this; publish it after full success.
+        Value received;
         volatile Object outcome;
         Pending(Cache cache, Snapshot start, LoadGroup group) {
             this.cache = cache;
             this.start = start;
             this.group = group;
+            if (group.single) result = Sinks.one();
+        }
+        Mono<Value> signal() {
+            Sinks.One<Value> sink = result;
+            if (sink == null) synchronized (this) {
+                sink = result;
+                if (sink == null) result = sink = Sinks.one();
+            }
+            // A result can arrive before the first joining subscriber creates its sink.
+            // Replaying after publication pairs with deliver() reading that same sink.
+            emit(sink, outcome);
+            return sink.asMono();
+        }
+        private void emit(Sinks.One<Value> sink, Object terminal) {
+            if (terminal == NULL) sink.tryEmitEmpty();
+            else if (terminal instanceof Value) sink.tryEmitValue((Value) terminal);
+            else if (terminal instanceof Throwable) sink.tryEmitError((Throwable) terminal);
+        }
+        @Override public void subscribe(CoreSubscriber<? super Value> actual) {
+            signal().doFinally(ignored -> group.release()).subscribe(actual);
+            group.start(actual.currentContext());
         }
         void deliver() {
             Object terminal = outcome;
-            if (terminal instanceof Value) result.tryEmitValue((Value) terminal);
-            else if (terminal instanceof Throwable) result.tryEmitError((Throwable) terminal);
+            if (terminal == null) return;
+            Sinks.One<Value> sink = result;
+            if (sink != null) emit(sink, terminal);
+            if (!group.single) {
+                synchronized (this) {
+                    if (delivered) return;
+                    delivered = true;
+                }
+                group.resolved(terminal);
+            }
         }
     }
 
-    /** Registers all result subscribers before driving any possibly synchronous L2 source. */
-    private final class ReadPlan<T> extends Mono<T> {
-        final boolean single;
+    /** A batch awaits its owned group once; only keys owned by other requests need signals. */
+    private final class ReadPlan extends Mono<Values> {
+        final List<String> keys;
+        final Object[] values;
         private LoadGroup candidate;
         private LoadGroup first;
         private Set<LoadGroup> others;
-        private Mono<T> result;
-        ReadPlan(boolean single) { this.single = single; }
+        private List<Mono<?>> joined;
+        private Mono<Values> result;
+        ReadPlan(List<String> keys) { this.keys = keys; values = new Object[keys.size()]; }
         LoadGroup candidate() {
             if (candidate == null) {
-                candidate = new LoadGroup(single);
+                candidate = new LoadGroup(false);
                 remember(candidate);
             }
             return candidate;
@@ -574,17 +590,34 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             return true;
         }
         void seal() { if (candidate != null) candidate.seal(); }
-        Mono<Value> read(Cache cache) {
+        void read(Cache cache, int index) {
             Pending pending = cache.acquire(this);
-            if (pending == null) return Mono.just(cache.current.value);
-            return pending.result.asMono();
+            values[index] = pending == null ? cache.current.value : pending;
+            if (pending != null && pending.group != candidate) {
+                if (joined == null) joined = new ArrayList<>();
+                joined.add(pending.signal());
+            }
         }
-        Mono<T> run(Mono<T> result) {
-            if (first == null) return result;
-            this.result = result;
+        Values values() {
+            Map<String, Object> container = Maps.newHashMapWithExpectedSize(keys.size());
+            for (int i = 0; i < values.length; i++) {
+                Object terminal = values[i];
+                Value value = terminal instanceof Pending ? (Value) ((Pending) terminal).outcome : (Value) terminal;
+                Object stored = value.get();
+                if (stored != null) container.put(keys.get(i), stored);
+            }
+            return container.isEmpty() ? EMPTY_VALUES : Values.of(container);
+        }
+        Mono<Values> run() {
+            if (first == null) return Mono.just(values());
+            if (joined == null) result = candidate.completed.asMono().map(ignored -> values());
+            else {
+                if (candidate != null) joined.add(candidate.completed.asMono());
+                result = Mono.when(joined).then(Mono.fromSupplier(this::values));
+            }
             return this;
         }
-        @Override public void subscribe(CoreSubscriber<? super T> actual) {
+        @Override public void subscribe(CoreSubscriber<? super Values> actual) {
             // Install result subscribers before a synchronous L2 can complete. The
             // result owns demand and the lease; source completion is not a second result.
             result.doFinally(ignored -> release()).subscribe(actual);
@@ -606,16 +639,20 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private final class LoadGroup extends BaseSubscriber<Object> {
         final boolean single;
         final Map<String, Pending> owned;
+        final Sinks.One<LoadGroup> completed;
         private Pending only;
         private volatile Context context;
         private boolean sealed;
         private boolean started;
+        private int remaining;
+        private Throwable failure;
         int leases = 1;
         boolean closed;
         volatile boolean resultsReady;
         LoadGroup(boolean single) {
             this.single = single;
             owned = single ? null : new LinkedHashMap<>();
+            completed = single ? null : Sinks.one();
             sealed = single;
             // Register before publishing Pending: close also covers batch collection.
             if (!manager.startLoad(id, this)) {
@@ -631,12 +668,49 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         synchronized void add(Pending pending) {
             if (closed) throw new CancellationException("Configuration load was released");
             if (single) only = pending;
-            else owned.put(pending.cache.key, pending);
+            else {
+                owned.put(pending.cache.key, pending);
+                remaining++;
+            }
         }
         void seal() {
             Context selected;
-            synchronized (this) { sealed = true; selected = context; }
+            boolean ready;
+            Throwable error;
+            synchronized (this) {
+                sealed = true;
+                selected = context;
+                ready = remaining == 0;
+                error = failure;
+            }
+            if (error != null) completed.tryEmitError(error);
+            else if (ready) completed.tryEmitValue(this);
             if (selected != null) start(selected);
+        }
+        void resolved(Object terminal) {
+            boolean ready;
+            Throwable error;
+            synchronized (this) {
+                if (terminal instanceof Throwable && failure == null) failure = (Throwable) terminal;
+                error = failure;
+                ready = --remaining == 0 && sealed;
+            }
+            if (error != null) completed.tryEmitError(error);
+            else if (ready) completed.tryEmitValue(this);
+        }
+        private void finishBatch() {
+            if (single) return;
+            // Shutdown/error must also deliver reserved outcomes if another thread
+            // paused between reserving a key and notifying the batch counter.
+            for (Pending pending : pending()) {
+                Object terminal = pending.outcome;
+                if (terminal instanceof Throwable) {
+                    completed.tryEmitError((Throwable) terminal);
+                    return;
+                }
+                if (terminal == null) return;
+            }
+            completed.tryEmitValue(this);
         }
         // Iterated only after seal or close; add() cannot mutate this collection then.
         synchronized Collection<Pending> pending() {
@@ -649,21 +723,34 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 started = true;
             }
             try {
-                execute().subscribe(this);
+                if (single) clusterCache.get(only.cache.key).subscribe(this);
+                else clusterCache.get(Collections.unmodifiableSet(owned.keySet())).subscribe(this);
             } catch (Throwable failure) {
                 Exceptions.throwIfFatal(failure);
                 onError(failure);
             }
         }
         @Override public Context currentContext() { return context == null ? Context.empty() : context; }
-        @Override protected void hookOnNext(Object value) {
-            resultsReady = true;
-            only.cache.complete(only, Value.simple(value));
+        @Override @SuppressWarnings("unchecked") protected void hookOnNext(Object value) {
+            if (single) {
+                resultsReady = true;
+                only.cache.complete(only, Value.simple(value));
+            } else {
+                Map.Entry<String, Object> entry = (Map.Entry<String, Object>) value;
+                Pending pending = owned.get(entry.getKey());
+                if (pending != null && pending.received == null) pending.received =
+                    entry.getValue() == null ? NULL : Value.simple(entry.getValue());
+            }
         }
         @Override protected void hookOnComplete() {
             if (single && !resultsReady) {
                 resultsReady = true;
                 only.cache.complete(only, NULL);
+            } else if (!single) {
+                // Commit only a fully successful batch; a partial error cannot seed retry.
+                resultsReady = true;
+                for (Pending pending : owned.values()) pending.cache.complete(pending,
+                    pending.received == null ? NULL : pending.received);
             }
         }
         @Override protected void hookOnError(Throwable failure) { failed(failure); }
@@ -678,38 +765,22 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (cancel) {
                 CancellationException error = new CancellationException("No configuration readers remain");
                 for (Pending pending : pending()) pending.cache.fail(pending, error);
+                finishBatch();
                 cancel();
                 manager.endLoad(id, this);
-            }
-        }
-        Mono<?> execute() {
-            // The subscriber consumes a single value directly; batches emit only after
-            // every record was collected, so a partial error cannot publish stale keys.
-            if (single) return clusterCache.get(only.cache.key);
-            else {
-                Set<String> requested = Collections.unmodifiableSet(owned.keySet());
-                Map<String, Value> loaded = Maps.newHashMapWithExpectedSize(owned.size());
-                return clusterCache.get(requested).doOnNext(entry -> {
-                    Pending pending = owned.get(entry.getKey());
-                    if (pending != null) loaded.putIfAbsent(entry.getKey(),
-                        entry.getValue() == null ? NULL : Value.simple(entry.getValue()));
-                }).then(Mono.fromRunnable(() -> {
-                    // A failed partial batch must not seed the retry with abandoned results.
-                    resultsReady = true;
-                    for (Pending pending : owned.values()) pending.cache.complete(pending,
-                        loaded.getOrDefault(pending.cache.key, NULL));
-                }));
             }
         }
         void failed(Throwable failure) {
             synchronized (this) { closed = true; }
             if (!(failure instanceof CancellationException)) error(failure);
             for (Pending pending : pending()) pending.cache.fail(pending, failure);
+            finishBatch();
         }
         @Override public void dispose() {
             CancellationException error = new CancellationException("Storage manager is disposed");
             synchronized (this) { closed = true; }
             for (Pending pending : pending()) pending.cache.fail(pending, error);
+            finishBatch();
             cancel();
             manager.endLoad(id, this);
         }

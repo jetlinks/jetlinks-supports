@@ -425,14 +425,70 @@ public class ConfigStorageFollowupReviewTest {
             when(f.backend.put("a", "written")).thenReturn(Mono.just(true));
             CompletableFuture<Values> batch = f.storage.getConfigs(Arrays.asList("a", "b")).toFuture();
             CompletableFuture<Value> joined = f.storage.getConfig("a").toFuture();
+            CompletableFuture<Values> joinedBatch = f.storage.getConfigs(java.util.Collections.singleton("a")).toFuture();
             f.storage.setConfig("a", "written").block(Duration.ofSeconds(3));
             assertEquals("written", joined.join().asString());
+            assertEquals("written", joinedBatch.join().getString("a", ""));
             assertFalse(batch.isDone());
             assertEquals(0, cancellations.get());
             source.tryEmitValue(new AbstractMap.SimpleImmutableEntry<>("b", "B"));
             Values values = batch.join();
             assertEquals("written", values.getString("a", ""));
             assertEquals("B", values.getString("b", ""));
+        }
+    }
+
+    @Test public void writesBeforeSealingCompleteTheBatchWithoutStartingTheBackend() throws Exception {
+        CountDownLatch collecting = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<String, LocalCacheClusterConfigStorage.Cache>() {
+            @Override public LocalCacheClusterConfigStorage.Cache computeIfAbsent(
+                String key, java.util.function.Function<? super String, ? extends LocalCacheClusterConfigStorage.Cache> factory) {
+                LocalCacheClusterConfigStorage.Cache cache = super.computeIfAbsent(key, factory);
+                if ("b".equals(key)) {
+                    collecting.countDown();
+                    try { assertTrue(resume.await(3, TimeUnit.SECONDS)); }
+                    catch (InterruptedException error) { throw new AssertionError(error); }
+                }
+                return cache;
+            }
+        };
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Fixture f = new Fixture(entries)) {
+            Map<String, Object> written = new java.util.LinkedHashMap<>();
+            written.put("a", "A"); written.put("b", "B");
+            when(f.backend.putAll(written)).thenReturn(Mono.just(true));
+            Future<CompletableFuture<Values>> owner = executor.submit(() -> f.storage.getConfigs(Arrays.asList("a", "b")).toFuture());
+            try {
+                assertTrue(collecting.await(2, TimeUnit.SECONDS));
+                assertTrue(f.storage.setConfigs(written).block(Duration.ofSeconds(3)));
+                resume.countDown();
+                Values values = owner.get(2, TimeUnit.SECONDS).get(2, TimeUnit.SECONDS);
+                assertEquals("A", values.getString("a", ""));
+                assertEquals("B", values.getString("b", ""));
+                verify(f.backend, never()).get(anyCollection());
+                assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+            } finally { resume.countDown(); }
+        } finally { executor.shutdownNow(); }
+    }
+
+    @Test public void aBatchFailureAfterOneWrittenKeyStillFailsAndCanRetry() {
+        try (Fixture f = new Fixture()) {
+            Sinks.One<Map.Entry<String, Object>> source = Sinks.one();
+            IllegalStateException failure = new IllegalStateException("batch failed");
+            when(f.backend.get(anyCollection())).thenReturn(source.asMono().flux());
+            when(f.backend.put("a", "written")).thenReturn(Mono.just(true));
+            CompletableFuture<Values> batch = f.storage.getConfigs(Arrays.asList("a", "b")).toFuture();
+            f.storage.setConfig("a", "written").block(Duration.ofSeconds(3));
+            source.tryEmitError(failure);
+            try { batch.join(); fail("Unresolved keys must preserve the backend failure"); }
+            catch (CompletionException error) { assertSame(failure, error.getCause()); }
+            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+            when(f.backend.get(anyCollection())).thenReturn(Flux.just(
+                new AbstractMap.SimpleImmutableEntry<>("a", "written"),
+                new AbstractMap.SimpleImmutableEntry<>("b", "retry")));
+            assertEquals("retry", f.storage.getConfigs(Arrays.asList("a", "b"))
+                .block(Duration.ofSeconds(3)).getString("b", ""));
         }
     }
 
@@ -452,5 +508,59 @@ public class ConfigStorageFollowupReviewTest {
             when(f.backend.get("b")).thenReturn(Mono.just("retry"));
             assertEquals("retry", f.storage.getConfig("b").block(Duration.ofSeconds(3)).asString());
         }
+    }
+
+    @Test public void aCompletedBatchStillWaitsForDownstreamDemand() {
+        try (Fixture f = new Fixture()) {
+            when(f.backend.get(anyCollection())).thenReturn(Flux.just(
+                new AbstractMap.SimpleImmutableEntry<>("a", "A"),
+                new AbstractMap.SimpleImmutableEntry<>("b", "B")));
+            AtomicReference<Values> result = new AtomicReference<>();
+            AtomicBoolean complete = new AtomicBoolean();
+            reactor.core.publisher.BaseSubscriber<Values> reader = new reactor.core.publisher.BaseSubscriber<Values>() {
+                @Override protected void hookOnSubscribe(org.reactivestreams.Subscription subscription) { }
+                @Override protected void hookOnNext(Values values) { result.set(values); }
+                @Override protected void hookOnComplete() { complete.set(true); }
+            };
+            f.storage.getConfigs(Arrays.asList("a", "b")).subscribe(reader);
+            verify(f.backend, times(1)).get(anyCollection());
+            assertNull(result.get());
+            assertFalse(complete.get());
+            reader.request(1);
+            assertEquals("A", result.get().getString("a", ""));
+            assertEquals("B", result.get().getString("b", ""));
+            assertTrue(complete.get());
+        }
+    }
+
+    @Test public void simultaneousBatchesShareEveryKeyAndAllFinish() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(16);
+        CountDownLatch start = new CountDownLatch(1);
+        try (Fixture f = new Fixture()) {
+            Sinks.One<Map<String, Object>> source = Sinks.one();
+            Map<String, Object> expected = new java.util.LinkedHashMap<>();
+            for (int i = 0; i < 8; i++) expected.put("key-" + i, "value-" + i);
+            Map<String, Integer> requests = new ConcurrentHashMap<>();
+            when(f.backend.get(anyCollection())).thenAnswer(call -> {
+                java.util.List<String> keys = new java.util.ArrayList<>(call.getArgument(0));
+                keys.forEach(key -> requests.merge(key, 1, Integer::sum));
+                return source.asMono().flatMapMany(values -> Flux.fromIterable(keys)
+                    .map(key -> new AbstractMap.SimpleImmutableEntry<>(key, values.get(key))));
+            });
+            java.util.List<Future<CompletableFuture<Values>>> tasks = new java.util.ArrayList<>();
+            for (int i = 0; i < 16; i++) tasks.add(executor.submit(() -> {
+                assertTrue(start.await(2, TimeUnit.SECONDS));
+                return f.storage.getConfigs(expected.keySet()).toFuture();
+            }));
+            start.countDown();
+            java.util.List<CompletableFuture<Values>> readers = new java.util.ArrayList<>();
+            for (Future<CompletableFuture<Values>> task : tasks) readers.add(task.get(3, TimeUnit.SECONDS));
+            assertEquals(8, requests.size());
+            requests.values().forEach(count -> assertEquals(Integer.valueOf(1), count));
+            source.tryEmitValue(expected);
+            for (CompletableFuture<Values> reader : readers)
+                assertEquals(expected, reader.get(3, TimeUnit.SECONDS).getAllValues());
+            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+        } finally { start.countDown(); executor.shutdownNow(); }
     }
 }
