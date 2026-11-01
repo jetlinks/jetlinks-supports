@@ -12,15 +12,42 @@ API 的命中探测只读取已有条目；miss 的 Cache 注册和 `ReadPlan` �
 
 边界：TTL 保持空闲过期，不增加容量阈值或专用前端；显式 fallback 在调用方订阅后执行，负缓存命中也可触发，保留既有成功结果缓存及写入可结束等待者的语义。原有 Error/容量 MBean 复用；不新增逐 Key 追踪。共享请求使用首个订阅者 Context，加入者不重复执行远端请求；最后一个使用者取消才释放共享上游。加载期限由底层 L2 或调用方控制，Storage 不新增超时配置或定时器；底层超时按普通错误处理，先释放所有权再交付错误/旧值并允许重试。上游尚未终止且读者未取消时继续等待，不属于 Storage 自身泄漏。
 
-每个读者对每个共享请求只持有一次引用，同一批量的多个 Key 不重复 retain/release；最后一个读者取消才取消上游。共享组在暴露 Pending 前登记管理器，stop 覆盖收集 Key 和执行阶段，关闭不依赖原批量线程恢复或 seal。终态先清理加载槽再交付，重入 retry 可认领新请求；写入可以完成旧等待者，管理器关闭也会结束已被失效移除的 L2/fallback。在成功或错误交付之前保留关闭登记，避免已准备但未交付的结果脱离管理。
+每个读者对每个共享请求只持有一次引用，同一批量的多个 Key 不重复 retain/release；最后一个读者取消才取消上游。共享组在暴露 Pending 前登记管理器，通过真实上游 Subscription 取消收集和执行阶段，不再构造 stop sink 或内层竞速。关闭先结束 Pending，再取消上游；关闭后才到达的 onSubscribe 会立即取消，关闭不依赖原批量线程恢复或 seal。终态先清理加载槽再交付，重入 retry 可认领新请求；写入可以完成旧等待者，管理器关闭也会结束已被失效移除的 L2/fallback。在成功或错误交付之前保留关闭登记，避免已准备但未交付的结果脱离管理。
 
 显式 fallback 使用调用方自己的 `FallbackLoad`，独立传播 Context 和取消；仅在负结果代次未变化时提交到 L1，较新写入已准备的终态优先。共享读取在 L2 失败后选用旧负结果时，fallback 接受这个结果，不因它已过期再次回源形成内部重试循环；失效替换出的空代次仍重新读取 L2。取消、空结果和错误均移除该读者的等待记录；最后一条记录结束后释放集合。普通加载不创建这个对象或集合。清空/清理移除空 Storage 后，保留句柄重新加入管理器当前实例；旧句柄的写入和刷新同样作用于当前实例。
 
-单键共享请求直接保存 Pending，省去批量 Map 和快照 List；回源正值/空值用一个 doOnSuccess 完成一次。协调在驱动完成后跟随已有可重放结果，不再构造 never 驱动 Mono；保留入口 defer、共享执行和取消竞速以维持懒执行、重试、Context 与逐 Key 提前完成的语义。
+冷 Key 创建与空 Storage 移除使用同一个 Storage 本地锁。已有 Storage 增加新 Key 只修改自己的缓存，不执行逐 Key 的 manager.cache.compute；清理/清空后的保留句柄仍按当前注册实例重入。命中路径不获取这个锁。
+
+单键共享请求直接保存 Pending，省去批量 Map 和快照 List；回源正值/空值用一个 doOnSuccess 完成一次。协调在驱动完成后跟随已有可重放结果，不再构造 never 驱动 Mono；保留入口 defer、共享执行和结果竞速以维持懒执行、重试、Context 与逐 Key 提前完成的语义。全局在途集合仍用于关闭已脱离 L1 的请求，没有增加新的登记层或后台任务。
 
 `RedisClusterCache.getAndRemove` 使用单 hash-slot Lua 执行 HGET/HDEL，避免两条命令之间的并发写入被误删；参数和结果分别使用 hash key/hash value 序列化器，兼容其与顶层 value 序列化器不同的情况。
 
 ### 当前验证与性能边界
+
+编译及 84 项定向回归通过，零失败/错误/跳过：原有 82 项，加清理与冷 Key 注册竞争、关闭后才到达上游订阅的两项回归。取消直接传播到真实上游；清理后读者仍注册于管理器并能接收失效通知。日志为 `/private/tmp/config-converge-stage2.log`。生产代码只调整两个已有类，没有新增协调器、配置、后台任务或观测。
+
+定向命令：`mvn -o -Dtest=ConfigStorageFollowupReviewTest,LocalCacheClusterConfigStorageTest,ConfigStorageMonitorTest,LocalCacheClusterConfigStorageLifecycleTest,EventBusStorageManagerTest,RedisClusterCacheTest -Dsurefire.forkedProcessTimeoutInSeconds=60 test`。
+
+对照 B=`cad170f` 与收敛候选 C：同一编译夹具、JDK 21、1 fork、4×1s 预热、5×1s 测量、512 MiB 固定堆和 GC profiler。1 线程同步 L2 顺序 B/C；32 线程同步 L2 与真实 Redis 5 均使用 B/C/C/B，每个 worker 使用不同 Storage id 和独立 L1，无并行构建或其他本任务压测。
+
+| 场景 | 耗时 B → C | 耗时变化 | 分配 B/op B → C |
+| --- | ---: | ---: | ---: |
+| 1 线程，同步 L2 单键回源 | 377.386 → 366.050 ns | -3.00% | 1776 → 1552 |
+| 1 线程，同步 L2 8 键回源 | 1541.354 → 1370.005 ns | -11.12% | 7337 → 6945 |
+| 32 线程，同步 L2 单键热命中 | 6.400 → 6.977 ns | +9.01% | 0 → 0 |
+| 32 线程，同步 L2 8 键热命中 | 187.905 → 201.724 ns | +7.35% | 416 → 416 |
+| 32 线程，同步 L2 单键回源 | 3073.662 → 3066.557 ns | -0.23% | 1776 → 1552 |
+| 32 线程，同步 L2 8 键回源 | 6754.463 → 5804.041 ns | -14.07% | 7317 → 6944 |
+| 32 线程，真实 Redis 单键回源 | 367.056 → 316.335 µs | -13.82% | 15767 → 15571 |
+| 32 线程，真实 Redis 8 键回源 | 430.109 → 412.720 µs | -4.04% | 62279 → 61887 |
+
+单键分配降低约 12.6%，同步批量分配降低约 5.1%。32 线程批量回源的两个候选样本均快于两个基线样本，单键同步回源没有明确耗时收益。热命中首轮均值变慢，基线批量自身为 169.355/206.455 ns；热路径方法、Cache 和 Snapshot 经 javap 归一化对照字节码相同，保留这些负向数据。
+
+针对首轮热命中负向结果，用相同类与夹具进行独立 B/C/C/B 专项复核，改为 6×1s 预热、6×1s 测量，其他设置不变。单键均值 6.433 → 6.620 ns（+2.90%），8 键均值 198.734 → 201.308 ns（+1.30%）；分配仍为 0/416 B/op。批量基线为 176.588/220.881 ns，候选为 194.261/208.355 ns，对照方向反转，未稳定复现超过 5% 的回退。专项结果没有替换首轮数据，也不与不同预热设置的首轮样本合并成通过结论。原始文件为 `/private/tmp/config-converge-hot-check-{1-B,2-C,3-C,4-B}.json`。
+
+原始结果为 `/private/tmp/config-converge-final-cpu1-{1-B,2-C}.json`、`/private/tmp/config-converge-final-{cpu32,redis32}-{1-B,2-C,3-C,4-B}.json`。共享加载重构前 `d41e901` 的整体 5% 目标没有因本轮局部收益而通过；本轮主要降低分配与批量加载协调成本，全局在途登记仍是剩余成本之一。端到端 P99 与 24 小时长稳尚未验证。交付继续使用 [#48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
+
+### cad170f 的验证与性能边界（收敛前）
 
 编译及 82 项定向回归通过，零失败/错误/跳过：原有 68 项，加 `ConfigStorageFollowupReviewTest` 的 14 项。原四个反例全部通过，新增覆盖独立 fallback Context/取消/错误、成功缓存与结束其他等待者、重试、过期负缓存遇到 L2 错误、失效/关闭、写入与共享值计算竞态、部分 Key 提前完成、跨组失败释放。日志为 `/private/tmp/config-storage-followup-final.log`。
 

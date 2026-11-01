@@ -9,6 +9,7 @@ import org.jetlinks.core.config.ConfigKey;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.device.DeviceConfigKey;
 import org.jetlinks.core.utils.Reactors;
+import org.reactivestreams.Subscription;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.ConcurrentReferenceHashMap;
 import reactor.core.Disposable;
@@ -122,16 +123,17 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     private Cache getOrCreateCache(String key) {
         Cache found = caches.get(key);
         if (found != null) return found;
-        // Miss registration and empty-storage removal use the same manager map boundary.
-        // A retained handle rejoins the canonical storage after clear/cleanup.
+        // Only cold registration and empty removal share this storage's lock.
+        // Registered storages do not mutate the manager map for each new key.
         for (;;) {
-            LocalCacheClusterConfigStorage active = manager.cache.compute(id, (name, existing) -> {
-                LocalCacheClusterConfigStorage selected = existing == null ? this : existing;
-                selected.caches.computeIfAbsent(key, selected::createCache);
-                return selected;
-            });
-            found = active.caches.get(key);
-            if (found != null) return found;
+            LocalCacheClusterConfigStorage active = manager.cache.get(id);
+            if (active == null) active = this;
+            synchronized (active) {
+                LocalCacheClusterConfigStorage registered = manager.cache.get(id);
+                if (registered == null) registered = manager.cache.putIfAbsent(id, active);
+                if (registered != null && registered != active) continue;
+                return active.caches.computeIfAbsent(key, active::createCache);
+            }
         }
     }
 
@@ -604,7 +606,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         final Map<String, Pending> owned;
         private Pending only;
         final Sinks.One<Void> ready;
-        final Sinks.One<Void> stop = Sinks.one();
+        private volatile Subscription subscription;
         final Mono<Void> execution;
         int leases = 1;
         boolean closed;
@@ -615,11 +617,15 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             // Only a batch can be joined before all of its owned keys have been added.
             ready = single ? null : Sinks.one();
             Mono<Void> start = Mono.defer(this::execute);
-            // stop covers both collection and I/O. Register before publishing a Pending,
-            // otherwise shutdown cannot see a joined reader still waiting for seal().
-            execution = Mono.firstWithSignal(stop.asMono(), single ? start : ready.asMono().then(start))
+            // Capture the actual upstream across collection and I/O. Register before
+            // publishing Pending so shutdown also sees readers waiting for seal().
+            execution = (single ? start : ready.asMono().then(start))
+                .doOnSubscribe(this::subscribed)
                 .onErrorResume(this::failed)
-                .doFinally(ignored -> manager.endLoad(this))
+                .doFinally(ignored -> {
+                    subscription = null;
+                    manager.endLoad(this);
+                })
                 .cache();
             if (!manager.startLoad(this)) {
                 dispose();
@@ -641,6 +647,23 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         synchronized Collection<Pending> pending() {
             return single ? only == null ? Collections.emptyList() : Collections.singletonList(only) : owned.values();
         }
+        void subscribed(Subscription source) {
+            synchronized (this) {
+                if (!closed) {
+                    subscription = source;
+                    return;
+                }
+            }
+            source.cancel();
+        }
+        void cancelSource() {
+            Subscription source;
+            synchronized (this) {
+                source = subscription;
+                subscription = null;
+            }
+            if (source != null) source.cancel();
+        }
         void release() {
             boolean cancel;
             synchronized (this) {
@@ -651,7 +674,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (cancel) {
                 CancellationException error = new CancellationException("No configuration readers remain");
                 for (Pending pending : pending()) pending.cache.fail(pending, error);
-                stop.tryEmitError(error);
+                cancelSource();
                 manager.endLoad(this);
             }
         }
@@ -689,7 +712,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             CancellationException error = new CancellationException("Storage manager is disposed");
             synchronized (this) { closed = true; }
             for (Pending pending : pending()) pending.cache.fail(pending, error);
-            stop.tryEmitError(error);
+            cancelSource();
             manager.endLoad(this);
         }
         @Override public synchronized boolean isDisposed() { return closed; }

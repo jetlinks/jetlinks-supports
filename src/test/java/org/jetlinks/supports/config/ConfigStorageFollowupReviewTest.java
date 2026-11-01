@@ -112,6 +112,76 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
+    @Test public void aColdReadRacingEmptyCleanupRemainsRegisteredForInvalidation() throws Exception {
+        CountDownLatch removing = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        CountDownLatch reading = new CountDownLatch(1);
+        AtomicInteger emptyChecks = new AtomicInteger();
+        AtomicInteger keyReads = new AtomicInteger();
+        Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<String, LocalCacheClusterConfigStorage.Cache>() {
+            @Override public boolean isEmpty() {
+                boolean empty = super.isEmpty();
+                if (empty && emptyChecks.incrementAndGet() == 2) {
+                    removing.countDown();
+                    try { assertTrue(resume.await(3, TimeUnit.SECONDS)); }
+                    catch (InterruptedException error) { throw new AssertionError(error); }
+                }
+                return empty;
+            }
+            @Override public LocalCacheClusterConfigStorage.Cache get(Object key) {
+                if ("key".equals(key) && keyReads.incrementAndGet() == 2) reading.countDown();
+                return super.get(key);
+            }
+        };
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try (Fixture f = new Fixture(entries)) {
+            when(f.backend.get("key")).thenReturn(Mono.just("first"), Mono.just("second"));
+            Future<?> cleanup = executor.submit(f.manager::cleanup);
+            try {
+                assertTrue(removing.await(2, TimeUnit.SECONDS));
+                Future<Value> read = executor.submit(() -> f.storage.getConfig("key").block(Duration.ofSeconds(3)));
+                assertTrue(reading.await(2, TimeUnit.SECONDS));
+                resume.countDown();
+                cleanup.get(2, TimeUnit.SECONDS);
+                assertEquals("first", read.get(2, TimeUnit.SECONDS).asString());
+                assertSame(f.storage, f.manager.cache.get("audit"));
+                f.manager.handleNotify(CacheNotify.expires("audit", Arrays.asList("key")));
+                assertEquals("second", f.storage.getConfig("key").block(Duration.ofSeconds(3)).asString());
+            } finally { resume.countDown(); }
+        } finally {
+            resume.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test public void shutdownCancelsAnUpstreamThatArrivesAfterItsPendingWasReleased() throws Exception {
+        CountDownLatch creating = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        AtomicInteger cancellations = new AtomicInteger();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Fixture f = new Fixture()) {
+            when(f.backend.get("key")).thenAnswer(ignored -> {
+                creating.countDown();
+                assertTrue(resume.await(3, TimeUnit.SECONDS));
+                return Mono.never().doOnCancel(cancellations::incrementAndGet);
+            });
+            Future<CompletableFuture<Value>> owner = executor.submit(() -> f.storage.getConfig("key").toFuture());
+            try {
+                assertTrue(creating.await(2, TimeUnit.SECONDS));
+                CompletableFuture<Value> joined = f.storage.getConfig("key").toFuture();
+                f.manager.dispose();
+                assertTrue(joined.isCompletedExceptionally());
+                resume.countDown();
+                assertTrue(owner.get(2, TimeUnit.SECONDS).isCompletedExceptionally());
+                assertEquals(1, cancellations.get());
+                assertEquals(0, f.manager.monitor.loadErrors.sum());
+            } finally { resume.countDown(); }
+        } finally {
+            resume.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     @Test public void eachFallbackKeepsItsOwnContextAndCancellation() {
         try (Fixture f = new Fixture()) {
             when(f.backend.get("key")).thenReturn(Mono.empty());

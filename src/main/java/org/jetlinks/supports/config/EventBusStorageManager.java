@@ -83,7 +83,10 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     void endLoad(Disposable load) { activeLoads.remove(load); }
 
     private void removeEmpty(LocalCacheClusterConfigStorage store) {
-        cache.computeIfPresent(store.id, (id, current) -> current == store && current.isEmpty() ? null : current);
+        // Pair with cold key creation; never detach a storage after admitting a key.
+        synchronized (store) {
+            if (store.isEmpty()) cache.remove(store.id, store);
+        }
     }
 
     private final Set<Consumer<CacheNotify>> cacheNotifyListeners = ConcurrentHashMap.newKeySet();
