@@ -2,6 +2,8 @@
 
 ## 共享加载与一致性
 
+终态去重与剩余计数由 LoadGroup 的同一临界区维护，不再逐 Pending 额外加锁。保留在途登记、结果订阅先于回源、lease 与 doFinally、最后读者取消、写入提前完成、重试和关闭兜底。Pending 延迟创建等待 Sink 时的同步仍然保留。回调复用、成功后的 lease 快路径及冷注册替换不采用；高并发对照没有证明这些变体比单独合并计数更可靠。整体 5% 上限继续作为未完成的验收边界。
+
 单键直接通过 Pending 交付值/空结果，不创建批量 ReadPlan 或 NULL 过滤链。批量拥有者只等待一次整批完成；加入已有请求时才创建对应 Key 的 Sink。逐 Key 所有权、版本、共享、取消和关闭语义保留，manager 在途登记、命中路径、fallback 与底层超时边界保持原样。
 
 本次性能收敛：用固定 64 个并发 Set 分散 manager 在途登记的共享竞争，按 Storage id 散列选择分组，沿用 ConcurrentHashMap.newKeySet 的登记/移除和关闭竞争处理。不保留每 Storage 的登记表或 id，已脱离 L1 的请求仍可取消，不依赖缓存容器淘汰回调。没有新增集合锁、关闭快照数组、超时、采样、线程池或加载抽象，命中路径保持原样。生命周期、首次加载/清理、同步 L2 与真实 Redis 的验证结果见下节。
@@ -25,6 +27,39 @@ API 的命中探测只读取已有条目；miss 的 Cache 注册和加载对象�
 单键 Pending、批量 ReadPlan 均先安装结果订阅，再启动对应 LoadGroup；每个 group 只驱动一次上游并传播首个驱动者 Context。已有 LoadGroup 作为 Reactor BaseSubscriber 直接接收单键或批量源，不构造 execution.cache、结果竞速、重复结果订阅、ready Sink 或 doOnNext/then 批量中转。每个读者对每个 group 只持有一次 lease；结果 Sink 负责背压与写入提前完成，封口前只保存 Context。单键按值/empty 交付；批量拥有者等待一次组信号，仅对别的 group 所有的 Key 建立等待信号，按每订阅私有的目标数组构造 Values。Key 终态只计入整批完成一次；关闭/错误还会检查已保留的终态，避免交付线程暂停导致整批永久等待。延迟创建的 Sink 会重放已准备的结果，不丢失完成信号。上游订阅、取消和迟到 onSubscribe 使用 BaseSubscriber 的标准实现，没有新增超时、观测或独立协调器。
 
 `RedisClusterCache.getAndRemove` 使用单 hash-slot Lua 执行 HGET/HDEL，避免两条命令之间的并发写入被误删；参数和结果分别使用 hash key/hash value 序列化器，兼容其与顶层 value 序列化器不同的情况。
+
+### 终态计数合并验证与性能边界
+
+编译及 93 项定向回归通过，零失败/错误/跳过。新增回归在批量 L2 已完成、一个加入者仍暂停于收到值的回调时关闭 manager，确认整批不依赖该交付线程恢复即可结束，且在途登记清空。命令与下节相同，日志为 `/private/tmp/config-lifecycle-tight-final-validation.log`，生产源 SHA-256 前 16 位为 `ae90bcaf807d901f`。仅 Pending、LoadGroup 的归一化 javap 字节码变化；外层命中 API、Cache、Snapshot、ReadPlan 和 manager 均与 130564d 一致，复用既有命中路径证据。
+
+D=`d41e901`，B=`130564d`，N 为终态计数合并。沿用同一编译夹具、JDK 21、JMH 1.35、1 fork、3×1s 预热、4×1s 测量、512 MiB 堆和 GC profiler，每 worker 独立 Storage/L1。1 线程按 D/B/N/N/B/D；32 线程复用拆分筛选中的 D/B/A/S/L/L/S/A/B/D，A 即最终 N，S/L 为未采用的 lease/回调变体。最终 Maven 编译的主要类及全部加载对象与筛选 A 的归一化字节码相同，不为交付重复压测。每格是两个进程样本的等权均值，阶段分别保留，不与旧轮次混算。
+
+| 同步 L2 持续回源 | D → B → N，ns/op | N 相对 B | 分配 B → N，B/op |
+| --- | ---: | ---: | ---: |
+| 1 线程单键 | 88.216 → 166.504 → 166.160 | -0.21% | 632.1 → 632.1 |
+| 1 线程 8 键 | 428.469 → 822.727 → 785.427 | -4.53% | 4296.3 → 4208.3 |
+| 32 线程单键 | 262.589 → 670.028 → 556.599 | -16.93% | 639.0 → 620.1 |
+| 32 线程 8 键 | 1461.860 → 3233.948 → 3072.502 | -4.99% | 4206.6 → 4206.6 |
+
+1 线程单键样本交叉，不认定提升。1 线程批量 B=822.129/823.326、N=782.502/788.352 ns；32 线程单键 B=632.271/707.785、N=566.434/546.764 ns。32 线程批量 B=3487.708/2980.188、N=3185.227/2959.777 ns，样本交叉，不能宣称稳定提速。B/op 随 JVM 逃逸分析变化，不把差值当作删除了固定大小对象。
+
+首个组合候选同时包含回调复用与成功后的 lease 快路径，32 线程单键/批量分别回退约 12.83%/12.32%，已撤销；拆分后只保留最小计数合并。原始数据分别为 `/private/tmp/config-lifecycle-tight-results/cpu-*`、`/private/tmp/config-lifecycle-tight-variants/t32-*`；最终单线程为 `/private/tmp/config-lifecycle-tight-results/accepted-cpu-*`。复现脚本为 `/private/tmp/config-lifecycle-tight-benchmark.py` 和 `/private/tmp/config-lifecycle-tight-variants/run.py`。
+
+异步共享按 B/N/N/B、8 个 worker，每轮 8 个读者加入同一未完成的 L2，由调度线程释放，每轮断言只回源一次且结果全部正确。单键整轮 B→N 为 26545.902→26271.247 ns（-1.03%），分配 3520.3→3328.2 B；8 键整轮为 31436.969→31419.926 ns（-0.05%），分配 21376.1→21376.3 B。耗时样本交叉，按基本持平报告，不作为单读者延迟或生产 P99 收益。原始数据为 `/private/tmp/config-lifecycle-tight-results/accepted-async-*`。
+
+真实 Redis 在 32 线程按 B/N/N/B、各 benchmark 独立 fork 运行，保留首轮负向结果：
+
+| Redis 首轮 | B → N，µs/op | 变化 | B 样本 | N 样本 |
+| --- | ---: | ---: | --- | --- |
+| 直接 L2 单键 | 326.747 → 377.174 | +15.43% | 335.244/318.250 | 415.411/338.936 |
+| Storage 单键 | 327.187 → 339.114 | +3.65% | 335.196/319.179 | 338.746/339.481 |
+| Storage 8 键 | 398.434 → 473.267 | +18.78% | 391.406/405.463 | 494.327/452.207 |
+
+为区分固定协调成本与独立 fork/服务波动，扩展 `ConfigStorageRedisPairBenchmark.pairedBatch8`：同一客户端、JVM 和 32 个 worker 内每轮各执行一次直接 8 键读取与冷 Storage 8 键读取，并轮换先后次序。两版本共用同一编译夹具和 CompilerHints，仅切生产类；累计耗时比 Storage/direct 为 B=1.010415/0.999695、N=1.010778/0.995630，整对耗时 B=781.480/760.964 µs、N=787.573/763.756 µs，未重现约 19% 的额外成本。该配对夹具通过 test-compile，生产 config 类目录字节码摘要保持 `3e27084c94b0b07bcd1b0cb7932fed408254566faf5cef3e46653c237a3230df`，复用 93 项回归；日志为 `/private/tmp/config-lifecycle-tight-paired-compile.log`。
+
+配对改变了负载形态，因此再按 B/N/N/B 只复核原始纯 Storage 8 键场景。B=393.014/392.856 µs、N=374.243/408.761 µs，均值 392.935→391.502 µs（-0.36%），样本交叉，按持平报告。未重现首轮 18.78% 回退，但具体干扰源未定位，不能把首轮负向全部定性为本地服务，也不把首轮、配对和复核合并成性能通过结论。原始数据为 `/private/tmp/config-lifecycle-tight-results/accepted-redis-*`、`accepted-paired-batch-*` 和 `accepted-redis-recheck-*`。
+
+此前 Redis 单键负向证据仍保留于下节，不因本轮 CPU 或复核结果删除。**相对原始 D 的整体 5% 上限仍未通过**：N 单键约为 D 的 1.88 倍（1 线程）/2.12 倍（32 线程），批量也明显高于 D；Redis 不宣称改善，生产 P99 与长稳仍未验证。交付沿用 [jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
 
 ### 结果交付收敛验证与性能边界
 

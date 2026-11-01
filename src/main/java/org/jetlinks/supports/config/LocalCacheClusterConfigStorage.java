@@ -549,13 +549,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             if (terminal == null) return;
             Sinks.One<Value> sink = result;
             if (sink != null) emit(sink, terminal);
-            if (!group.single) {
-                synchronized (this) {
-                    if (delivered) return;
-                    delivered = true;
-                }
-                group.resolved(terminal);
-            }
+            if (!group.single) group.resolved(this, terminal);
         }
     }
 
@@ -687,10 +681,14 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             else if (ready) completed.tryEmitValue(this);
             if (selected != null) start(selected);
         }
-        void resolved(Object terminal) {
+        void resolved(Pending pending, Object terminal) {
             boolean ready;
             Throwable error;
             synchronized (this) {
+                // Deduplication and the count share one owner; a delayed delivery can
+                // race with writes or shutdown without locking each Pending again.
+                if (pending.delivered) return;
+                pending.delivered = true;
                 if (terminal instanceof Throwable && failure == null) failure = (Throwable) terminal;
                 error = failure;
                 ready = --remaining == 0 && sealed;

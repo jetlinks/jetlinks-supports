@@ -533,6 +533,36 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
+    @Test public void shutdownFinishesABatchWhileAJoinedReaderIsStillReceivingItsValue() throws Exception {
+        CountDownLatch receiving = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Fixture f = new Fixture()) {
+            Sinks.One<Map<String, Object>> source = Sinks.one();
+            when(f.backend.get(anyCollection())).thenReturn(source.asMono().flatMapMany(values ->
+                Flux.fromIterable(Arrays.asList("a", "b"))
+                    .map(key -> new AbstractMap.SimpleImmutableEntry<>(key, values.get(key)))));
+            CompletableFuture<Values> batch = f.storage.getConfigs(Arrays.asList("a", "b")).toFuture();
+            CompletableFuture<Value> joined = f.storage.getConfig("a").doOnNext(value -> {
+                receiving.countDown();
+                try { assertTrue(resume.await(3, TimeUnit.SECONDS)); }
+                catch (InterruptedException error) { throw new AssertionError(error); }
+            }).toFuture();
+            Map<String, Object> values = new java.util.LinkedHashMap<>();
+            values.put("a", "A"); values.put("b", "B");
+            Future<?> delivery = executor.submit(() -> source.tryEmitValue(values));
+            try {
+                assertTrue(receiving.await(2, TimeUnit.SECONDS));
+                f.manager.dispose();
+                assertTrue("Shutdown must not await the paused delivery thread", batch.isDone());
+                assertTrue(batch.isCompletedExceptionally());
+                assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+            } finally { resume.countDown(); }
+            delivery.get(2, TimeUnit.SECONDS);
+            assertEquals("A", joined.get(2, TimeUnit.SECONDS).asString());
+        } finally { resume.countDown(); executor.shutdownNow(); }
+    }
+
     @Test public void simultaneousBatchesShareEveryKeyAndAllFinish() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(16);
         CountDownLatch start = new CountDownLatch(1);

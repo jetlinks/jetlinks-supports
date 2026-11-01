@@ -45,4 +45,33 @@ public class ConfigStorageRedisPairBenchmark {
         timings.storageNanos += System.nanoTime() - start;
         blackhole.consume(value);
     }
+
+    @Benchmark public void pairedBatch8(ConfigStorageRedisBenchmark.Shared shared,
+                                       ConfigStorageRedisBenchmark.Reload reload,
+                                       Timings timings, Blackhole blackhole) {
+        if (timings.storageFirst) {
+            storageBatch(shared, reload, timings, blackhole);
+            directBatch(shared, timings, blackhole);
+        } else {
+            directBatch(shared, timings, blackhole);
+            storageBatch(shared, reload, timings, blackhole);
+        }
+        timings.storageFirst = !timings.storageFirst;
+    }
+
+    private void directBatch(ConfigStorageRedisBenchmark.Shared shared, Timings timings, Blackhole blackhole) {
+        long start = System.nanoTime();
+        Object value = shared.backend.get(shared.keys).collectList().block();
+        timings.directNanos += System.nanoTime() - start;
+        blackhole.consume(value);
+    }
+
+    private void storageBatch(ConfigStorageRedisBenchmark.Shared shared, ConfigStorageRedisBenchmark.Reload reload,
+                              Timings timings, Blackhole blackhole) {
+        long start = System.nanoTime();
+        reload.entries.clear();
+        Object value = reload.storage.getConfigs(shared.keys).block();
+        timings.storageNanos += System.nanoTime() - start;
+        blackhole.consume(value);
+    }
 }
