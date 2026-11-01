@@ -4,6 +4,7 @@ import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.utils.Reactors;
 import org.springframework.data.redis.core.ReactiveHashOperations;
 import org.springframework.data.redis.core.ReactiveRedisOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -12,6 +13,9 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
+    private static final RedisScript<Object> GET_AND_REMOVE = RedisScript.of(
+        "local value = redis.call('hget', KEYS[1], ARGV[1]); "
+            + "if value then redis.call('hdel', KEYS[1], ARGV[1]); end; return value", Object.class);
 
     private final ReactiveHashOperations<Object, K, V> hash;
 
@@ -59,10 +63,14 @@ public class RedisClusterCache<K, V> implements ClusterCache<K, V> {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public Mono<V> getAndRemove(K key) {
-        // TODO: 2020/8/24 使用script实现?
-        return hash.get(redisKey, key)
-                   .flatMap(v -> remove(key).thenReturn(v));
+        // One hash-slot script prevents a concurrent update from being deleted after HGET.
+        // Hash fields and values may use serializers different from the top-level value.
+        return redis.execute(GET_AND_REMOVE, Collections.singletonList(redisKey), Collections.singletonList(key),
+            redis.getSerializationContext().getHashKeySerializationPair().getWriter(),
+            redis.getSerializationContext().<Object>getHashValueSerializationPair().getReader())
+            .map(value -> (V) value).next();
     }
 
     @Override

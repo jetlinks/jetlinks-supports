@@ -1,5 +1,45 @@
 # LocalCacheClusterConfigStorage 稳态读取优化
 
+## 共享加载与一致性
+
+owning module 为 `jetlinks-supports`：`LocalCacheClusterConfigStorage` 负责每 Key 状态与共享加载，`EventBusStorageManager` 负责实例注册和关闭，`RedisClusterCache` 提供原子的读取删除。
+
+每 Key 的版本、值和复用的命中 Mono 通过一个不可变 `Snapshot` 发布。纯值共享在锁外执行；随后在 Key 的短临界区检查加载所有权、发布新状态并准备等待者终态，锁外交付结果。旧请求不能覆盖较新写入；失效移除条目，迟到结果不能回填替代条目。日志不打印缓存值，旧 search 仅保存有界的异常类型字符串。
+
+miss 在订阅时创建 `ReadPlan`：按 Key 认领或加入 `Pending`，新认领 Key 合并成一次 L2 请求。重叠批量和单键共享已有 Key，仅对新增 Key 回源；同一批量重复订阅没有共享的可变结果 Map。未知/重复 L2 记录不扩张结果，部分结果直到源完成才发布，失败后重试不会残留废弃结果。命中路径复用 Mono 或直接构造 `Values`，不创建加载对象。
+
+边界：TTL 保持空闲过期，不增加容量阈值或专用前端；显式 fallback 在调用方订阅后执行，负缓存命中也可触发，保留既有成功结果缓存及写入可结束等待者的语义。原有 Error/容量 MBean 复用；不新增逐 Key 追踪。共享请求使用首个订阅者 Context，加入者不重复执行远端请求；最后一个使用者取消才释放共享上游。加载期限由底层 L2 或调用方控制，Storage 不新增超时配置或定时器；底层超时按普通错误处理，先释放所有权再交付错误/旧值并允许重试。上游尚未终止且读者未取消时继续等待，不属于 Storage 自身泄漏。
+
+每个读者持有共享请求的引用，取消其中一个读者不会影响其他读者，最后一个取消才取消上游。终态先清理加载槽再交付，重入 retry 可认领新请求；写入可以完成旧等待者，管理器关闭也会结束已被失效移除的在途工作。清空/清理移除空 Storage 后，保留的句柄重新加入管理器当前实例；旧句柄的写入和刷新也作用于当前实例。
+
+`RedisClusterCache.getAndRemove` 使用单 hash-slot Lua 执行 HGET/HDEL，避免两条命令之间的并发写入被误删；参数和结果分别使用 hash key/hash value 序列化器，兼容其与顶层 value 序列化器不同的情况。
+
+### 当前验证与性能边界
+
+编译及 68 项定向测试通过：观测/故障边界 28、存储 15、管理器 4、共享加载生命周期 19、Redis 原子读取删除 2。覆盖版本和值原子发布、迟到结果、重叠批量与单键合并、Context、重试、取消、写入/失效/关闭、底层超时后恢复及不同 hash 序列化器。回归使用 Sinks、虚拟时间和确定性门闩，验证实际订阅边界；合法的下游转换异常传播给调用方，不计作 L2 加载错误。
+
+定向命令：`mvn -o -Dtest=LocalCacheClusterConfigStorageTest,ConfigStorageMonitorTest,EventBusStorageManagerTest,LocalCacheClusterConfigStorageLifecycleTest,RedisClusterCacheTest test`。
+
+性能目标仍为最多 5% 影响，**当前尚未满足**。比较本轮修改前 `d41e901` 与当前实现：JDK 21、JMH 32 线程、1 fork、4×1s 预热、5×1s 测量、512 MiB 固定堆及 GC profiler；两边使用同一份编译后的夹具。每个回源 worker 使用不同 Storage id 和独立 L1，防止同 id 的实例规范化改变夹具含义。
+
+| 同步 L2 场景 | ns/op 基线 → 当前 | 耗时变化 | B/op 基线 → 当前 |
+| --- | ---: | ---: | ---: |
+| 单键热命中 | 7.538 → 6.158 | -18.31% | 0 → 0 |
+| 8 键热命中 | 223.688 → 192.609 | -13.89% | 416 → 416 |
+| 单键持续回源 | 228.721 → 3111.673 | +1260.47% | 384 → 2201 |
+| 8 键持续回源 | 1253.991 → 7025.527 | +460.25% | 2704 → 8087 |
+
+真实 Redis 5 使用同一夹具，以 A/B/B/A 顺序各运行两次；32 个 worker 各持有独立 L1，测量持续 miss，复用相同不变的 L2 数据。两次均值如下：
+
+| 真实 Redis 场景 | µs/op 基线 → 当前 | 耗时变化 | B/op 基线 → 当前 |
+| --- | ---: | ---: | ---: |
+| 单键持续回源 | 323.425 → 343.306 | +6.15% | 14315 → 16227 |
+| 8 键持续回源 | 374.788 → 401.893 | +7.23% | 57575 → 63031 |
+
+热命中没有观测工作或新增分配；持续 miss 的协调成本和分配明显增加，不能只用热路径收益宣称 5% 通过。Storage 没有新增加载超时定时器；加入者复用已有加载对象，单一共享请求省去多请求合并步骤，成功释放不创建取消异常。增加的 Pending、订阅/结果协调、引用管理与 manager 在途登记用于共享加载和生命周期保证，不能归咎于观测或全部归咎于本机波动。真实 Redis 两个候选样本单键为 359.951/326.662 µs，存在波动，保留全部结果而不择优。
+
+夹具为 `ConfigStorageConcurrencyBenchmark` 和 `ConfigStorageRedisBenchmark`；原始结果 `/private/tmp/config-lifecycle-final-cpu-{baseline,candidate}.json`、`/private/tmp/config-lifecycle-final-redis-{1-baseline,2-candidate,3-candidate,4-baseline}.json`。历史观测精简结果不能当作本轮重构的证据。真实设备消息端到端 P99 与 24 小时 churn/GC/RSS 仍未验证。交付继续使用 [#48](https://github.com/jetlinks/jetlinks-supports/pull/48)，性能门槛保持未通过。
+
 ## 一级缓存观测与一致性
 
 观测只回答三个运维问题：缓存是否持续膨胀、配置读取是否因错误使用旧结果、本地失效及监听链路是否异常。实现归属 `src/main/java/org/jetlinks/supports/config/`，复用：
@@ -20,7 +60,7 @@
 | 外部监听器 | `listenerErrors` | 与本地失效异常分开；监听器抛错不代表已完成的本地失效失败。 |
 | 最近错误 | `lastErrorStage`、`lastErrorType`、`lastErrorAt` | 原子发布有界的阶段/异常类型/时间快照，不保留 Throwable、Key 或配置值；详细原因沿原异常传播和现有日志定位。 |
 
-`loadErrors` 包含配置加载、结果处理/交付及本地缓存冲突的异常，不是 Redis 请求失败数。批量下游交付抛异常时也会计入，并保持原异常传播；重试每次异常处理分别记账，不采样、不换算为请求总数或失败率。订阅创建失败和规模扫描失败分别标记 `subscription`、`countScan` 阶段；加载、本地失效、监听器分别为 `load`、`invalidation`、`listener`。
+`loadErrors` 包含 L2/fallback 及本地加载结果处理的异常，不是 Redis 请求失败数；读取者自己的下游转换异常继续传播，不计入该数。共享请求的一次错误只记录一次，重试的新请求独立记账，不采样、不换算为请求总数或失败率。订阅创建失败和规模扫描失败分别标记 `subscription`、`countScan` 阶段；加载、本地失效、监听器分别为 `load`、`invalidation`、`listener`。
 
 `invalidationErrors` 覆盖 `handleNotify` 中接收通知后的本地处理错误；它与监听器失败一样，原本由异步处理器捕获，不能只依赖调用方发现。公开写入、主动失效与通知发布失败继续沿原调用链传播，不为凑齐操作成功/失败次数增加包装或改写控制流。
 
@@ -36,11 +76,13 @@
 
 失效移除加载中的条目，旧请求允许结束；迟到的单键/批量结果只更新脱离当前 map 的旧对象。L2 写成功后才更新 L1，未订阅/失败/取消不暴露未提交值；L2 已提交但通知失败仍向调用方报错。业务所需的 `doOnSuccess` 保留，不添加观测操作符或包装。
 
-默认单键读取省去空 fallback 的 `switchIfEmpty`；显式 fallback 保持原语义。批量 Mono 保留只读目标和可选 L1 初值，每次订阅只创建自身结果 Map；`putIfAbsent` 合并重复判断与首次写入，仅在并发缓存值变化时覆盖。显式负值的内部标记在返回前移除；未知/重复记录忽略，重试和重复订阅状态独立。
+默认单键读取省去空 fallback 的 `switchIfEmpty`。负缓存命中仍可执行显式 fallback；带 fallback 的单键加入普通单键/批量请求且得到负结果后，继续执行 fallback。批量按开始时的状态认领 Pending，较新写入已准备的等待者终态优先；显式负值标记不出现在返回的 Values 中。重试和重复订阅状态独立。TTL 为空闲过期，不保证热 Key 的最大陈旧时间，也不提供硬容量上限。
 
-不新增 Key 级字段、独立 Load 对象、响应式包装或逐条 TraceHolder 埋点。现有异常传播和链路追踪保留，正常业务路径不为观测创建 span。
+观测不增加 Key 级字段、加载对象、响应式包装或逐条 TraceHolder 埋点；共享加载的状态仅服务业务正确性和取消传播。现有异常传播和链路追踪保留，正常业务路径不为观测创建 span。
 
-### 验证与性能预算
+### 观测精简阶段验证与性能预算（共享加载重构前）
+
+以下数据对应此前的观测精简实现，保留用于解释历史性能判断，不代表当前共享加载实现；当前证据见上文。
 
 Maven 编译及 47 项定向测试通过（观测/故障边界 28、存储 15、含真实 Redis 的管理器 4），零失败/错误/跳过。覆盖写入与失效竞态、迟到正负结果、共享加载、重试/取消、fallback、下游交付错误、被动查看、快照超时及 MBean 生命周期；新增分别验证本地失效、监听器、订阅创建及扫描失败的计数/阶段与恢复语义。
 
@@ -67,7 +109,7 @@ mvn -o -Dtest=LocalCacheClusterConfigStorageTest,EventBusStorageManagerTest,Conf
 
 上一版 808de76 的 32 线程顺序对照曾有 -6.32% 热命中、-13.38% 单键加载，以及 +5.18% 单键加载 P99；同一代码重复运行也有约 27% 波动。这些是已撤除加载抽样的旧版本数据，不作为当前版本结论；原始数据仍在 `/private/tmp/config-five-put-*.json` 和 `/private/tmp/config-five-final32-*.json`，未将失败改写为通过。
 
-### 32 线程下降归因复核
+### 32 线程下降归因复核（共享加载重构前）
 
 复核对象仍是 `a160079` 与 `d2982b6` 的冻结生产类和同一夹具，未修改实现、未停止本地服务。主机为 18 物理/逻辑核、64 GiB，32 个工作线程已超过核心数。接电且起止 `pmset` 无温控/性能告警。每进程 1 fork、6 × 1 s 预热、6 × 1 s 测量，512 MiB 堆；每秒采集进程累计 CPU 差与 `vm_stat`，CPU 的 100% 表示一个核心。进程采样包含启动/预热/测量，不能精确当作 JMH 每次测量的 CPU。
 
@@ -94,6 +136,8 @@ mvn -o -Dtest=LocalCacheClusterConfigStorageTest,EventBusStorageManagerTest,Conf
 容量扫描的访问/时间预算未扩大，删除了仅用于显示进度的字段和更新。真实 Redis/设备链路 CPU/input、端到端 P99 A/B、24 小时 churn/GC/RSS 尚未验证；本机同步 L2 基准不能保证所有生产负载的性能上限。交付继续使用 [jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
 
 ## 双、三键全 L1 命中复核
+
+本节及后续通用 L1/设备链路对照是历史优化证据，测试制品早于当前共享加载实现。
 
 目标：在已完成的通用 L1 快路径基础上，隔离验证设备常用的双、三键读取是否值得专门构造 `Values`。仅在全部键已有缓存值时进入快路径；缺键、失效、重复键和负缓存必须维持原有语义，不调整缓存加载、失效或版本逻辑。使用相同 JMH 夹具比较原实现和候选的 1/8 线程吞吐及分配，辅以定向回归。若完整链路没有明确增益，不引入新的常驻状态或操作符。
 

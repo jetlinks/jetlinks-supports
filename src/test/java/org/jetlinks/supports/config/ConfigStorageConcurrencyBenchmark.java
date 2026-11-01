@@ -67,7 +67,8 @@ public class ConfigStorageConcurrencyBenchmark {
         @Setup(Level.Trial)
         public void setup(Shared shared) {
             entries = new ConcurrentHashMap<>();
-            storage = new LocalCacheClusterConfigStorage("thread-load", shared.manager, shared.backend, shared.ttlMillis, null, entries);
+            storage = new LocalCacheClusterConfigStorage("thread-load-" + Thread.currentThread().getName(),
+                shared.manager, shared.backend, shared.ttlMillis, null, entries);
         }
     }
 

@@ -1,89 +1,60 @@
 package org.jetlinks.supports.config;
 
 import com.google.common.collect.Maps;
-import lombok.AllArgsConstructor;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.hswebframework.web.exception.BusinessException;
 import org.jetlinks.core.Value;
 import org.jetlinks.core.Values;
 import org.jetlinks.core.cluster.ClusterCache;
 import org.jetlinks.core.config.ConfigKey;
 import org.jetlinks.core.config.ConfigStorage;
 import org.jetlinks.core.device.DeviceConfigKey;
-import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.utils.Reactors;
-import org.reactivestreams.Subscription;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.ConcurrentReferenceHashMap;
-import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
-import reactor.core.Scannable;
-import reactor.core.publisher.*;
-import reactor.util.context.Context;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
-import javax.annotation.Nonnull;
 import javax.management.openmbean.CompositeData;
 import javax.management.openmbean.CompositeType;
 import java.util.*;
-import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * Per-storage L1 values and shared in-flight single-key reads. Invalidated entries are
- * detached: old readers may finish, but their late results cannot repopulate a new entry.
- * Operational statistics belong to the manager, not to each cached key.
+ * Manager-owned L1 configuration values. A key publishes its value and version together;
+ * single and batch subscribers share pending work without sharing mutable result maps.
+ * Invalidated entries may finish old readers but cannot populate a replacement entry.
+ * Deadlines belong to the underlying source. Cancellation and shutdown release owned work;
+ * hits perform no observation work.
+ *
+ * @see ConfigStorage
+ * @see EventBusStorageManager
  */
 @Slf4j
 public class LocalCacheClusterConfigStorage implements ConfigStorage {
-    @SuppressWarnings("all")
-    private static final AtomicReferenceFieldUpdater<Cache, Mono> CACHE_REF = AtomicReferenceFieldUpdater
-        .newUpdater(Cache.class, Mono.class, "ref");
-    @SuppressWarnings("all")
-    private static final AtomicReferenceFieldUpdater<Cache, Value> CACHED = AtomicReferenceFieldUpdater
-        .newUpdater(Cache.class, Value.class, "cached");
-
-    @SuppressWarnings("all")
-    private static final AtomicReferenceFieldUpdater<Cache, Sinks.One> AWAIT = AtomicReferenceFieldUpdater
-        .newUpdater(Cache.class, Sinks.One.class, "await");
-
-    private static final AtomicIntegerFieldUpdater<Cache> CACHE_VERSION = AtomicIntegerFieldUpdater
-        .newUpdater(Cache.class, "version");
-
-    private static final AtomicReferenceFieldUpdater<Cache, Disposable> CACHE_LOADING = AtomicReferenceFieldUpdater
-        .newUpdater(Cache.class, Disposable.class, "loading");
-
     private static final Map<Value, Value> shared = new ConcurrentReferenceHashMap<>(1024);
-
     private static final Set<String> sharedKey = ConcurrentHashMap.newKeySet();
-
     public static final Value NULL = Value.simple(null);
-
     private static final Values EMPTY_VALUES = Values.of(Collections.emptyMap());
-
     private static final Mono<Values> EMPTY_VALUES_MONO = Mono.just(EMPTY_VALUES);
-
+    private static final Snapshot EMPTY = new Snapshot(0, null);
     private static volatile CompositeType inspectionType;
 
     private final Map<String, Cache> caches;
     final String id;
     private final EventBusStorageManager manager;
-
     private final ClusterCache<String, Object> clusterCache;
-
     private final long expires;
     private final Consumer<LocalCacheClusterConfigStorage> doOnClear;
+    // Bounded error identity for the legacy search view; never retain a Throwable graph.
+    volatile String lastError;
 
-    Throwable lastError;
-
-    LocalCacheClusterConfigStorage(String id,
-                                   EventBusStorageManager manager,
-                                   ClusterCache<String, Object> clusterCache,
-                                   long expires,
+    LocalCacheClusterConfigStorage(String id, EventBusStorageManager manager,
+                                   ClusterCache<String, Object> clusterCache, long expires,
                                    Consumer<LocalCacheClusterConfigStorage> doOnClear,
                                    Map<String, Cache> cacheContainer) {
         this.id = id;
@@ -95,176 +66,163 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
     LocalCacheClusterConfigStorage(String id, EventBusStorageManager manager,
-                                   ClusterCache<String, Object> clusterCache,
-                                   long expires,
+                                   ClusterCache<String, Object> clusterCache, long expires,
                                    Consumer<LocalCacheClusterConfigStorage> doOnClear) {
         this(id, manager, clusterCache, expires, doOnClear, new ConcurrentHashMap<>());
     }
 
-
-    boolean isEmpty() {
-        return caches.isEmpty();
-    }
-
-    int localEntryCount() {
-        return caches.size();
-    }
+    boolean isEmpty() { return caches.isEmpty(); }
+    int localEntryCount() { return caches.size(); }
 
     CompositeData[] inspect(int limit) {
         List<CompositeData> result = new ArrayList<>(Math.min(limit, caches.size()));
         CompositeType type = inspectionType;
         for (Map.Entry<String, Cache> entry : caches.entrySet()) {
             Cache cache = entry.getValue();
-            Map<String, Object> fields = new LinkedHashMap<>();
+            Snapshot state = cache.current;
             String key = entry.getKey();
+            Map<String, Object> fields = new LinkedHashMap<>();
             fields.put("key", key.length() <= 512 ? key : key.substring(0, 512));
             fields.put("keyTruncated", key.length() > 512);
             fields.put("state", cache.isExpired() ? "expired" : cache.loading != null ? "loading"
-                : cache.cached == null ? "empty" : cache.cached == NULL ? "negative" : "value");
-            fields.put("version", (long) cache.version);
-            if (type == null) {
-                inspectionType = type = ConfigStorageMonitor.createType("LocalConfigEntry", fields);
-            }
+                : state.value == null ? "empty" : state.value == NULL ? "negative" : "value");
+            fields.put("version", (long) state.version);
+            if (type == null) inspectionType = type = ConfigStorageMonitor.createType("LocalConfigEntry", fields);
             result.add(ConfigStorageMonitor.openData(type, fields));
-            if (result.size() == limit) {
-                break;
-            }
+            if (result.size() == limit) break;
         }
         return result.toArray(new CompositeData[0]);
     }
 
     void cleanup() {
-        if (expires > 0) {
-            caches.forEach((k, v) -> {
-                if (v.isExpired()) {
-                    caches.remove(k, v);
-                }
-            });
-        }
+        if (expires > 0) caches.forEach((key, cache) -> {
+            if (cache.isExpired() && cache.loading == null) caches.remove(key, cache);
+        });
     }
 
-    void error(Throwable err) {
-        this.lastError = err;
-        manager.monitor.loadError(err);
+    void error(Throwable error) {
+        lastError = error.getClass().getName();
+        manager.monitor.loadError(error);
     }
 
-    private Cache createCache(String key) {
-        return new Cache(key);
-    }
+    private Cache createCache(String key) { return new Cache(key); }
 
     private Cache getOrCreateCache(String key) {
-        Cache cache = caches.get(key);
-        if (cache != null) {
-            return cache;
+        Cache found = caches.get(key);
+        if (found != null) return found;
+        // Miss registration and empty-storage removal use the same manager map boundary.
+        // A retained handle rejoins the canonical storage after clear/cleanup.
+        for (;;) {
+            LocalCacheClusterConfigStorage active = manager.cache.compute(id, (name, existing) -> {
+                LocalCacheClusterConfigStorage selected = existing == null ? this : existing;
+                selected.caches.computeIfAbsent(key, selected::createCache);
+                return selected;
+            });
+            found = active.caches.get(key);
+            if (found != null) return found;
         }
-        return caches.computeIfAbsent(key, this::createCache);
     }
 
     @Override
-    public Mono<Value> getConfig(String key) {
-        return getOrCreateCache(key).getRef(null);
-    }
+    public Mono<Value> getConfig(String key) { return getConfig(key, null); }
 
     @Override
-    public Mono<Value> getConfig(String key, Mono<Object> loader) {
-        return getOrCreateCache(key)
-            .getRef(loader);
+    public Mono<Value> getConfig(String key, Mono<Object> fallback) {
+        Cache cache = getOrCreateCache(key);
+        Snapshot state = cache.cachedState();
+        if (state != null && (state.value != NULL || fallback == null)) return state.result;
+        // Resolve again per subscription: retry must claim new work, never replay a failed sink.
+        return Mono.defer(() -> singleRead(key, fallback));
+    }
+
+    private Mono<Value> singleRead(String key, Mono<Object> fallback) {
+        Cache cache = getOrCreateCache(key);
+        Snapshot state = cache.cachedState();
+        if (state != null && (state.value != NULL || fallback == null)) return state.result;
+        ReadPlan plan = new ReadPlan(true, fallback);
+        try {
+            Mono<Value> result = plan.read(cache, fallback != null);
+            plan.seal();
+            Mono<Value> read = plan.run(result).filter(value -> value != NULL);
+            // A single with a fallback can join a batch/default read. If that shared
+            // request finds no value, claim the negative entry and run the fallback.
+            if (fallback != null && !plan.leases.isEmpty() && plan.leases.get(0).group.fallback == null) {
+                return read.switchIfEmpty(Mono.defer(() -> singleRead(key, fallback)));
+            }
+            return read;
+        } catch (Throwable error) {
+            plan.seal();
+            plan.release();
+            return Mono.error(error);
+        }
     }
 
     @Override
     public Mono<Values> getConfigs(Collection<String> keys) {
-        Mono<Values> cachedValues = getCachedValues(keys);
-        if (cachedValues != null) {
-            return cachedValues;
-        }
-        int remaining = keys.size();
-        Map<String, Object> loaded = null;
-        //获取二级缓存中加载的配置
-        Map<String, Cache> cacheLoaded = null;
-        for (String key : keys) {
-            Cache local = getOrCreateCache(key);
-            Value cached = local.getCached();
-            if (cached != null) {
-                //命中一级缓存
-                Object value = cached.get();
-                if (value != null) {
-                    if (loaded == null) {
-                        loaded = Maps.newHashMapWithExpectedSize(keys.size());
-                    }
-                    loaded.put(key, value);
-                }
-            } else {
-                if (cacheLoaded == null) {
-                    cacheLoaded = Maps.newHashMapWithExpectedSize(remaining);
-                }
-                cacheLoaded.put(key, local);
-            }
-            remaining--;
-        }
-        //全部来自一级缓存则直接返回
-        if (cacheLoaded == null) {
-            return loaded == null
-                ? EMPTY_VALUES_MONO
-                : Mono.just(Values.of(loaded));
-        }
-        //需要从二级缓存中加载的配置
-        Set<String> needLoadKeys = cacheLoaded.keySet();
+        Mono<Values> cached = getCachedValues(keys);
+        if (cached != null) return cached;
+        // Copy only the keys, not mutable targets/results, across subscriptions.
+        List<String> requested = new ArrayList<>(new LinkedHashSet<>(keys));
+        return Mono.defer(() -> batchRead(requested));
+    }
 
-        return new MultiCacheLoaderMono(
-            clusterCache.get(needLoadKeys),
-            cacheLoaded,
-            loaded
-        );
-
+    private Mono<Values> batchRead(List<String> keys) {
+        ReadPlan plan = new ReadPlan(false, null);
+        try {
+            List<Mono<Value>> results = new ArrayList<>(keys.size());
+            for (String key : keys) results.add(plan.read(getOrCreateCache(key), false));
+            plan.seal();
+            Mono<Values> result = Mono.zip(results, values -> {
+                Map<String, Object> container = Maps.newHashMapWithExpectedSize(keys.size());
+                for (int i = 0; i < values.length; i++) {
+                    Object value = ((Value) values[i]).get();
+                    if (value != null) container.put(keys.get(i), value);
+                }
+                return container.isEmpty() ? EMPTY_VALUES : Values.of(container);
+            });
+            return plan.run(result);
+        } catch (Throwable error) {
+            plan.seal();
+            plan.release();
+            return Mono.error(error);
+        }
     }
 
     private Mono<Values> getCachedValues(Collection<String> keys) {
+        if (keys.isEmpty()) return EMPTY_VALUES_MONO;
         int count = keys.size();
-        if (count != 2 && count != 3) {
-            return null;
+        if (count == 2 || count == 3) {
+            Iterator<String> it = keys.iterator();
+            String firstKey = it.next();
+            Value first = getOrCreateCache(firstKey).getCached();
+            if (first == null) return null;
+            String secondKey = it.next();
+            Value second = getOrCreateCache(secondKey).getCached();
+            if (second == null) return null;
+            if (count == 2) return first.get() == null && second.get() == null ? EMPTY_VALUES_MONO
+                : Mono.just(Values.of(firstKey, first.get(), secondKey, second.get()));
+            String thirdKey = it.next();
+            Value third = getOrCreateCache(thirdKey).getCached();
+            if (third == null) return null;
+            return first.get() == null && second.get() == null && third.get() == null ? EMPTY_VALUES_MONO
+                : Mono.just(Values.of(firstKey, first.get(), secondKey, second.get(), thirdKey, third.get()));
         }
-        Iterator<String> iterator = keys.iterator();
-        String firstKey = iterator.next();
-        Value first = getOrCreateCache(firstKey).getCached();
-        if (first == null) {
-            return null;
+        Map<String, Object> values = null;
+        for (String key : keys) {
+            Value value = getOrCreateCache(key).getCached();
+            if (value == null) return null;
+            if (value.get() != null) {
+                if (values == null) values = Maps.newHashMapWithExpectedSize(count);
+                values.put(key, value.get());
+            }
         }
-        String secondKey = iterator.next();
-        Value second = getOrCreateCache(secondKey).getCached();
-        if (second == null) {
-            return null;
-        }
-        Object firstValue = first.get();
-        Object secondValue = second.get();
-        if (count == 2) {
-            return firstValue == null && secondValue == null
-                ? EMPTY_VALUES_MONO
-                : Mono.just(Values.of(firstKey, firstValue, secondKey, secondValue));
-        }
-        String thirdKey = iterator.next();
-        Value third = getOrCreateCache(thirdKey).getCached();
-        if (third == null) {
-            return null;
-        }
-        Object thirdValue = third.get();
-        return firstValue == null && secondValue == null && thirdValue == null
-            ? EMPTY_VALUES_MONO
-            : Mono.just(Values.of(firstKey, firstValue, secondKey, secondValue, thirdKey, thirdValue));
-    }
-
-    private void updateValue(Cache cache, int version, Object value) {
-        if (cache != null) {
-            cache.updateValue(version, value == null ? null : Value.simple(value));
-        }
+        return values == null ? EMPTY_VALUES_MONO : Mono.just(Values.of(values));
     }
 
     @Override
     public Mono<Boolean> setConfigs(Map<String, Object> values) {
-        if (CollectionUtils.isEmpty(values)) {
-            return Reactors.ALWAYS_TRUE;
-        }
+        if (CollectionUtils.isEmpty(values)) return Reactors.ALWAYS_TRUE;
         return clusterCache.putAll(values)
-            // Never expose an uncommitted value when the returned write fails or is not subscribed.
             .doOnSuccess(ignored -> values.forEach(this::trySetLocalValue))
             .then(notify(CacheNotify.expires(id, values.keySet())))
             .then(Reactors.ALWAYS_TRUE);
@@ -272,500 +230,315 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     @Override
     public Mono<Boolean> setConfig(String key, Object value) {
-        if (key == null) {
-            return Reactors.ALWAYS_FALSE;
-        }
-        if (value == null) {
-            return remove(key);
-        }
+        if (key == null) return Reactors.ALWAYS_FALSE;
+        if (value == null) return remove(key);
         return clusterCache.put(key, value)
             .doOnSuccess(ignored -> trySetLocalValue(key, value))
-            .then(notifyRemoveKey(key))
-            .then(Reactors.ALWAYS_TRUE);
+            .then(notifyRemoveKey(key)).then(Reactors.ALWAYS_TRUE);
     }
 
     private void trySetLocalValue(String key, Object value) {
-        if (value == null) {
-            return;
-        }
-        Cache cache = caches.get(key);
-        if (cache != null) {
-            cache.setValue(cache.version, value);
-        }
+        LocalCacheClusterConfigStorage active = manager.cache.get(id);
+        Cache cache = (active == null ? this : active).caches.get(key);
+        if (cache != null) cache.publish(value == null ? NULL : tryShare(key, Value.simple(value)));
     }
 
-    @Override
-    public Mono<Boolean> remove(String key) {
-        return clusterCache.remove(key)
-            .then(notifyRemoveKey(key))
-            .then(Reactors.ALWAYS_TRUE);
+    @Override public Mono<Boolean> remove(String key) {
+        return clusterCache.remove(key).then(notifyRemoveKey(key)).then(Reactors.ALWAYS_TRUE);
     }
 
-    @Override
-    public Mono<Value> getAndRemove(String key) {
-        return clusterCache.getAndRemove(key)
-            .flatMap(res -> notify(CacheNotify.expires(id, Collections.singleton(key))).thenReturn(res))
-            .map(Value::simple);
+    @Override public Mono<Value> getAndRemove(String key) {
+        return clusterCache.getAndRemove(key).map(Value::simple)
+            .flatMap(value -> notifyRemoveKey(key).thenReturn(value))
+            .switchIfEmpty(notifyRemoveKey(key).then(Mono.empty()));
     }
 
-    @Override
-    public Mono<Boolean> remove(Collection<String> key) {
-        return clusterCache.remove(key)
-            .then(notify(CacheNotify.expires(id, key)))
-            .then(Reactors.ALWAYS_TRUE);
+    @Override public Mono<Boolean> remove(Collection<String> keys) {
+        return clusterCache.remove(keys).then(notify(CacheNotify.expires(id, keys))).then(Reactors.ALWAYS_TRUE);
     }
 
-    @Override
-    public Mono<Boolean> clear() {
-        return clusterCache.clear()
-            .then(notify(CacheNotify.clear(id)))
-            .then(Reactors.ALWAYS_TRUE);
+    @Override public Mono<Boolean> clear() {
+        return clusterCache.clear().then(notify(CacheNotify.clear(id))).then(Reactors.ALWAYS_TRUE);
     }
 
     void clearLocalCache(CacheNotify notify) {
-        if (CollectionUtils.isEmpty(notify.getKeys())) {
-            caches.clear();
-        } else {
-            for (String key : notify.getKeys()) {
-                // Remove loading entries too. Late loaders own only the detached object.
-                caches.remove(key);
-            }
-        }
-        if (notify.isClear()) {
-            if (doOnClear != null) {
-                doOnClear.accept(this);
-            }
-        }
+        if (CollectionUtils.isEmpty(notify.getKeys())) caches.clear();
+        else for (String key : notify.getKeys()) caches.remove(key);
+        if (notify.isClear() && doOnClear != null) doOnClear.accept(this);
     }
 
     Mono<Void> notify(CacheNotify notify) {
         return Mono.defer(() -> {
+            LocalCacheClusterConfigStorage active = manager.cache.get(id);
+            if (active != null && active != this) active.clearLocalCache(notify);
             clearLocalCache(notify);
             return manager.doNotify(notify);
         });
     }
 
-    Mono<Void> notifyRemoveKey(String key) {
-        return notify(CacheNotify.expires(id, Collections.singleton(key)));
-    }
-
-    Map<String, Object> getAll() {
-        return Collections.unmodifiableMap(
-            Maps.transformValues(caches, Cache::getCachedValue)
-        );
-    }
-
-    @Override
-    public Mono<Void> refresh() {
-        return notify(CacheNotify.expiresAll(id));
-    }
-
-    @Override
-    public Mono<Void> refresh(Collection<String> keys) {
-        return notify(CacheNotify.expires(id, keys));
-    }
+    Mono<Void> notifyRemoveKey(String key) { return notify(CacheNotify.expires(id, Collections.singleton(key))); }
+    Map<String, Object> getAll() { return Collections.unmodifiableMap(Maps.transformValues(caches, Cache::getCachedValue)); }
+    @Override public Mono<Void> refresh() { return notify(CacheNotify.expiresAll(id)); }
+    @Override public Mono<Void> refresh(Collection<String> keys) { return notify(CacheNotify.expires(id, keys)); }
 
     static {
-
-        addSharedKey(DeviceConfigKey.productId);
-        addSharedKey(DeviceConfigKey.protocol);
-        addSharedKey(DeviceConfigKey.connectionServerId);
-        addSharedKey("state");
-        addSharedKey("productName");
-
+        addSharedKey(DeviceConfigKey.productId, DeviceConfigKey.protocol, DeviceConfigKey.connectionServerId);
+        addSharedKey("state", "productName");
+    }
+    public static void addSharedKey(ConfigKey<?>... keys) { for (ConfigKey<?> key : keys) sharedKey.add(key.getKey()); }
+    public static void addSharedKey(String... keys) { sharedKey.addAll(Arrays.asList(keys)); }
+    private static Value tryShare(String key, Value value) {
+        return sharedKey.contains(key) ? shared.computeIfAbsent(value, Function.identity()) : value;
     }
 
-    public static void addSharedKey(ConfigKey<?>... key) {
-        for (ConfigKey<?> configKey : key) {
-            sharedKey.add(configKey.getKey());
-        }
-    }
-
-    public static void addSharedKey(String... key) {
-        sharedKey.addAll(Arrays.asList(key));
-    }
-
-    private static Value tryShare(String key, Value val) {
-        if (!sharedKey.contains(key)) {
-            return val;
-        }
-        return shared.computeIfAbsent(val, Function.identity());
-    }
-
-    @AllArgsConstructor
-    class MultiCacheLoaderMono extends Mono<Values> {
-        private final Flux<? extends Map.Entry<String, Object>> source;
-        private final Map<String, Cache> keys;
-        private final Map<String, Object> container;
-
-        @Override
-        public void subscribe(@Nonnull CoreSubscriber<? super Values> actual) {
-            // Targets and L1 seeds stay immutable; only each subscription's result is mutable.
-            source.subscribe(new MultiCacheLoader(keys, container, actual));
-        }
-
-    }
-
-    class MultiCacheLoader extends BaseSubscriber<Map.Entry<String, Object>> implements Scannable {
-        private final Map<String, Cache> keys;
-        private final Map<String, Object> container;
-        private final CoreSubscriber<? super Values> actual;
-        private int remaining;
-
-        MultiCacheLoader(Map<String, Cache> keys, Map<String, Object> container,
-                         CoreSubscriber<? super Values> actual) {
-            this.keys = keys;
-            this.container = Maps.newHashMapWithExpectedSize(keys.size() + (container == null ? 0 : container.size()));
-            if (container != null) {
-                this.container.putAll(container);
-                // A repeated input key can observe a miss and then a concurrent L1 update.
-                keys.keySet().forEach(this.container::remove);
-            }
-            this.actual = actual;
-            this.remaining = keys.size();
-        }
-
-        @Override
-        protected void hookOnSubscribe(@Nonnull Subscription subscription) {
-            actual.onSubscribe(this);
-        }
-
-        @Override
-        @Nonnull
-        public Context currentContext() {
-            return actual.currentContext();
-        }
-
-        @Override
-        protected void hookOnNext(Map.Entry<String, Object> entry) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
-            //加载到一级缓存中
-            Cache cache = keys.get(key);
-            // Claim and store the first result together; the map is private until completion.
-            if (cache == null || container.putIfAbsent(key, value == null ? NULL : value) != null) {
-                // Do not let an unexpected/duplicate L2 record resurrect an invalidated entry.
-                request(1);
-                return;
-            }
-            cache.setValue(cache.version, value);
-            Object val = cache.getCachedValue();
-            //最新值为null?可能是并发读写.版本不一致,还未成功加载值,直接使用获取到的值.
-            if (val == null) {
-                val = value;
-            }
-            // Only a concurrent cache update needs to replace the result already recorded above.
-            if (val != value) {
-                container.put(key, val);
-            }
-            if (val != null) {
-                remaining--;
-            }
-            request(1);
-        }
-
-        @Override
-        protected void hookOnError(@Nonnull Throwable throwable) {
-            manager.monitor.loadError(throwable);
-            actual.onError(throwable);
-        }
-
-        @Override
-        protected void hookOnComplete() {
-            //还有配置没加载出来,说明这些配置不存在，则全部设置为null
-            if (remaining != 0) {
-                for (Map.Entry<String, Cache> entry : keys.entrySet()) {
-                    String needLoadKey = entry.getKey();
-                    Object received = container.get(needLoadKey);
-                    if (received == NULL) {
-                        container.remove(needLoadKey);
-                        continue;
-                    }
-                    if (received != null) {
-                        continue;
-                    }
-                    Cache cache = entry.getValue();
-                    cache.setValue(cache.version, null);
-                    //设置最新的值,防止并发更新导致不一致
-                    Object val = cache.getCachedValue();
-                    if (val != null) {
-                        container.put(needLoadKey, val);
-                    }
-                }
-            }
-            actual.onNext(container.isEmpty() ? EMPTY_VALUES : Values.of(container));
-            actual.onComplete();
-        }
-
-        @Override
-        public Object scanUnsafe(@Nonnull Attr key) {
-            if (key == Attr.RUN_STYLE) {
-                return Attr.RunStyle.SYNC;
-            }
-            if (key == Attr.ACTUAL) {
-                return actual;
-            }
-            return null;
+    /** Value, reusable hit publisher and version are a single volatile publication. */
+    private static final class Snapshot {
+        final int version;
+        final Value value;
+        final Mono<Value> result;
+        Snapshot(int version, Value value) {
+            this.version = version;
+            this.value = value;
+            result = value == null || value == NULL ? Mono.empty() : Mono.just(value);
         }
     }
 
     public class Cache {
         final String key;
-        long t;
-        volatile int version;
-        volatile Value cached;
-
-        volatile Mono<Value> ref;
-        volatile Sinks.One<Value> await;
-        volatile Disposable loading;
-
-        @Override
-        public String toString() {
-            return key + ":" + version + "(" + cached + ")";
+        volatile long t;
+        private volatile Snapshot current = EMPTY;
+        private volatile Pending loading;
+        public Cache(String key) { this.key = key; touch(); }
+        int version() { return current.version; }
+        boolean isExpired() { return expires > 0 && System.currentTimeMillis() - t > expires; }
+        void touch() { if (expires > 0) t = System.currentTimeMillis(); }
+        Snapshot cachedState() {
+            Snapshot state = current;
+            if (state.value == null || isExpired()) return null;
+            touch();
+            return state;
         }
+        public Value getCached() { Snapshot state = cachedState(); return state == null ? null : state.value; }
+        public Object getCachedValue() { touch(); Value value = current.value; return value == null ? null : value.get(); }
 
-        public Cache(String key) {
-            this.key = key;
-            updateTime();
-        }
-
-        boolean isExpired() {
-            return expires > 0 && System.currentTimeMillis() - t > expires;
-        }
-
-        @SuppressWarnings("unchecked")
-        Mono<Value> getRef(Mono<Object> loader) {
-            Mono<Value> ref = CACHE_REF.get(this);
-            if (isExpired() || ref == null) {
-                return reload(loader);
+        void publish(Value value) {
+            Pending pending;
+            synchronized (this) {
+                current = new Snapshot(current.version + 1, value);
+                pending = loading;
+                loading = null;
+                if (pending != null) pending.outcome = value;
+                touch();
             }
-            updateTime();
-            Value cached = CACHED.get(this);
-            if (cached != null && !(ref instanceof Callable)) {
-                // 补偿，在某些极端情况下，await没有正确清理？
-                if (CACHE_LOADING.get(this) == null && AWAIT.get(this) != null) {
-                    error(new BusinessException.NoStackTrace("conflict cache load"));
-                }
-                return cached.get() == null ? Mono.empty() : Mono.just(cached);
-            }
-            return ref;
+            if (pending != null) pending.deliver();
         }
 
-        public Value getCached() {
-            if (isExpired()) {
-                return null;
-            }
-            updateTime();
-            return cached;
-        }
-
-        public Object getCachedValue() {
-            updateTime();
-            Value cached = this.cached;
-            return cached == null ? null : cached.get();
-        }
-
-        void updateTime() {
-            if (expires > 0) {
-                t = System.currentTimeMillis();
+        Pending acquire(ReadPlan plan, boolean loadNegative) {
+            synchronized (this) {
+                Snapshot state = current;
+                if (state.value != null && !isExpired() && (!loadNegative || state.value != NULL)) return null;
+                if (loading != null && loading.group.retain()) return loading;
+                LoadGroup candidate = plan.candidate();
+                Pending pending = new Pending(this, state, candidate,
+                    state.value == NULL && !isExpired());
+                candidate.add(pending);
+                loading = pending;
+                return pending;
             }
         }
 
-        boolean setValue(int version, Object value) {
-            Sinks.One<Value> await = await();
-            Disposable loading = CACHE_LOADING.get(this);
-            // 外部更新，如果当前正在加载，则尝试取消加载。
-            if (loading != null) {
-                if (CACHE_LOADING.compareAndSet(this, loading, null)) {
-                    loading.dispose();
+        void complete(Pending pending, Value value) {
+            // Sharing can invoke user hashCode. Recheck ownership after it, then publish
+            // the value/version and reserve the waiter's outcome in one critical section.
+            Value selected = value == null ? NULL : tryShare(key, value);
+            synchronized (this) {
+                if (pending.outcome == null) {
+                    if (loading == pending && current == pending.start) {
+                        current = new Snapshot(current.version + 1, selected);
+                        touch();
+                    } else if (current.value != null) selected = current.value;
+                    if (loading == pending) loading = null;
+                    pending.outcome = selected;
                 }
             }
-            return setValue(await, null, version, value);
+            pending.deliver();
         }
 
-        boolean setValue(Sinks.One<Value> await, Disposable loading, int version, Object value) {
-            return setValue(await, loading, version, value == null ? null : Value.simple(value));
-        }
-
-        boolean updateValue(int version, Value value) {
-            Value cached = CACHED.get(this);
-            int currentVersion = this.version;
-            if (currentVersion > version) {
-                if (log.isDebugEnabled()) {
-                    log.debug(
-                        "local cache [id=`{},`key=`{}` value={}] version not match, expect:<= {},actual:{}",
-                        id, key, value == null ? null : value.get(), version, currentVersion
-                    );
+        void fail(Pending pending, Throwable error) {
+            boolean fallback = false;
+            synchronized (this) {
+                if (pending.outcome == null) {
+                    if (loading == pending) loading = null;
+                    Value stale = current.value;
+                    fallback = stale != null && !(error instanceof CancellationException) && !pending.negativeFallback;
+                    pending.outcome = fallback ? stale : error;
                 }
-                CACHE_REF.compareAndSet(this, Mono.justOrEmpty(cached), null);
-                return false;
             }
+            if (fallback) {
+                manager.monitor.staleFallbacks.increment();
+                log.warn("load cache [{} {}] failed; using a previous value, version:{}", id, key, version(), error);
+            }
+            pending.deliver();
+        }
+        @Override public String toString() { return key + ":" + version(); }
+    }
 
-            if (CACHE_VERSION.compareAndSet(this, currentVersion, version + 1)) {
-                if (value != null) {
-                    value = tryShare(key, value);
-                    CACHED.set(this, value);
-                    CACHE_REF.set(this, Mono.just(value));
-                } else {
-                    CACHED.set(this, NULL);
-                    CACHE_REF.set(this, Mono.empty());
+    /** Per-key ownership, shared by single and batch plans; each lease belongs to a subscriber. */
+    private final class Pending {
+        final Cache cache;
+        final Snapshot start;
+        final LoadGroup group;
+        final boolean negativeFallback;
+        final Sinks.One<Value> result = Sinks.one();
+        volatile Object outcome;
+        Pending(Cache cache, Snapshot start, LoadGroup group, boolean negativeHit) {
+            this.cache = cache;
+            this.start = start;
+            this.group = group;
+            negativeFallback = negativeHit && group.fallback != null;
+        }
+        void deliver() {
+            Object terminal = outcome;
+            if (terminal instanceof Value) result.tryEmitValue((Value) terminal);
+            else if (terminal instanceof Throwable) result.tryEmitError((Throwable) terminal);
+        }
+    }
+
+    /** Registers all result subscribers before driving any possibly synchronous L2 source. */
+    private final class ReadPlan {
+        final boolean single;
+        final Mono<Object> fallback;
+        private LoadGroup candidate;
+        final List<Pending> leases = new ArrayList<>();
+        ReadPlan(boolean single, Mono<Object> fallback) { this.single = single; this.fallback = fallback; }
+        LoadGroup candidate() {
+            if (candidate == null) candidate = new LoadGroup(single, fallback);
+            return candidate;
+        }
+        void seal() { if (candidate != null) candidate.seal(); }
+        Mono<Value> read(Cache cache, boolean fallback) {
+            Pending pending = cache.acquire(this, fallback);
+            if (pending == null) return Mono.just(cache.current.value);
+            leases.add(pending);
+            return pending.result.asMono();
+        }
+        <T> Mono<T> run(Mono<T> result) {
+            if (leases.isEmpty()) return result;
+            LoadGroup first = leases.get(0).group;
+            Set<LoadGroup> groups = null;
+            for (Pending pending : leases) {
+                if (pending.group != first) {
+                    if (groups == null) {
+                        groups = new LinkedHashSet<>();
+                        groups.add(first);
+                    }
+                    groups.add(pending.group);
                 }
-                return true;
+            }
+            Mono<Void> execution = groups == null ? first.execution
+                : Mono.when(groups.stream().map(group -> group.execution).toArray(Mono[]::new));
+            Mono<T> drive = execution.then(Mono.never());
+            return Mono.firstWithSignal(result, drive).doFinally(ignored -> release());
+        }
+        void release() { for (Pending pending : leases) pending.group.release(); }
+    }
+
+    /**
+     * One remote request for newly claimed keys. Explicit leases keep it alive
+     * across different batches; last release cancels it even though execution is cached.
+     * Terminal cleanup precedes sink delivery so reentrant retry cannot inherit dead work.
+     */
+    private final class LoadGroup implements Disposable {
+        final boolean single;
+        final Mono<Object> fallback;
+        final Map<String, Pending> owned = new LinkedHashMap<>();
+        final Sinks.One<Void> ready;
+        final Sinks.One<Void> stop = Sinks.one();
+        final Mono<Void> execution;
+        int leases;
+        boolean closed;
+        volatile boolean resultsReady;
+        LoadGroup(boolean single, Mono<Object> fallback) {
+            this.single = single;
+            this.fallback = fallback;
+            // Only a batch can be joined before all of its owned keys have been added.
+            ready = single ? null : Sinks.one();
+            Mono<Void> start = Mono.defer(this::execute);
+            execution = (single ? start : ready.asMono().then(start))
+                .onErrorResume(this::failed)
+                .doFinally(ignored -> manager.endLoad(this))
+                .cache();
+        }
+        synchronized boolean retain() {
+            if (closed) return false;
+            leases++;
+            return true;
+        }
+        synchronized void add(Pending pending) {
+            if (closed) throw new CancellationException("Configuration load was released");
+            owned.put(pending.cache.key, pending);
+            leases++;
+        }
+        void seal() { if (ready != null) ready.tryEmitEmpty(); }
+        synchronized List<Pending> pending() { return new ArrayList<>(owned.values()); }
+        void release() {
+            boolean cancel;
+            synchronized (this) {
+                boolean last = --leases == 0 && !closed;
+                cancel = last && !resultsReady;
+                if (last) closed = true;
+            }
+            if (cancel) {
+                CancellationException error = new CancellationException("No configuration readers remain");
+                for (Pending pending : pending()) pending.cache.fail(pending, error);
+                stop.tryEmitError(error);
+            }
+        }
+        Mono<Void> execute() {
+            if (!manager.startLoad(this)) return Mono.error(new CancellationException("Storage manager is disposed"));
+            List<Pending> keys = pending();
+            Mono<Void> source;
+            if (single) {
+                Pending pending = keys.get(0);
+                Mono<Object> read = pending.negativeFallback ? fallback : clusterCache.get(pending.cache.key);
+                if (!pending.negativeFallback && fallback != null) read = read.switchIfEmpty(fallback);
+                source = read.doOnNext(value -> {
+                    resultsReady = true;
+                    pending.cache.complete(pending, Value.simple(value));
+                }).then(Mono.fromRunnable(() -> {
+                    resultsReady = true;
+                    pending.cache.complete(pending, NULL);
+                }));
             } else {
-                if (log.isDebugEnabled()) {
-                    log.debug(
-                        "local cache [id=`{},`key=`{}` value={}] version not match, expect:{},actual:{}",
-                        id, key, value == null ? null : value.get(), version, this.version
-                    );
-                }
-                CACHE_REF.compareAndSet(this, Mono.justOrEmpty(cached), null);
-                return false;
+                Set<String> requested = Collections.unmodifiableSet(new LinkedHashSet<>(owned.keySet()));
+                Map<String, Value> loaded = Maps.newHashMapWithExpectedSize(keys.size());
+                source = clusterCache.get(requested).doOnNext(entry -> {
+                    Pending pending = owned.get(entry.getKey());
+                    if (pending != null) loaded.putIfAbsent(entry.getKey(),
+                        entry.getValue() == null ? NULL : Value.simple(entry.getValue()));
+                }).then(Mono.fromRunnable(() -> {
+                    // A failed partial batch must not seed the retry with abandoned results.
+                    resultsReady = true;
+                    for (Pending pending : keys) pending.cache.complete(pending,
+                        loaded.getOrDefault(pending.cache.key, NULL));
+                }));
             }
+            return Mono.firstWithSignal(stop.asMono(), source);
         }
-
-        boolean setValue(Sinks.One<Value> await, Disposable loading, int version, Value value) {
-            updateTime();
-
-            boolean success = updateValue(version, value);
-            Value cached = CACHED.get(this);
-
-            dispose(await, loading, cached == null ? value : cached);
-
-            return success;
+        Mono<Void> failed(Throwable failure) {
+            synchronized (this) { closed = true; }
+            if (!(failure instanceof CancellationException)) error(failure);
+            for (Pending pending : pending()) pending.cache.fail(pending, failure);
+            return Mono.empty();
         }
-
-        Mono<Value> reload(Mono<Object> loader) {
-            for (; ; ) {
-                @SuppressWarnings("all")
-                Sinks.One<Value> await = AWAIT.get(this);
-                if (await != null) {
-                    return await.asMono();
-                }
-                if (AWAIT.compareAndSet(this, null, await = Sinks.one())) {
-                    @SuppressWarnings("all")
-                    Mono<Value> ref = await.asMono();
-                    CACHE_REF.set(this, ref);
-                    Loader _loader = new Loader(this.version);
-                    Disposable old = CACHE_LOADING.getAndSet(this, _loader);
-                    if (old != null) {
-                        old.dispose();
-                    }
-                    Mono<Object> source = clusterCache.get(key);
-                    // A default read has no fallback: avoid constructing an empty switch chain.
-                    if (loader != null) {
-                        source = source.switchIfEmpty(loader);
-                    }
-                    source.subscribe(_loader);
-                    return ref;
-                }
-
-            }
+        @Override public void dispose() {
+            CancellationException error = new CancellationException("Storage manager is disposed");
+            synchronized (this) { closed = true; }
+            for (Pending pending : pending()) pending.cache.fail(pending, error);
+            stop.tryEmitError(error);
         }
-
-        void clear(Value value) {
-            Value val = CACHED.get(this);
-            if (val == null) {
-                val = value;
-            }
-            dispose(val);
-            //  cached = null;
-            CACHE_REF.set(this, null);
-            CACHE_VERSION.incrementAndGet(this);
-        }
-
-        void dispose(Sinks.One<Value> sink, Disposable loading, Value value) {
-            if (sink != null) {
-                AWAIT.compareAndSet(this, sink, null);
-                if (value == null || value.get() == null) {
-                    sink.emitEmpty(Reactors.emitFailureHandler());
-                } else {
-                    sink.emitValue(value, Reactors.emitFailureHandler());
-                }
-            }
-            if (loading != null) {
-                CACHE_LOADING.compareAndSet(this, loading, null);
-                loading.dispose();
-            }
-        }
-
-        void dispose(Value value) {
-            dispose(await(), CACHE_LOADING.get(this), value);
-        }
-
-        void error(Throwable error) {
-            LocalCacheClusterConfigStorage.this.error(error);
-            Value cached = CACHED.get(this);
-            @SuppressWarnings("all")
-            Sinks.One<Value> await = AWAIT.getAndSet(Cache.this, null);
-            if (await != null) {
-                if (cached != null) {
-                    manager.monitor.staleFallbacks.increment();
-                    log.warn("load cache [{} {}] failed,use cached value:{} ,ver:{}", id, key, cached, version, error);
-                    if (cached.get() == null) {
-                        await.emitEmpty(Reactors.emitFailureHandler());
-                    } else {
-                        await.emitValue(cached, Reactors.emitFailureHandler());
-                    }
-                } else {
-                    await.emitError(error, Reactors.emitFailureHandler());
-                }
-            }
-            clear(cached);
-        }
-
-        @SuppressWarnings("all")
-        Sinks.One<Value> await() {
-            return AWAIT.get(this);
-        }
-
-        @RequiredArgsConstructor
-        private class Loader extends BaseSubscriber<Object> {
-            private final int loadingVersion;
-            private boolean hasValue;
-
-            @Override
-            protected void hookOnSubscribe(@Nonnull Subscription subscription) {
-                log.trace("loading cache `{}` key `{}`", id, key);
-                super.hookOnSubscribe(subscription);
-            }
-
-            @Override
-            protected void hookOnNext(@Nonnull Object value) {
-                hasValue = true;
-                if (!setValue(await(), this, loadingVersion, value)) {
-                    //版本不一致,清空缓存,下次重新加载最新数据.
-                    clear(Value.simple(value));
-                }
-            }
-
-            @Override
-            protected void hookOnComplete() {
-                Sinks.One<Value> await = await();
-                if (await == null) {
-                    return;
-                }
-                if (!hasValue && loadingVersion == CACHE_VERSION.get(Cache.this)) {
-                    setValue(await, this, loadingVersion, null);
-                } else {
-                    Cache.this.dispose(await, this, CACHED.get(Cache.this));
-                }
-            }
-
-            @Override
-            protected void hookOnError(@Nonnull Throwable throwable) {
-                Cache.this.error(throwable);
-            }
-
-            @Override
-            protected void hookFinally(@Nonnull SignalType type) {
-                CACHE_LOADING.compareAndSet(Cache.this, this, null);
-            }
-        }
+        @Override public synchronized boolean isDisposed() { return closed; }
     }
 
-    @Override
-    public String toString() {
-
-        return caches.toString();
-    }
+    @Override public String toString() { return caches.toString(); }
 }

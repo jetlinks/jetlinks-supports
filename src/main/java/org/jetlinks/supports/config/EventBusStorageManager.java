@@ -26,8 +26,6 @@ import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
 import javax.management.openmbean.CompositeData;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.Collections;
@@ -67,6 +65,26 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     private volatile CountSnapshot counts = new CountSnapshot(-1, 0);
 
     private final Disposable.Composite disposable = Disposables.composite();
+    // Includes loads whose L1 entry was detached by invalidation, so shutdown can end them.
+    private final Set<Disposable> activeLoads = ConcurrentHashMap.newKeySet();
+
+    boolean startLoad(Disposable load) {
+        if (disposable.isDisposed()) return false;
+        activeLoads.add(load);
+        // Close may race registration after its active-load scan has already passed.
+        if (disposable.isDisposed()) {
+            activeLoads.remove(load);
+            load.dispose();
+            return false;
+        }
+        return true;
+    }
+
+    void endLoad(Disposable load) { activeLoads.remove(load); }
+
+    private void removeEmpty(LocalCacheClusterConfigStorage store) {
+        cache.computeIfPresent(store.id, (id, current) -> current == store && current.isEmpty() ? null : current);
+    }
 
     private final Set<Consumer<CacheNotify>> cacheNotifyListeners = ConcurrentHashMap.newKeySet();
 
@@ -101,7 +119,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
         this.cache = new ConcurrentHashMap<>();
         this.eventBus = eventBus;
         Consumer<LocalCacheClusterConfigStorage> removeHandler = store -> {
-            this.cache.remove(store.id, store);
+            removeEmpty(store);
         };
         storageBuilder = id -> {
             return new LocalCacheClusterConfigStorage(
@@ -132,7 +150,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
         this.eventBus = eventBus;
         this.cache = (ConcurrentMap) cacheSupplier.get();
         Consumer<LocalCacheClusterConfigStorage> removeHandler = store -> {
-            this.cache.remove(store.id, store);
+            removeEmpty(store);
         };
         storageBuilder = id -> new LocalCacheClusterConfigStorage(
             id,
@@ -222,6 +240,8 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     @Override
     public synchronized void dispose() {
         disposable.dispose();
+        activeLoads.forEach(Disposable::dispose);
+        activeLoads.clear();
         cacheNotifyListeners.clear();
         countIterator = null;
         clusterSubscription = null;
@@ -240,7 +260,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             .forEach((key, value) -> {
                 value.cleanup();
                 if (value.isEmpty()) {
-                    cache.remove(key, value);
+                    removeEmpty(value);
                 }
             });
     }
@@ -342,7 +362,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
 
         @Override
         public void clean() {
-            cache.clear();
+            cache.forEach((id, storage) -> storage.clearLocalCache(CacheNotify.clear(id)));
         }
 
         @Override
@@ -383,12 +403,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
                 .map(e -> {
                     ConfigStorageInfo info = new ConfigStorageInfo();
                     info.setId(e.getKey());
-                    Throwable err = e.getValue().lastError;
-                    if (err != null) {
-                        StringWriter writer = new StringWriter();
-                        err.printStackTrace(new PrintWriter(writer));
-                        info.lastError = writer.toString();
-                    }
+                    info.lastError = e.getValue().lastError;
                     info.setValues(e.getValue().getAll());
                     return info;
                 })

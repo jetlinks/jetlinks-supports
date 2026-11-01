@@ -7,11 +7,9 @@ import org.jetlinks.core.cluster.ClusterManager;
 import org.jetlinks.core.event.EventBus;
 import org.jetlinks.core.lang.SharedPathString;
 import org.jetlinks.supports.event.InternalEventBus;
-import org.reactivestreams.Subscription;
 import org.junit.After;
 import org.junit.Test;
 import reactor.core.Disposable;
-import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -21,6 +19,7 @@ import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.management.openmbean.CompositeData;
 import java.lang.management.ManagementFactory;
+import java.time.Duration;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -93,11 +92,11 @@ public class ConfigStorageMonitorTest {
         Fixture f = fixture(-1, new InternalEventBus());
         Sinks.One<Object> old = Sinks.one();
         when(f.backend.get("name")).thenReturn(old.asMono(), Mono.just("new"));
-        Mono<Value> oldRead = f.storage.getConfig("name");
+        CompletableFuture<Value> oldRead = f.storage.getConfig("name").toFuture();
         f.manager.handleNotify(CacheNotify.expires("device:test", Collections.singleton("name")));
         assertEquals("new", f.storage.getConfig("name").block().asString());
         old.emitValue("old", Sinks.EmitFailureHandler.FAIL_FAST);
-        assertEquals("old", oldRead.block().asString());
+        assertEquals("old", oldRead.join().asString());
         assertEquals("new", f.storage.getConfig("name").block().asString());
         verify(f.backend, times(2)).get("name");
     }
@@ -169,12 +168,13 @@ public class ConfigStorageMonitorTest {
             new AbstractMap.SimpleImmutableEntry<>("unexpected", "ignored")));
         Mono<Values> read = f.storage.getConfigs(Arrays.asList("name", "negative", "missing"));
         for (int i = 0; i < 2; i++) {
+            if (i != 0) f.storage.clearLocalCache(CacheNotify.expiresAll("device:test"));
             assertEquals(Collections.singletonMap("name", "first"), read.block().getAllValues());
         }
         assertFalse(f.entries.containsKey("unexpected"));
-        assertEquals(2, f.entries.get("name").version);
-        assertEquals(2, f.entries.get("negative").version);
-        assertEquals(2, f.entries.get("missing").version);
+        assertEquals(1, f.entries.get("name").version());
+        assertEquals(1, f.entries.get("negative").version());
+        assertEquals(1, f.entries.get("missing").version());
     }
 
     @Test
@@ -191,36 +191,16 @@ public class ConfigStorageMonitorTest {
     }
 
     @Test
-    public void batchDeliveryErrorsAreReportedWithoutChangingErrorPropagation() {
+    public void downstreamBatchErrorsDoNotCountAsBackendFailures() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get(anyCollection())).thenReturn(Flux.just(
             new AbstractMap.SimpleImmutableEntry<>("name", "value")));
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        f.storage.getConfigs(Collections.singleton("name")).subscribe(new CoreSubscriber<Values>() {
-            @Override
-            public void onSubscribe(Subscription subscription) {
-                subscription.request(Long.MAX_VALUE);
-            }
-
-            @Override
-            public void onNext(Values values) {
-                throw new IllegalStateException("consumer failed");
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                failure.set(error);
-            }
-
-            @Override
-            public void onComplete() {
-                fail("The failed consumer must receive onError");
-            }
-        });
-        assertNotNull(failure.get());
-        assertEquals("consumer failed", failure.get().getMessage());
-        assertEquals(1, f.manager.monitor.loadErrors.sum());
-        assertEquals("load", bean(f).getStatistics().get("lastErrorStage"));
+        StepVerifier.create(f.storage.getConfigs(Collections.singleton("name"))
+            .map(values -> { throw new IllegalStateException("consumer failed"); }))
+            .expectErrorMessage("consumer failed").verify(Duration.ofSeconds(3));
+        assertEquals("value", f.storage.getConfig("name").block(Duration.ofSeconds(3)).asString());
+        assertEquals(0, f.manager.monitor.loadErrors.sum());
+        verify(f.backend, times(1)).get(anyCollection());
     }
 
     @Test
@@ -228,11 +208,11 @@ public class ConfigStorageMonitorTest {
         Fixture f = fixture(-1, new InternalEventBus());
         Sinks.One<Object> source = Sinks.one();
         when(f.backend.get("name")).thenReturn(source.asMono());
-        Mono<Value> first = f.storage.getConfig("name");
-        Mono<Value> second = f.storage.getConfig("name");
+        CompletableFuture<Value> first = f.storage.getConfig("name").toFuture();
+        CompletableFuture<Value> second = f.storage.getConfig("name").toFuture();
         source.emitValue("value", Sinks.EmitFailureHandler.FAIL_FAST);
-        assertEquals("value", first.block().asString());
-        assertEquals("value", second.block().asString());
+        assertEquals("value", first.join().asString());
+        assertEquals("value", second.join().asString());
         verify(f.backend, times(1)).get("name");
         assertEquals(0, f.manager.monitor.loadErrors.sum());
     }
@@ -278,9 +258,9 @@ public class ConfigStorageMonitorTest {
         when(f.backend.get("name")).thenReturn(Mono.empty());
         when(f.backend.put("name", "new")).thenReturn(Mono.just(true));
         AtomicInteger cancellations = new AtomicInteger();
-        Mono<Value> read = f.storage.getConfig("name", Mono.never().doOnCancel(cancellations::incrementAndGet));
+        CompletableFuture<Value> read = f.storage.getConfig("name", Mono.never().doOnCancel(cancellations::incrementAndGet)).toFuture();
         assertTrue(f.storage.setConfig("name", "new").block());
-        assertEquals("new", read.block().asString());
+        assertEquals("new", read.join().asString());
         assertEquals(1, cancellations.get());
     }
 

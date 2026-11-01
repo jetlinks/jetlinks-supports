@@ -321,31 +321,15 @@ public class LocalCacheClusterConfigStorageTest {
             new ConcurrentHashMap<>()
         );
 
-        // 模拟一个加载缓慢的空配置
-        when(clusterCache.get(anyString())).thenReturn(Mono.empty().delaySubscription(Duration.ofMillis(100)));
-
-        Mono<Value> result = storage.getConfig("test_key");
-
-        // 1. 触发第一次获取，进入 reload 流程
-        result.subscribe();
-
+        Sinks.One<Object> source = Sinks.one();
+        when(clusterCache.get(anyString())).thenReturn(source.asMono());
+        java.util.concurrent.CompletableFuture<Value> result = storage.getConfig("test_key").toFuture();
+        assertFalse(result.isDone());
         when(clusterCache.put(anyString(), any())).thenReturn(Mono.just(true));
-
-        // 等待 Loader(0) 启动
-        try {
-            Thread.sleep(50);
-        } catch (InterruptedException ignore) {
-        }
-
-        // 2. 触发 version 变更。这会增加版本号并清空 version=0 对应的 await。
-        // 但 Loader(0) 内部仍然持有 version=0，并在 100ms 后完成。
         storage.setConfig("test_key", "value").block();
-
-        // 3. 验证之前的 result (Loader(0)) 是否能正确完成。
-        // 在修复前，它会因为 version mismatch 而既不完成也不报错，导致 StepVerifier 超时。
-        // 现在修复后，因为 setConfig 触发了 setValue(version, value)，这会 emitValue("value") 到 await。
-        // 所以这里应该收到 "value" 而不是直接 Complete。
-        StepVerifier.create(result)
+        // Verify the original subscribed waiter, including a late empty backend completion.
+        source.tryEmitEmpty();
+        StepVerifier.create(Mono.fromFuture(result))
                     .expectSubscription()
                     .expectNextMatches(v -> "value".equals(v.asString()))
                     .expectComplete()
