@@ -79,16 +79,17 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
-    @Test public void aFallbackJoiningABatchStillRunsAfterANegativeResult() {
+    @Test public void aFallbackUsesItsOwnSingleReadWhileABatchIsPending() {
         try (Fixture f = new Fixture()) {
             Sinks.Empty<Map.Entry<String, Object>> source = Sinks.empty();
             when(f.backend.get(anyCollection())).thenReturn(source.asMono().flux());
+            when(f.backend.get("key")).thenReturn(Mono.empty());
             CompletableFuture<Values> batch = f.storage.getConfigs(Collections.singleton("key")).toFuture();
             CompletableFuture<Value> single = f.storage.getConfig("key", Mono.just("fallback")).toFuture();
             source.tryEmitEmpty();
-            assertTrue(batch.orTimeout(3, TimeUnit.SECONDS).join().getAllValues().isEmpty());
+            assertEquals("fallback", batch.orTimeout(3, TimeUnit.SECONDS).join().getString("key", ""));
             assertEquals("fallback", single.orTimeout(3, TimeUnit.SECONDS).join().asString());
-            verify(f.backend, never()).get(anyString());
+            verify(f.backend, times(1)).get("key");
         }
     }
 
@@ -139,7 +140,7 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
-    @Test public void overlappingBatchesAndSinglesShareOwnedKeysAndKeepBatching() {
+    @Test public void overlappingBatchesAndSinglesHaveIndependentRequests() {
         try (Fixture f = new Fixture()) {
             List<Set<String>> requested = new ArrayList<>();
             Sinks.One<Map<String, Object>> first = Sinks.one();
@@ -150,29 +151,34 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
                 return (requested.size() == 1 ? first : second).asMono()
                     .flatMapMany(values -> Flux.fromIterable(values.entrySet()));
             });
+            when(f.backend.get("b")).thenReturn(Mono.just("B"));
             CompletableFuture<Values> ab = f.storage.getConfigs(Arrays.asList("a", "b")).toFuture();
             CompletableFuture<Values> bc = f.storage.getConfigs(Arrays.asList("b", "c")).toFuture();
             CompletableFuture<Value> b = f.storage.getConfig("b").toFuture();
-            assertEquals(Arrays.asList(new LinkedHashSet<>(Arrays.asList("a", "b")), Collections.singleton("c")), requested);
-            second.tryEmitValue(Collections.singletonMap("c", "C"));
-            assertFalse(bc.isDone());
+            assertEquals(Arrays.asList(new LinkedHashSet<>(Arrays.asList("a", "b")),
+                new LinkedHashSet<>(Arrays.asList("b", "c"))), requested);
+            Map<String, Object> secondValues = new LinkedHashMap<>();
+            secondValues.put("b", "B"); secondValues.put("c", "C");
+            second.tryEmitValue(secondValues);
+            assertTrue(bc.isDone());
+            assertFalse(ab.isDone());
             Map<String, Object> values = new LinkedHashMap<>();
             values.put("a", "A"); values.put("b", "B");
             first.tryEmitValue(values);
             assertEquals("B", b.orTimeout(3, TimeUnit.SECONDS).join().asString());
             assertEquals("A", ab.orTimeout(3, TimeUnit.SECONDS).join().getString("a", ""));
             assertEquals("C", bc.orTimeout(3, TimeUnit.SECONDS).join().getString("c", ""));
-            verify(f.backend, never()).get(anyString());
+            verify(f.backend, times(1)).get("b");
         }
     }
 
-    @Test public void tenIdenticalConcurrentBatchesMakeOneBackendRequest() {
+    @Test public void tenIdenticalConcurrentBatchesEachMakeOneBatchRequest() {
         try (Fixture f = new Fixture()) {
             Sinks.One<Map.Entry<String, Object>> source = Sinks.one();
             when(f.backend.get(anyCollection())).thenReturn(source.asMono().flux());
             List<CompletableFuture<Values>> readers = new ArrayList<>();
             for (int i = 0; i < 10; i++) readers.add(f.storage.getConfigs(Collections.singleton("key")).toFuture());
-            verify(f.backend, times(1)).get(anyCollection());
+            verify(f.backend, times(10)).get(anyCollection());
             source.tryEmitValue(entry("key", "value"));
             for (CompletableFuture<Values> read : readers)
                 assertEquals("value", read.orTimeout(3, TimeUnit.SECONDS).join().getString("key", ""));
@@ -195,16 +201,19 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
-    @Test public void cancellingAnOwningBatchDoesNotCancelAJoinedSingle() {
+    @Test public void cancellingABatchDoesNotCancelAnIndependentSingle() {
         try (Fixture f = new Fixture()) {
             AtomicInteger cancellations = new AtomicInteger();
             Sinks.One<Map.Entry<String, Object>> source = Sinks.one();
             when(f.backend.get(anyCollection())).thenReturn(source.asMono().flux().doOnCancel(cancellations::incrementAndGet));
+            Sinks.One<Object> singleSource = Sinks.one();
+            when(f.backend.get("a")).thenReturn(singleSource.asMono());
             Disposable batch = f.storage.getConfigs(Arrays.asList("a", "b")).subscribe();
             CompletableFuture<Value> single = f.storage.getConfig("a").toFuture();
             batch.dispose();
-            assertEquals(0, cancellations.get());
-            source.tryEmitValue(entry("a", "A"));
+            assertEquals(1, cancellations.get());
+            assertFalse(single.isDone());
+            singleSource.tryEmitValue("A");
             assertEquals("A", single.orTimeout(3, TimeUnit.SECONDS).join().asString());
         }
     }
@@ -220,6 +229,31 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
             assertEquals(1, f.manager.monitor.loadErrors.sum());
             when(f.backend.get("key")).thenReturn(Mono.just("recovered"));
             assertEquals("recovered", f.storage.getConfig("key").block(LIMIT).asString());
+        }
+    }
+
+    @Test public void partialBatchHitsRenewPositiveAndNegativeIdleExpiry() {
+        try (Fixture f = new Fixture()) {
+            Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<>();
+            LocalCacheClusterConfigStorage partial = new LocalCacheClusterConfigStorage(
+                "partial-idle", f.manager, f.backend, 60_000, null, entries);
+            f.manager.cache.put("partial-idle", partial);
+            when(f.backend.get("hot")).thenReturn(Mono.just("H"));
+            when(f.backend.get("negative")).thenReturn(Mono.empty());
+            partial.getConfig("hot").block(LIMIT);
+            partial.getConfig("negative").block(LIMIT);
+            // getCachedValues is deliberately bypassed by putting the miss first.
+            long before = System.currentTimeMillis() - 30_000;
+            for (String key : Arrays.asList("hot", "negative")) {
+                entries.get(key).t = before;
+            }
+            when(f.backend.get(anyCollection())).thenReturn(Flux.just(entry("miss", "M")));
+            Values values = partial.getConfigs(Arrays.asList("miss", "hot", "negative")).block(LIMIT);
+            assertEquals("H", values.getString("hot", ""));
+            assertFalse(values.getAllValues().containsKey("negative"));
+            assertTrue(entries.get("hot").t > before);
+            assertTrue(entries.get("negative").t > before);
+            verify(f.backend).get(Collections.singleton("miss"));
         }
     }
 
