@@ -56,6 +56,50 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
+    @Test public void loadRegistriesDoNotRetainIdleStorageIds() {
+        try (Fixture f = new Fixture()) {
+            when(f.backend.get("key")).thenReturn(Mono.just("value"));
+            int registryCount = f.manager.activeLoads.size();
+            for (int i = 0; i < 100; i++) {
+                String id = "storage-" + i;
+                LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
+                    id, f.manager, f.backend, -1, null);
+                assertEquals("value", storage.getConfig("key").block(Duration.ofSeconds(3)).asString());
+                // A supplied cache container may evict an idle storage without a callback.
+                f.manager.cache.remove(id);
+                assertEquals(registryCount, f.manager.activeLoads.size());
+                assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+            }
+            f.manager.dispose();
+            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+        }
+    }
+
+    @Test public void closingOneLoadMustNotDetachAnotherLoadWithTheSameStorageId() {
+        try (Fixture f = new Fixture()) {
+            Sinks.One<Object> old = Sinks.one();
+            AtomicInteger cancellations = new AtomicInteger();
+            when(f.backend.get("old")).thenReturn(old.asMono());
+            when(f.backend.get("new")).thenReturn(Mono.never().doOnCancel(cancellations::incrementAndGet));
+            CompletableFuture<Value> first = f.storage.getConfig("old").toFuture();
+            f.storage.clearLocalCache(CacheNotify.clear("audit"));
+            f.manager.cleanup();
+            assertFalse(f.manager.cache.containsKey("audit"));
+            LocalCacheClusterConfigStorage replacement = new LocalCacheClusterConfigStorage(
+                "audit", f.manager, f.backend, -1, null);
+            f.manager.cache.put("audit", replacement);
+            CompletableFuture<Value> second = replacement.getConfig("new").toFuture();
+            old.tryEmitValue("old-value");
+            assertEquals("old-value", first.join().asString());
+            assertFalse(second.isDone());
+            assertEquals(1, f.manager.activeLoads.stream().mapToInt(java.util.Set::size).sum());
+            f.manager.dispose();
+            assertTrue(second.isCompletedExceptionally());
+            assertEquals(1, cancellations.get());
+            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+        }
+    }
+
     @Test public void aSecondExplicitFallbackMustRunAfterTheFirstReturnsEmpty() throws Exception {
         try (Fixture f = new Fixture()) {
             Sinks.Empty<Object> source = Sinks.empty();

@@ -183,7 +183,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         synchronized (cache) {
             if (cache.current != state) return Mono.defer(() -> fallbackRead(key, fallback));
             load = new FallbackLoad(cache, state);
-            if (!manager.startLoad(load)) {
+            if (!manager.startLoad(id, load)) {
                 load.dispose();
             } else {
                 if (cache.fallbacks == null) cache.fallbacks = new LinkedHashSet<>();
@@ -482,7 +482,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 removeFallback(load);
                 if (load.outcome == null) load.outcome = new CancellationException("Configuration reader cancelled");
             }
-            manager.endLoad(load);
+            manager.endLoad(id, load);
         }
         @Override public String toString() { return key + ":" + version(); }
     }
@@ -515,7 +515,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             Object terminal = outcome;
             if (terminal instanceof Value) changed.tryEmitValue((Value) terminal);
             else changed.tryEmitError((Throwable) terminal);
-            manager.endLoad(this);
+            manager.endLoad(id, this);
         }
         @Override public void dispose() {
             cache.failFallback(this, new CancellationException("Storage manager is disposed"));
@@ -624,10 +624,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 .onErrorResume(this::failed)
                 .doFinally(ignored -> {
                     subscription = null;
-                    manager.endLoad(this);
+                    manager.endLoad(id, this);
                 })
                 .cache();
-            if (!manager.startLoad(this)) {
+            if (!manager.startLoad(id, this)) {
                 dispose();
                 throw new CancellationException("Storage manager is disposed");
             }
@@ -675,7 +675,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 CancellationException error = new CancellationException("No configuration readers remain");
                 for (Pending pending : pending()) pending.cache.fail(pending, error);
                 cancelSource();
-                manager.endLoad(this);
+                manager.endLoad(id, this);
             }
         }
         Mono<Void> execute() {
@@ -713,7 +713,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             synchronized (this) { closed = true; }
             for (Pending pending : pending()) pending.cache.fail(pending, error);
             cancelSource();
-            manager.endLoad(this);
+            manager.endLoad(id, this);
         }
         @Override public synchronized boolean isDisposed() { return closed; }
     }

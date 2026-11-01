@@ -41,6 +41,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * L1 configuration storage backed by the cluster cache. Changes invalidate local entries
@@ -65,22 +66,33 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     private volatile CountSnapshot counts = new CountSnapshot(-1, 0);
 
     private final Disposable.Composite disposable = Disposables.composite();
-    // Includes loads whose L1 entry was detached by invalidation, so shutdown can end them.
-    private final Set<Disposable> activeLoads = ConcurrentHashMap.newKeySet();
+    // Bound registration contention without retaining another registry per storage id.
+    // Detached loads remain reachable until terminal delivery or cancellation.
+    final List<Set<Disposable>> activeLoads = IntStream.range(0, 64)
+        .<Set<Disposable>>mapToObj(ignored -> ConcurrentHashMap.newKeySet(2))
+        .collect(Collectors.toList());
 
-    boolean startLoad(Disposable load) {
+    private Set<Disposable> loadRegistry(String id) {
+        int hash = id.hashCode();
+        return activeLoads.get((hash ^ (hash >>> 16)) & (activeLoads.size() - 1));
+    }
+
+    boolean startLoad(String id, Disposable load) {
+        Set<Disposable> loads = loadRegistry(id);
         if (disposable.isDisposed()) return false;
-        activeLoads.add(load);
-        // Close may race registration after its active-load scan has already passed.
+        loads.add(load);
+        // Close may pass this partition before a racing registration is visible.
         if (disposable.isDisposed()) {
-            activeLoads.remove(load);
+            loads.remove(load);
             load.dispose();
             return false;
         }
         return true;
     }
 
-    void endLoad(Disposable load) { activeLoads.remove(load); }
+    void endLoad(String id, Disposable load) {
+        loadRegistry(id).remove(load);
+    }
 
     private void removeEmpty(LocalCacheClusterConfigStorage store) {
         // Pair with cold key creation; never detach a storage after admitting a key.
@@ -243,8 +255,10 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     @Override
     public synchronized void dispose() {
         disposable.dispose();
-        activeLoads.forEach(Disposable::dispose);
-        activeLoads.clear();
+        activeLoads.forEach(loads -> {
+            loads.forEach(Disposable::dispose);
+            loads.clear();
+        });
         cacheNotifyListeners.clear();
         countIterator = null;
         clusterSubscription = null;
