@@ -126,7 +126,7 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
-    @Test public void aCommittedWriteEndsOldBatchWaitersAndLateDataCannotOverwriteIt() {
+    @Test public void aCommittedWriteSurvivesWhenTheIndependentBatchLaterCompletes() {
         try (Fixture f = new Fixture()) {
             Sinks.One<Map.Entry<String, Object>> source = Sinks.one();
             when(f.backend.get(anyCollection())).thenReturn(source.asMono().flux());
@@ -134,8 +134,9 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
             when(f.backend.get("key")).thenReturn(Mono.just("new"));
             CompletableFuture<Values> old = f.storage.getConfigs(Collections.singleton("key")).toFuture();
             assertTrue(f.storage.setConfig("key", "new").block(LIMIT));
-            assertEquals("new", old.orTimeout(3, TimeUnit.SECONDS).join().getString("key", ""));
+            assertFalse(old.isDone());
             source.tryEmitValue(entry("key", "old"));
+            assertEquals("new", old.orTimeout(3, TimeUnit.SECONDS).join().getString("key", ""));
             assertEquals("new", f.storage.getConfig("key").block(LIMIT).asString());
         }
     }
@@ -185,18 +186,18 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
-    @Test public void lastCancellationCancelsTheBackendAndNewReadersCanLoad() {
+    @Test public void cancelledReadersLeaveTheSharedFillForLaterReaders() {
         try (Fixture f = new Fixture()) {
             AtomicInteger cancellations = new AtomicInteger();
-            when(f.backend.get("key")).thenReturn(Mono.<Object>never().doOnCancel(cancellations::incrementAndGet));
+            Sinks.One<Object> source = Sinks.one();
+            when(f.backend.get("key")).thenReturn(source.asMono().doOnCancel(cancellations::incrementAndGet));
             Disposable first = f.storage.getConfig("key").subscribe();
             Disposable second = f.storage.getConfig("key").subscribe();
-            first.dispose();
-            assertEquals(0, cancellations.get());
-            second.dispose();
-            assertEquals(1, cancellations.get());
-            when(f.backend.get("key")).thenReturn(Mono.just("reloaded"));
-            assertEquals("reloaded", f.storage.getConfig("key").block(LIMIT).asString());
+            first.dispose(); second.dispose(); assertEquals(0, cancellations.get());
+            CompletableFuture<Value> third = f.storage.getConfig("key").toFuture();
+            source.tryEmitValue("filled");
+            assertEquals("filled", third.orTimeout(3, TimeUnit.SECONDS).join().asString());
+            verify(f.backend, times(1)).get("key");
             assertEquals(0, f.manager.monitor.loadErrors.sum());
         }
     }
@@ -339,6 +340,21 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
+    @Test public void synchronousSingleCreationFailureClearsItsSlotBeforeRetry() {
+        try (Fixture f = new Fixture()) {
+            AtomicInteger attempts = new AtomicInteger();
+            when(f.backend.get("key")).thenAnswer(ignored -> {
+                if (attempts.incrementAndGet() == 1) throw new IllegalStateException("creation");
+                return Mono.just("recovered");
+            });
+            Mono<Value> read = f.storage.getConfig("key");
+            assertEquals("recovered", read.retry(1).block(LIMIT).asString());
+            assertEquals("recovered", read.block(LIMIT).asString());
+            assertEquals(2, attempts.get());
+            assertEquals(1, f.manager.monitor.loadErrors.sum());
+        }
+    }
+
     @Test public void synchronousBackendCreationFailureReleasesAllKeys() {
         try (Fixture f = new Fixture()) {
             when(f.backend.get(anyCollection())).thenThrow(new IllegalStateException("creation"));
@@ -349,14 +365,15 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
-    @Test public void shutdownReleasesEvenADetachedInFlightLoad() {
+    @Test public void detachedSharedFillCanFinishAfterManagerShutdown() {
         try (Fixture f = new Fixture()) {
-            AtomicInteger cancellations = new AtomicInteger();
-            when(f.backend.get("key")).thenReturn(Mono.<Object>never().doOnCancel(cancellations::incrementAndGet));
-            StepVerifier.create(f.storage.getConfig("key"))
-                .then(() -> f.storage.clearLocalCache(CacheNotify.clear("lifecycle")))
-                .then(f.manager::dispose).expectError(CancellationException.class).verify(LIMIT);
-            assertEquals(1, cancellations.get());
+            Sinks.One<Object> source = Sinks.one();
+            when(f.backend.get("key")).thenReturn(source.asMono());
+            CompletableFuture<Value> read = f.storage.getConfig("key").toFuture();
+            f.storage.clearLocalCache(CacheNotify.clear("lifecycle")); f.manager.dispose();
+            assertFalse(read.isDone()); source.tryEmitValue("finished");
+            assertEquals("finished", read.orTimeout(3, TimeUnit.SECONDS).join().asString());
+            assertTrue(f.manager.cache.isEmpty());
         }
     }
 

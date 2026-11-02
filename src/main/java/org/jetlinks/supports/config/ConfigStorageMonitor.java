@@ -26,7 +26,7 @@ final class ConfigStorageMonitor {
     private final String instanceId = UUID.randomUUID().toString();
     private volatile ErrorSnapshot lastError = new ErrorSnapshot("", "", 0);
 
-    // Includes loading/result-delivery errors and local cache conflicts, not Redis request counts.
+    // Storage-owned L2/result handling errors; caller-owned defaults are not observed.
     void loadError(Throwable error) {
         loadErrors.increment();
         error("load", error);

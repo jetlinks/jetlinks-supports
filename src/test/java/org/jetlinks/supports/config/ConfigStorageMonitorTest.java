@@ -243,26 +243,31 @@ public class ConfigStorageMonitorTest {
     }
 
     @Test
-    public void fallbackEmptyAndErrorAreConfigurationLoadOutcomes() {
+    public void callerFallbackFailuresAreNotStorageLoadErrors() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get(anyString())).thenReturn(Mono.empty());
         assertNull(f.storage.getConfig("empty", Mono.empty()).block());
         StepVerifier.create(f.storage.getConfig("error", Mono.error(new IllegalStateException("fallback failed"))))
             .expectErrorMessage("fallback failed")
             .verify();
-        assertEquals(1, f.manager.monitor.loadErrors.sum());
+        assertEquals(0, f.manager.monitor.loadErrors.sum());
     }
 
     @Test
-    public void committedWriteCancelsAnActiveFallbackOnce() {
+    public void committedWritePreservesItsValueWhileACallerFallbackFinishes() {
         Fixture f = fixture(-1, new InternalEventBus());
         when(f.backend.get("name")).thenReturn(Mono.empty());
         when(f.backend.put("name", "new")).thenReturn(Mono.just(true));
         AtomicInteger cancellations = new AtomicInteger();
-        CompletableFuture<Value> read = f.storage.getConfig("name", Mono.never().doOnCancel(cancellations::incrementAndGet)).toFuture();
+        Sinks.One<Object> source = Sinks.one();
+        CompletableFuture<Value> read = f.storage.getConfig("name", source.asMono().doOnCancel(cancellations::incrementAndGet)).toFuture();
+        LocalCacheClusterConfigStorage.Cache entry = f.entries.get("name");
         assertTrue(f.storage.setConfig("name", "new").block());
-        assertEquals("new", read.join().asString());
-        assertEquals(1, cancellations.get());
+        assertFalse(read.isDone());
+        source.tryEmitValue("old-default");
+        assertEquals("old-default", read.orTimeout(3, TimeUnit.SECONDS).join().asString());
+        assertEquals("new", entry.getCachedValue());
+        assertEquals(0, cancellations.get());
     }
 
     @Test

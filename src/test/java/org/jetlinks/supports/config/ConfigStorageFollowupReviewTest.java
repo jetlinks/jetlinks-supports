@@ -56,35 +56,16 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
-    @Test public void loadRegistriesDoNotRetainIdleStorageIds() {
-        try (Fixture f = new Fixture()) {
-            when(f.backend.get("key")).thenReturn(Mono.just("value"));
-            int registryCount = f.manager.activeLoads.size();
-            for (int i = 0; i < 100; i++) {
-                String id = "storage-" + i;
-                LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
-                    id, f.manager, f.backend, -1, null);
-                assertEquals("value", storage.getConfig("key").block(Duration.ofSeconds(3)).asString());
-                // A supplied cache container may evict an idle storage without a callback.
-                f.manager.cache.remove(id);
-                assertEquals(registryCount, f.manager.activeLoads.size());
-                assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
-            }
-            f.manager.dispose();
-            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
-        }
-    }
 
-    @Test public void closingOneLoadMustNotDetachAnotherLoadWithTheSameStorageId() {
+
+    @Test public void finishingAnOldLoadDoesNotAffectANewStorageOrItsLifetime() {
         try (Fixture f = new Fixture()) {
-            Sinks.One<Object> old = Sinks.one();
-            AtomicInteger cancellations = new AtomicInteger();
+            Sinks.One<Object> old = Sinks.one(), fresh = Sinks.one();
             when(f.backend.get("old")).thenReturn(old.asMono());
-            when(f.backend.get("new")).thenReturn(Mono.never().doOnCancel(cancellations::incrementAndGet));
+            when(f.backend.get("new")).thenReturn(fresh.asMono());
             CompletableFuture<Value> first = f.storage.getConfig("old").toFuture();
             f.storage.clearLocalCache(CacheNotify.clear("audit"));
             f.manager.cleanup();
-            assertFalse(f.manager.cache.containsKey("audit"));
             LocalCacheClusterConfigStorage replacement = new LocalCacheClusterConfigStorage(
                 "audit", f.manager, f.backend, -1, null);
             f.manager.cache.put("audit", replacement);
@@ -92,11 +73,13 @@ public class ConfigStorageFollowupReviewTest {
             old.tryEmitValue("old-value");
             assertEquals("old-value", first.join().asString());
             assertFalse(second.isDone());
-            assertEquals(1, f.manager.activeLoads.stream().mapToInt(java.util.Set::size).sum());
             f.manager.dispose();
-            assertTrue(second.isCompletedExceptionally());
-            assertEquals(1, cancellations.get());
-            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+            assertTrue(f.manager.cache.isEmpty());
+            assertFalse(second.isDone());
+            fresh.tryEmitValue("new-value");
+            assertEquals("new-value", second.orTimeout(3, TimeUnit.SECONDS).join().asString());
+            StepVerifier.create(replacement.getConfig("closed"))
+                .expectError(CancellationException.class).verify(Duration.ofSeconds(3));
         }
     }
 
@@ -114,40 +97,20 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
-    @Test public void disposeEndsIndependentReadersWhileABatchIsStillCollecting() throws Exception {
-        CountDownLatch paused = new CountDownLatch(1);
-        CountDownLatch resume = new CountDownLatch(1);
-        AtomicBoolean armed = new AtomicBoolean(true);
-        Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<String, LocalCacheClusterConfigStorage.Cache>() {
-            @Override public LocalCacheClusterConfigStorage.Cache get(Object key) {
-                if ("b".equals(key) && armed.compareAndSet(true, false)) {
-                    paused.countDown();
-                    try { assertTrue(resume.await(3, TimeUnit.SECONDS)); }
-                    catch (InterruptedException error) { throw new AssertionError(error); }
-                }
-                return super.get(key);
-            }
-        };
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        try (Fixture f = new Fixture(entries)) {
-            when(f.backend.get("a")).thenReturn(Mono.never());
-            AtomicReference<Throwable> batchFailure = new AtomicReference<>();
-            Future<CompletableFuture<Values>> batch = executor.submit(() -> f.storage.getConfigs(Arrays.asList("a", "b"))
-                .doOnError(batchFailure::set).toFuture());
-            try {
-                assertTrue(paused.await(2, TimeUnit.SECONDS));
-                CompletableFuture<Value> joined = f.storage.getConfig("a").toFuture();
-                f.manager.dispose();
-                assertTrue("Single reader must be independently registered for shutdown", joined.isDone());
-                assertTrue(joined.isCompletedExceptionally());
-                assertTrue("Batch shutdown must not wait for collection to resume", batchFailure.get() instanceof CancellationException);
-            } finally {
-                resume.countDown();
-                batch.get(2, TimeUnit.SECONDS);
-            }
-        } finally {
-            resume.countDown();
-            executor.shutdownNow();
+    @Test public void shutdownDoesNotOwnAlreadyStartedIndependentReads() {
+        try (Fixture f = new Fixture()) {
+            Sinks.One<Object> singleSource = Sinks.one();
+            Sinks.One<Map.Entry<String, Object>> batchSource = Sinks.one();
+            when(f.backend.get("a")).thenReturn(singleSource.asMono());
+            when(f.backend.get(anyCollection())).thenReturn(batchSource.asMono().flux());
+            CompletableFuture<Value> single = f.storage.getConfig("a").toFuture();
+            CompletableFuture<Values> batch = f.storage.getConfigs(Arrays.asList("a", "b")).toFuture();
+            f.manager.dispose();
+            assertFalse(single.isDone()); assertFalse(batch.isDone());
+            singleSource.tryEmitValue("A");
+            batchSource.tryEmitValue(new AbstractMap.SimpleImmutableEntry<>("b", "B"));
+            assertEquals("A", single.orTimeout(3, TimeUnit.SECONDS).join().asString());
+            assertEquals("B", batch.orTimeout(3, TimeUnit.SECONDS).join().getString("b", ""));
         }
     }
 
@@ -173,25 +136,27 @@ public class ConfigStorageFollowupReviewTest {
             when(f.backend.get(anyCollection())).thenReturn(Flux.just(new AbstractMap.SimpleImmutableEntry<>("a", "A")));
             Mono<Values> read = f.storage.getConfigs(Arrays.asList("a", "b"));
             StepVerifier.create(read).expectErrorMessage("collection failed").verify(Duration.ofSeconds(3));
-            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
             assertEquals("A", read.block(Duration.ofSeconds(3)).getString("a", ""));
             verify(f.backend, times(1)).get(anyCollection());
         }
     }
 
-    @Test public void cancellationDuringOnSubscribeDoesNotStartTheBackend() {
+    @Test public void immediateBatchCancellationSkipsL2WhileASharedFillCanFinish() {
         try (Fixture f = new Fixture()) {
+            Sinks.One<Object> source = Sinks.one();
+            when(f.backend.get("key")).thenReturn(source.asMono());
             AtomicReference<Throwable> dropped = new AtomicReference<>();
             reactor.core.publisher.Hooks.onErrorDropped(dropped::set);
             try {
                 f.storage.getConfig("key").doOnSubscribe(org.reactivestreams.Subscription::cancel).subscribe();
                 f.storage.getConfigs(Arrays.asList("a", "b"))
                     .doOnSubscribe(org.reactivestreams.Subscription::cancel).subscribe();
-                assertNull("Cancellation must not emit an error back into a cancelling subscriber", dropped.get());
+                source.tryEmitValue("filled");
+                assertEquals("filled", f.storage.getConfig("key").block(Duration.ofSeconds(3)).asString());
+                assertNull(dropped.get());
             } finally { reactor.core.publisher.Hooks.resetOnErrorDropped(); }
-            verify(f.backend, never()).get(anyString());
+            verify(f.backend, times(1)).get("key");
             verify(f.backend, never()).get(anyCollection());
-            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
         }
     }
 
@@ -279,31 +244,86 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
-    @Test public void shutdownCancelsAnUpstreamThatArrivesAfterItsPendingWasReleased() throws Exception {
-        CountDownLatch creating = new CountDownLatch(1);
-        CountDownLatch resume = new CountDownLatch(1);
-        AtomicInteger cancellations = new AtomicInteger();
+    @Test public void shutdownLeavesAnAlreadyClaimedSourceToComplete() throws Exception {
+        CountDownLatch creating = new CountDownLatch(1), resume = new CountDownLatch(1);
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try (Fixture f = new Fixture()) {
+            Sinks.One<Object> source = Sinks.one();
             when(f.backend.get("key")).thenAnswer(ignored -> {
-                creating.countDown();
-                assertTrue(resume.await(3, TimeUnit.SECONDS));
-                return Mono.never().doOnCancel(cancellations::incrementAndGet);
+                creating.countDown(); assertTrue(resume.await(3, TimeUnit.SECONDS));
+                return source.asMono();
             });
             Future<CompletableFuture<Value>> owner = executor.submit(() -> f.storage.getConfig("key").toFuture());
             try {
                 assertTrue(creating.await(2, TimeUnit.SECONDS));
                 CompletableFuture<Value> joined = f.storage.getConfig("key").toFuture();
-                f.manager.dispose();
-                assertTrue(joined.isCompletedExceptionally());
-                resume.countDown();
-                assertTrue(owner.get(2, TimeUnit.SECONDS).isCompletedExceptionally());
-                assertEquals(1, cancellations.get());
+                f.manager.dispose(); assertFalse(joined.isDone()); resume.countDown();
+                CompletableFuture<Value> first = owner.get(2, TimeUnit.SECONDS);
+                source.tryEmitValue("finished");
+                assertEquals("finished", first.get(2, TimeUnit.SECONDS).asString());
+                assertEquals("finished", joined.get(2, TimeUnit.SECONDS).asString());
                 assertEquals(0, f.manager.monitor.loadErrors.sum());
             } finally { resume.countDown(); }
-        } finally {
-            resume.countDown();
-            executor.shutdownNow();
+        } finally { resume.countDown(); executor.shutdownNow(); }
+    }
+
+    @Test public void aRepeatedKeyDoesNotKeepAnEarlierSeedAfterInvalidation() {
+        AtomicBoolean armed = new AtomicBoolean();
+        AtomicInteger reads = new AtomicInteger();
+        Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<String, LocalCacheClusterConfigStorage.Cache>() {
+            @Override public LocalCacheClusterConfigStorage.Cache get(Object key) {
+                if (armed.get() && "a".equals(key) && reads.incrementAndGet() == 2) remove(key);
+                return super.get(key);
+            }
+        };
+        try (Fixture f = new Fixture(entries)) {
+            when(f.backend.get("a")).thenReturn(Mono.just("old"));
+            assertEquals("old", f.storage.getConfig("a").block(Duration.ofSeconds(3)).asString());
+            when(f.backend.get(anyCollection())).thenReturn(Flux.just(new AbstractMap.SimpleImmutableEntry<>("a", "fresh")));
+            armed.set(true);
+            assertEquals("fresh", f.storage.getConfigs(Arrays.asList("missing", "a", "a"))
+                .block(Duration.ofSeconds(3)).getString("a", ""));
+            assertEquals("fresh", f.storage.getConfig("a").block(Duration.ofSeconds(3)).asString());
+        }
+    }
+
+    @Test public void shutdownDuringColdRegistrationCannotReattachTheStorage() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1), resume = new CountDownLatch(1);
+        AtomicInteger reads = new AtomicInteger();
+        Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<String, LocalCacheClusterConfigStorage.Cache>() {
+            @Override public LocalCacheClusterConfigStorage.Cache get(Object key) {
+                if ("a".equals(key) && reads.incrementAndGet() == 2) {
+                    entered.countDown();
+                    try { assertTrue(resume.await(3, TimeUnit.SECONDS)); }
+                    catch (InterruptedException error) { throw new AssertionError(error); }
+                }
+                return super.get(key);
+            }
+        };
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Fixture f = new Fixture(entries)) {
+            Future<CompletableFuture<Values>> task = executor.submit(() -> f.storage.getConfigs(Arrays.asList("a", "b")).toFuture());
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            f.manager.dispose(); resume.countDown();
+            StepVerifier.create(Mono.fromFuture(task.get(2, TimeUnit.SECONDS)))
+                .expectError(CancellationException.class).verify(Duration.ofSeconds(3));
+            assertTrue(f.manager.cache.isEmpty());
+            verifyNoInteractions(f.backend);
+        } finally { resume.countDown(); executor.shutdownNow(); }
+    }
+
+    @Test public void invalidationBetweenNegativeAndFallbackCannotSeedTheReplacement() {
+        try (Fixture f = new Fixture()) {
+            Sinks.Empty<Object> source = Sinks.empty();
+            when(f.backend.get("key")).thenReturn(source.asMono(), Mono.just("fresh"));
+            CompletableFuture<Value> ordinary = f.storage.getConfig("key")
+                .doOnSuccess(ignored -> f.storage.clearLocalCache(CacheNotify.expiresAll("audit"))).toFuture();
+            CompletableFuture<Value> fallback = f.storage.getConfig("key", Mono.just("old-default")).toFuture();
+            source.tryEmitEmpty();
+            assertNull(ordinary.orTimeout(3, TimeUnit.SECONDS).join());
+            assertEquals("old-default", fallback.orTimeout(3, TimeUnit.SECONDS).join().asString());
+            assertEquals("fresh", f.storage.getConfig("key").block(Duration.ofSeconds(3)).asString());
+            verify(f.backend, times(2)).get("key");
         }
     }
 
@@ -346,21 +366,21 @@ public class ConfigStorageFollowupReviewTest {
             assertFalse(second.isDone());
             secondSource.tryEmitValue("second");
             assertEquals("second", second.join().asString());
-            assertEquals(1, f.manager.monitor.loadErrors.sum());
+            assertEquals(0, f.manager.monitor.loadErrors.sum());
         }
     }
 
-    @Test public void aSuccessfulFallbackPublishesOnceAndEndsOtherWaiters() {
+    @Test public void aSuccessfulFallbackCachesWithoutEndingAnotherCallersSource() {
         try (Fixture f = new Fixture()) {
             when(f.backend.get("key")).thenReturn(Mono.empty());
             AtomicInteger cancellations = new AtomicInteger();
             CompletableFuture<Value> first = f.storage.getConfig("key",
                 Mono.never().doOnCancel(cancellations::incrementAndGet)).toFuture();
-            CompletableFuture<Value> second = f.storage.getConfig("key", Mono.just("created")).toFuture();
-            assertEquals("created", first.join().asString());
-            assertEquals("created", second.join().asString());
+            assertEquals("created", f.storage.getConfig("key", Mono.just("created"))
+                .block(Duration.ofSeconds(3)).asString());
+            assertFalse(first.isDone()); assertEquals(0, cancellations.get());
             assertEquals("created", f.storage.getConfig("key").block(Duration.ofSeconds(3)).asString());
-            assertEquals(1, cancellations.get());
+            first.cancel(true); assertEquals(1, cancellations.get());
             assertEquals(2, f.entries.get("key").version());
             verify(f.backend, times(1)).get("key");
         }
@@ -392,14 +412,15 @@ public class ConfigStorageFollowupReviewTest {
         }
     }
 
-    @Test public void shutdownEndsADetachedFallbackAndCancelsItsSource() {
+    @Test public void detachedFallbackRemainsOwnedByItsCallerAfterShutdown() {
         try (Fixture f = new Fixture()) {
             when(f.backend.get("key")).thenReturn(Mono.empty());
             AtomicInteger cancellations = new AtomicInteger();
-            StepVerifier.create(f.storage.getConfig("key", Mono.never().doOnCancel(cancellations::incrementAndGet)))
-                .then(() -> f.storage.clearLocalCache(CacheNotify.clear("audit")))
-                .then(f.manager::dispose).expectError(CancellationException.class).verify(Duration.ofSeconds(3));
-            assertEquals(1, cancellations.get());
+            CompletableFuture<Value> read = f.storage.getConfig("key",
+                Mono.never().doOnCancel(cancellations::incrementAndGet)).toFuture();
+            f.storage.clearLocalCache(CacheNotify.clear("audit")); f.manager.dispose();
+            assertFalse(read.isDone()); assertEquals(0, cancellations.get());
+            read.cancel(true); assertEquals(1, cancellations.get());
             assertEquals(0, f.manager.monitor.loadErrors.sum());
         }
     }
@@ -441,15 +462,16 @@ public class ConfigStorageFollowupReviewTest {
             try {
                 assertTrue(hashing.await(2, TimeUnit.SECONDS));
                 f.storage.setConfig("productName", "newer").block(Duration.ofSeconds(3));
-                assertEquals("newer", read.get(2, TimeUnit.SECONDS).asString());
+                assertFalse(read.isDone());
             } finally { resume.countDown(); }
             delivery.get(2, TimeUnit.SECONDS);
+            assertSame(older, read.get(2, TimeUnit.SECONDS).get());
             assertEquals("newer", cache.getCachedValue());
             assertEquals(2, cache.version());
         }
     }
 
-    @Test public void aWrittenKeyEndsItsIndependentReadersBeforeTheRemainingBatchCompletes() {
+    @Test public void aWriteCompletesASharedSingleButBatchesAwaitTheirOwnL2() {
         try (Fixture f = new Fixture()) {
             AtomicInteger cancellations = new AtomicInteger();
             Sinks.One<Map.Entry<String, Object>> source = Sinks.one();
@@ -461,17 +483,18 @@ public class ConfigStorageFollowupReviewTest {
             CompletableFuture<Values> joinedBatch = f.storage.getConfigs(java.util.Collections.singleton("a")).toFuture();
             f.storage.setConfig("a", "written").block(Duration.ofSeconds(3));
             assertEquals("written", joined.join().asString());
-            assertEquals("written", joinedBatch.join().getString("a", ""));
+            assertFalse(joinedBatch.isDone());
             assertFalse(batch.isDone());
-            assertEquals(1, cancellations.get());
+            assertEquals(0, cancellations.get());
             source.tryEmitValue(new AbstractMap.SimpleImmutableEntry<>("b", "B"));
+            assertEquals("written", joinedBatch.orTimeout(3, TimeUnit.SECONDS).join().getString("a", ""));
             Values values = batch.join();
             assertEquals("written", values.getString("a", ""));
             assertEquals("B", values.getString("b", ""));
         }
     }
 
-    @Test public void writesBeforeSealingCompleteTheBatchWithoutStartingTheBackend() throws Exception {
+    @Test public void writesDuringCollectionPreserveNewValuesWhenTheBatchFinishes() throws Exception {
         CountDownLatch collecting = new CountDownLatch(1);
         CountDownLatch resume = new CountDownLatch(1);
         Map<String, LocalCacheClusterConfigStorage.Cache> entries = new ConcurrentHashMap<String, LocalCacheClusterConfigStorage.Cache>() {
@@ -491,6 +514,7 @@ public class ConfigStorageFollowupReviewTest {
             Map<String, Object> written = new java.util.LinkedHashMap<>();
             written.put("a", "A"); written.put("b", "B");
             when(f.backend.putAll(written)).thenReturn(Mono.just(true));
+            when(f.backend.get(anyCollection())).thenReturn(Flux.empty());
             Future<CompletableFuture<Values>> owner = executor.submit(() -> f.storage.getConfigs(Arrays.asList("a", "b")).toFuture());
             try {
                 assertTrue(collecting.await(2, TimeUnit.SECONDS));
@@ -499,8 +523,7 @@ public class ConfigStorageFollowupReviewTest {
                 Values values = owner.get(2, TimeUnit.SECONDS).get(2, TimeUnit.SECONDS);
                 assertEquals("A", values.getString("a", ""));
                 assertEquals("B", values.getString("b", ""));
-                verify(f.backend, never()).get(anyCollection());
-                assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+                verify(f.backend, times(1)).get(anyCollection());
             } finally { resume.countDown(); }
         } finally { executor.shutdownNow(); }
     }
@@ -516,7 +539,6 @@ public class ConfigStorageFollowupReviewTest {
             source.tryEmitError(failure);
             try { batch.join(); fail("Unresolved keys must preserve the backend failure"); }
             catch (CompletionException error) { assertSame(failure, error.getCause()); }
-            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
             when(f.backend.get(anyCollection())).thenReturn(Flux.just(
                 new AbstractMap.SimpleImmutableEntry<>("a", "written"),
                 new AbstractMap.SimpleImmutableEntry<>("b", "retry")));
@@ -584,11 +606,10 @@ public class ConfigStorageFollowupReviewTest {
             assertFalse(active.isDone());
             second.tryEmitValue(new AbstractMap.SimpleImmutableEntry<>("a", "A"));
             assertEquals("A", active.orTimeout(3, TimeUnit.SECONDS).join().getString("a", ""));
-            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
         }
     }
 
-    @Test public void shutdownFinishesABatchWhileAnIndependentReaderIsReceivingItsValue() throws Exception {
+    @Test public void shutdownLeavesABatchIndependentOfAPausedSingleDelivery() throws Exception {
         CountDownLatch receiving = new CountDownLatch(1);
         CountDownLatch resume = new CountDownLatch(1);
         ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -611,16 +632,16 @@ public class ConfigStorageFollowupReviewTest {
             try {
                 assertTrue(receiving.await(2, TimeUnit.SECONDS));
                 f.manager.dispose();
-                assertTrue("Shutdown must not await the paused delivery thread", batch.isDone());
-                assertTrue(batch.isCompletedExceptionally());
-                assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
+                assertFalse(batch.isDone());
+                source.tryEmitValue(values);
+                assertEquals("B", batch.get(2, TimeUnit.SECONDS).getString("b", ""));
             } finally { resume.countDown(); }
             delivery.get(2, TimeUnit.SECONDS);
             assertEquals("A", joined.get(2, TimeUnit.SECONDS).asString());
         } finally { resume.countDown(); executor.shutdownNow(); }
     }
 
-    @Test public void simultaneousIndependentBatchesAllFinishAndReleaseTheirRegistrations() throws Exception {
+    @Test public void simultaneousIndependentBatchesAllFinish() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(16);
         CountDownLatch start = new CountDownLatch(1);
         try (Fixture f = new Fixture()) {
@@ -647,7 +668,6 @@ public class ConfigStorageFollowupReviewTest {
             source.tryEmitValue(expected);
             for (CompletableFuture<Values> reader : readers)
                 assertEquals(expected, reader.get(3, TimeUnit.SECONDS).getAllValues());
-            assertTrue(f.manager.activeLoads.stream().allMatch(java.util.Set::isEmpty));
         } finally { start.countDown(); executor.shutdownNow(); }
     }
 }
