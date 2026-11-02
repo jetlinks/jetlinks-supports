@@ -3,6 +3,7 @@ package org.jetlinks.supports.config;
 import com.google.common.collect.Maps;
 import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.hswebframework.web.exception.BusinessException;
 import org.jetlinks.core.Value;
@@ -23,6 +24,12 @@ import reactor.core.publisher.*;
 import reactor.util.context.Context;
 
 import javax.annotation.Nonnull;
+import javax.management.openmbean.CompositeData;
+import javax.management.openmbean.CompositeDataSupport;
+import javax.management.openmbean.CompositeType;
+import javax.management.openmbean.OpenDataException;
+import javax.management.openmbean.OpenType;
+import javax.management.openmbean.SimpleType;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,6 +67,16 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     private static final Mono<Values> EMPTY_VALUES_MONO = Mono.just(EMPTY_VALUES);
 
+    private static final String[] ENTRY_FIELDS = {"key", "keyTruncated", "state", "version"};
+    private static final CompositeType ENTRY_TYPE = createEntryType();
+
+    @SneakyThrows(OpenDataException.class)
+    private static CompositeType createEntryType() {
+        return new CompositeType(
+            "LocalConfigEntry", "Local config cache entry", ENTRY_FIELDS, ENTRY_FIELDS,
+            new OpenType<?>[]{SimpleType.STRING, SimpleType.BOOLEAN, SimpleType.STRING, SimpleType.LONG});
+    }
+
     private final Map<String, Cache> caches;
     final String id;
     private final EventBusStorageManager manager;
@@ -95,6 +112,30 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
 
     boolean isEmpty() {
         return caches.isEmpty();
+    }
+
+    int localEntryCount() {
+        return caches.size();
+    }
+
+    // Read fields directly: getCached/getCachedValue renew idle TTL and are unsuitable for inspection.
+    @SneakyThrows(OpenDataException.class)
+    CompositeData[] inspect(int limit) {
+        List<CompositeData> result = new ArrayList<>(Math.min(limit, caches.size()));
+        for (Map.Entry<String, Cache> entry : caches.entrySet()) {
+            Cache cache = entry.getValue();
+            Value value = cache.cached;
+            String key = entry.getKey();
+            String state = cache.isExpired() ? "expired" : cache.loading != null ? "loading"
+                : cache.ref == null ? "unloaded" : value == null ? "empty" : value == NULL ? "negative" : "value";
+            result.add(new CompositeDataSupport(ENTRY_TYPE, ENTRY_FIELDS, new Object[]{
+                key.length() <= 512 ? key : key.substring(0, 512), key.length() > 512, state, (long) cache.version
+            }));
+            if (result.size() == limit) {
+                break;
+            }
+        }
+        return result.toArray(new CompositeData[0]);
     }
 
     void cleanup() {

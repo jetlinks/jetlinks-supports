@@ -25,6 +25,7 @@ import reactor.core.scheduler.Schedulers;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
+import javax.management.openmbean.CompositeData;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.management.ManagementFactory;
@@ -50,6 +51,8 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     final ConcurrentMap<String, LocalCacheClusterConfigStorage> cache;
 
     private final Disposable.Composite disposable = Disposables.composite();
+
+    private ObjectName registeredName;
 
     private final Set<Consumer<CacheNotify>> cacheNotifyListeners = ConcurrentHashMap.newKeySet();
 
@@ -198,9 +201,17 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     }
 
     @Override
-    public void dispose() {
+    public synchronized void dispose() {
         disposable.dispose();
         cacheNotifyListeners.clear();
+        if (registeredName != null) {
+            try {
+                ManagementFactory.getPlatformMBeanServer().unregisterMBean(registeredName);
+            } catch (Exception error) {
+                log.warn("unregister config storage MBean error", error);
+            }
+            registeredName = null;
+        }
     }
 
     void cleanup() {
@@ -223,6 +234,21 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     }
 
     class ConfigStorageManagerMbeanImpl implements ConfigStorageManagerMbean {
+
+        @Override
+        public long countLocalEntries() {
+            long count = 0;
+            for (LocalCacheClusterConfigStorage storage : cache.values()) {
+                count += storage.localEntryCount();
+            }
+            return count;
+        }
+
+        @Override
+        public CompositeData[] inspect(String storageId, int maxKeys) {
+            LocalCacheClusterConfigStorage storage = cache.get(storageId);
+            return storage == null ? new CompositeData[0] : storage.inspect(Math.max(1, Math.min(128, maxKeys)));
+        }
 
         @Override
         public long getCacheSize() {
@@ -301,6 +327,19 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
 
     public interface ConfigStorageManagerMbean {
 
+        /**
+         * Explicit O(Storage count) operation; sums local Map sizes without visiting keys.
+         * Weakly consistent, including negative, loading and not-yet-cleaned expired entries.
+         */
+        long countLocalEntries();
+
+        /**
+         * Returns at most 128 local entry states, with maxKeys clamped to 1..128.
+         * Keys are limited to 512 characters; configuration values are not returned.
+         * Never creates entries, loads values or renews TTL; concurrent states are weakly consistent.
+         */
+        CompositeData[] inspect(String storageId, int maxKeys);
+
         long getCacheSize();
 
         void cleanup();
@@ -318,13 +357,18 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
 
     }
 
-    public void registerMbean() {
+    public synchronized void registerMbean() {
+        if (registeredName != null || disposable.isDisposed()) {
+            return;
+        }
         try {
             MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
             ObjectName objectName = new ObjectName("org.jetlinks:type=ConfigStorage,name=LocalCacheClusterConfigStorage");
             mBeanServer.registerMBean(
                 new StandardMBean(new ConfigStorageManagerMbeanImpl(), ConfigStorageManagerMbean.class), objectName);
-        } catch (Throwable ignore) {
+            registeredName = objectName;
+        } catch (Throwable error) {
+            log.warn("register config storage MBean error", error);
         }
     }
 }

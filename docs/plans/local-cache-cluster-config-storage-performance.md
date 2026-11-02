@@ -1,5 +1,32 @@
 # LocalCacheClusterConfigStorage 稳态读取优化
 
+## 配置存储被动观测
+
+本次仅扩展 `EventBusStorageManager.ConfigStorageManagerMbean` 的数量统计与本地条目查看。
+实施范围是现有 MBean、`LocalCacheClusterConfigStorage` 的只读辅助方法及对应测试；
+读取、批量加载、写入、fallback、失效、TTL 和 Redis 操作均沿用 PR 基线
+`a16007977666324f0a63f51234bd40eefe7b2d8f`。
+
+- `CacheSize` 属性保持原义：当前 manager 中的 Storage 数。
+- `countLocalEntries()` 是显式按需操作，遍历 Storage 并累加各自 Map 的大小，
+  成本为 O(Storage 数)，不遍历 Key。数量包含负缓存、加载中及尚未清理的过期条目，
+  并发变更时为弱一致结果，不代表有效配置数或内存字节数。
+- `inspect(storageId, maxKeys)` 最多返回 128 条本地条目的 Key、状态和版本；
+  Key 最多 512 字符并标记截断，不返回配置值。查询未知 Storage 返回空数组。
+  状态也是弱一致观察，不用于判断整个加载流程是否健康。
+- 查询不创建 Storage 或 Key、不调用缓存读取方法、不续期、不回源，也不清理缓存。
+  不增加定时扫描、统计快照状态机、热路径计数、采样或响应式包装。
+- MBean 注册资源在 manager 关闭时注销；原有清理、搜索等操作保持原行为。
+  旧 `search` 可能续期或回源，不能作为被动观测入口。
+
+验证：清理旧构建产物后执行
+`mvn -o clean -Dtest=LocalCacheClusterConfigStorageTest,EventBusStorageManagerTest,ConfigStorageMonitorTest test`，
+原有 19 项与新增被动观测 7 项共 26 项通过，零失败、错误或跳过，包含真实 Redis 场景。
+新增测试覆盖数量口径、不遍历 Key、查询不创建条目/不续期/不回源、输出边界、JMX 调用与注销。
+对照基线，原有 Storage 代码仅增加独立只读辅助方法；Cache、单键/批量 Loader、Redis 实现及
+原有测试/基准源码保持一致。此前扩大加载实现所得的性能数据不作为当前实现的验收依据。
+交付入口：[jetlinks-supports #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
+
 ## 双、三键全 L1 命中复核
 
 目标：在已完成的通用 L1 快路径基础上，隔离验证设备常用的双、三键读取是否值得专门构造 `Values`。仅在全部键已有缓存值时进入快路径；缺键、失效、重复键和负缓存必须维持原有语义，不调整缓存加载、失效或版本逻辑。使用相同 JMH 夹具比较原实现和候选的 1/8 线程吞吐及分配，辅以定向回归。若完整链路没有明确增益，不引入新的常驻状态或操作符。
