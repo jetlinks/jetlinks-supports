@@ -26,12 +26,12 @@ import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
 import javax.management.openmbean.CompositeData;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -39,40 +39,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.*;
 import java.util.stream.Collectors;
 
-/**
- * L1 configuration storage backed by the cluster cache. Changes invalidate local entries
- * through the EventBus; delivery is not a distributed commit acknowledgement. One MBean
- * exposes bounded node statistics and passive inspection for this manager's lifecycle.
- */
 @Slf4j
 public class EventBusStorageManager implements ConfigStorageManager, ConfigStorageCacheNotifier, Disposable {
 
     static final String NOTIFY_TOPIC = "/_sys/cluster_cache";
     private final AtomicBoolean CLUSTER_SUBSCRIBER = new AtomicBoolean();
     final ConcurrentMap<String, LocalCacheClusterConfigStorage> cache;
-    final ConfigStorageMonitor monitor = new ConfigStorageMonitor();
-    private final long ttl;
-    private String namespace = "";
-    private ObjectName registeredName;
-    private volatile Disposable clusterSubscription;
-    private Iterator<LocalCacheClusterConfigStorage> countIterator;
-    private long scanStartedAt;
-    private long scannedEntries;
-    private long nextScanAt;
-    private volatile CountSnapshot counts = new CountSnapshot(-1, 0);
 
     private final Disposable.Composite disposable = Disposables.composite();
-    @Override public boolean isDisposed() { return disposable.isDisposed(); }
 
-    private void removeEmpty(LocalCacheClusterConfigStorage store) {
-        // Pair with cold key creation; never detach a storage after admitting a key.
-        synchronized (store) {
-            if (store.isEmpty()) cache.remove(store.id, store);
-        }
-    }
+    private ObjectName registeredName;
 
     private final Set<Consumer<CacheNotify>> cacheNotifyListeners = ConcurrentHashMap.newKeySet();
 
@@ -91,7 +71,6 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     }
 
     public void setNamespace(String namespace) {
-        this.namespace = namespace == null ? "" : namespace;
         notifyTopics = TopicUtils
             .expand(NOTIFY_TOPIC + "/" + namespace)
             .stream()
@@ -103,11 +82,10 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus,
                                   long ttl) {
-        this.ttl = ttl;
         this.cache = new ConcurrentHashMap<>();
         this.eventBus = eventBus;
         Consumer<LocalCacheClusterConfigStorage> removeHandler = store -> {
-            removeEmpty(store);
+            this.cache.remove(store.id, store);
         };
         storageBuilder = id -> {
             return new LocalCacheClusterConfigStorage(
@@ -134,11 +112,10 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     public EventBusStorageManager(ClusterManager clusterManager,
                                   EventBus eventBus,
                                   Supplier<ConcurrentMap<String, Object>> cacheSupplier) {
-        this.ttl = -1;
         this.eventBus = eventBus;
         this.cache = (ConcurrentMap) cacheSupplier.get();
         Consumer<LocalCacheClusterConfigStorage> removeHandler = store -> {
-            removeEmpty(store);
+            this.cache.remove(store.id, store);
         };
         storageBuilder = id -> new LocalCacheClusterConfigStorage(
             id,
@@ -168,7 +145,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             );
     }
 
-    void handleNotify(CacheNotify cacheNotify) {
+    private void handleNotify(CacheNotify cacheNotify) {
         try {
             LocalCacheClusterConfigStorage storage = cache.get(cacheNotify.getName());
             if (storage != null) {
@@ -178,7 +155,6 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
                 log.trace("ignore clear local cache :{}", cacheNotify);
             }
         } catch (Throwable error) {
-            monitor.invalidationError(error);
             log.warn("clear local cache error", error);
         }
         notifyListeners(cacheNotify);
@@ -211,7 +187,6 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             try {
                 listener.accept(notify);
             } catch (Throwable error) {
-                monitor.listenerError(error);
                 log.warn("handle config cache notify error", error);
             }
         }
@@ -228,12 +203,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     @Override
     public synchronized void dispose() {
         disposable.dispose();
-        // Already-started reads belong to their source. Closing the manager releases
-        // notifications and observation resources without retaining a load registry.
-        cache.clear();
         cacheNotifyListeners.clear();
-        countIterator = null;
-        clusterSubscription = null;
         if (registeredName != null) {
             try {
                 ManagementFactory.getPlatformMBeanServer().unregisterMBean(registeredName);
@@ -249,7 +219,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             .forEach((key, value) -> {
                 value.cleanup();
                 if (value.isEmpty()) {
-                    removeEmpty(value);
+                    cache.remove(key, value);
                 }
             });
     }
@@ -258,79 +228,20 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
     @SneakyThrows
     public Mono<ConfigStorage> getStorage(String id) {
         if (CLUSTER_SUBSCRIBER.compareAndSet(false, true)) {
-            try {
-                clusterSubscription = subscribeCluster();
-                disposable.add(clusterSubscription);
-            } catch (RuntimeException error) {
-                CLUSTER_SUBSCRIBER.set(false);
-                monitor.error("subscription", error);
-                throw error;
-            }
+            disposable.add(subscribeCluster());
         }
         return Mono.fromSupplier(() -> cache.computeIfAbsent(id, storageBuilder));
-    }
-
-    // Count only map sizes, never cached values. A getter or another observer cannot start a scan.
-    synchronized void scanCounts(long now) {
-        if (disposable.isDisposed() || now < nextScanAt) {
-            return;
-        }
-        try {
-            if (countIterator == null) {
-                countIterator = cache.values().iterator();
-                scanStartedAt = now;
-                scannedEntries = 0;
-            }
-            if (now - scanStartedAt >= 120_000) {
-                countIterator = null;
-                nextScanAt = now + 30_000;
-                return;
-            }
-            long deadline = System.nanoTime() + 5_000_000;
-            int visited = 0;
-            while (countIterator.hasNext() && visited < 65_536) {
-                scannedEntries += countIterator.next().localEntryCount();
-                if ((++visited & 255) == 0 && System.nanoTime() >= deadline) {
-                    return;
-                }
-            }
-            if (!countIterator.hasNext()) {
-                counts = new CountSnapshot(scannedEntries, now);
-                countIterator = null;
-                nextScanAt = now + 30_000;
-            }
-        } catch (RuntimeException error) {
-            countIterator = null;
-            nextScanAt = now + 30_000;
-            monitor.error("countScan", error);
-            log.warn("count local config storage entries error", error);
-        }
-    }
-
-    private static final class CountSnapshot {
-        final long entries;
-        final long capturedAt;
-
-        CountSnapshot(long entries, long capturedAt) {
-            this.entries = entries;
-            this.capturedAt = capturedAt;
-        }
     }
 
     class ConfigStorageManagerMbeanImpl implements ConfigStorageManagerMbean {
 
         @Override
-        public CompositeData getStatistics() {
-            CountSnapshot current = counts;
-            Map<String, Object> values = new LinkedHashMap<>();
-            values.put("storageCount", (long) cache.size());
-            values.put("localEntryCount", current.entries);
-            values.put("countCapturedAt", current.capturedAt);
-            values.put("idleTtlMillis", ttl);
-            values.put("namespace", namespace);
-            Disposable subscription = clusterSubscription;
-            values.put("notificationSubscriptionActive", subscription != null && !subscription.isDisposed() && !disposable.isDisposed());
-            return monitor.snapshot(values);
+        public long countLocalEntries() {
+            long count = 0;
+            for (LocalCacheClusterConfigStorage storage : cache.values()) {
+                count += storage.localEntryCount();
+            }
+            return count;
         }
 
         @Override
@@ -351,7 +262,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
 
         @Override
         public void clean() {
-            cache.forEach((id, storage) -> storage.clearLocalCache(CacheNotify.clear(id)));
+            cache.clear();
         }
 
         @Override
@@ -392,7 +303,12 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
                 .map(e -> {
                     ConfigStorageInfo info = new ConfigStorageInfo();
                     info.setId(e.getKey());
-                    info.lastError = e.getValue().lastError;
+                    Throwable err = e.getValue().lastError;
+                    if (err != null) {
+                        StringWriter writer = new StringWriter();
+                        err.printStackTrace(new PrintWriter(writer));
+                        info.lastError = writer.toString();
+                    }
                     info.setValues(e.getValue().getAll());
                     return info;
                 })
@@ -409,13 +325,19 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
         private Map<String, Object> values;
     }
 
-    /** Node-level observations; counts are weakly consistent, inspection never loads or renews L1. */
     public interface ConfigStorageManagerMbean {
 
-        /** Capacity snapshots and fault counters; countCapturedAt is zero until the first complete scan. */
-        CompositeData getStatistics();
+        /**
+         * Explicit O(Storage count) operation; sums local Map sizes without visiting keys.
+         * Weakly consistent, including negative, loading and not-yet-cleaned expired entries.
+         */
+        long countLocalEntries();
 
-        /** At most 128 local keys and their states, without values or a read from Redis. */
+        /**
+         * Returns at most 128 local entry states, with maxKeys clamped to 1..128.
+         * Keys are limited to 512 characters; configuration values are not returned.
+         * Never creates entries, loads values or renews TTL; concurrent states are weakly consistent.
+         */
         CompositeData[] inspect(String storageId, int maxKeys);
 
         long getCacheSize();
@@ -445,9 +367,7 @@ public class EventBusStorageManager implements ConfigStorageManager, ConfigStora
             mBeanServer.registerMBean(
                 new StandardMBean(new ConfigStorageManagerMbeanImpl(), ConfigStorageManagerMbean.class), objectName);
             registeredName = objectName;
-            disposable.add(Schedulers.parallel().schedulePeriodically(
-                () -> scanCounts(System.currentTimeMillis()), 1, 1, TimeUnit.SECONDS));
-        } catch (Exception error) {
+        } catch (Throwable error) {
             log.warn("register config storage MBean error", error);
         }
     }
