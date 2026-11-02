@@ -56,6 +56,49 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
         }
     }
 
+    @Test public void aBatchKeepsItsRequestSnapshotAcrossCallerMutationRetryAndResubscription() {
+        try (Fixture f = new Fixture()) {
+            List<String> keys = new ArrayList<>(Arrays.asList("a", "b"));
+            AtomicInteger attempts = new AtomicInteger();
+            when(f.backend.get(anyCollection())).thenAnswer(invocation -> {
+                assertEquals(new HashSet<>(Arrays.asList("a", "b")),
+                    new HashSet<>((Collection<?>) invocation.getArgument(0)));
+                return Flux.deferContextual(context -> {
+                    assertEquals("caller", context.get("trace"));
+                    return attempts.incrementAndGet() == 1
+                        ? Flux.error(new IllegalStateException("transient"))
+                        : Flux.just(entry("a", "value"), entry("b", null));
+                });
+            });
+            Mono<Values> read = f.storage.getConfigs(keys).contextWrite(context -> context.put("trace", "caller"));
+            keys.clear();
+            keys.add("different");
+            assertEquals(Collections.singletonMap("a", "value"), read.retry(1).block(LIMIT).getAllValues());
+            f.storage.clearLocalCache(CacheNotify.expiresAll("lifecycle"));
+            assertEquals(Collections.singletonMap("a", "value"), read.block(LIMIT).getAllValues());
+            assertEquals(3, attempts.get());
+            verify(f.backend, times(3)).get(anyCollection());
+        }
+    }
+
+    @Test public void aBatchSelectsAnEqualButDistinctCommittedValueAndOmitsNegativeResults() {
+        try (Fixture f = new Fixture()) {
+            String oldValue = new String("equal");
+            String newValue = new String("equal");
+            Sinks.Empty<Map.Entry<String, Object>> end = Sinks.empty();
+            when(f.backend.get(anyCollection())).thenReturn(Flux.concat(
+                Flux.just(entry("key", oldValue), entry("negative", null)), end.asMono()));
+            when(f.backend.put("key", newValue)).thenReturn(Mono.just(true));
+            CompletableFuture<Values> read = f.storage.getConfigs(Arrays.asList("key", "negative", "missing")).toFuture();
+            assertTrue(f.storage.setConfig("key", newValue).block(LIMIT));
+            assertFalse(read.isDone());
+            end.tryEmitEmpty();
+            Map<String, Object> values = read.orTimeout(3, TimeUnit.SECONDS).join().getAllValues();
+            assertEquals(Collections.singletonMap("key", newValue), values);
+            assertSame(newValue, values.get("key"));
+        }
+    }
+
     @Test public void negativeCacheStillRunsTheExplicitFallbackWithContext() {
         try (Fixture f = new Fixture()) {
             when(f.backend.get("key")).thenReturn(Mono.empty());
@@ -124,6 +167,33 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
             assertEquals(1, cache.version());
             assertEquals("newer", cache.getCachedValue());
         }
+    }
+
+    @Test public void aClaimedSingleResultStillDeliversAfterANewerWriteBeforeEmission() throws Exception {
+        CountDownLatch emitting = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Fixture f = new Fixture()) {
+            when(f.backend.get("key")).thenReturn(Mono.<Object>just("loaded").doOnCancel(() -> {
+                emitting.countDown();
+                try { assertTrue(resume.await(3, TimeUnit.SECONDS)); }
+                catch (InterruptedException error) { throw new AssertionError(error); }
+            }));
+            when(f.backend.put("key", "newer")).thenReturn(Mono.just(true));
+            CompletableFuture<Value> read = new CompletableFuture<>();
+            Future<?> delivery = executor.submit(() -> f.storage.getConfig("key")
+                .subscribe(read::complete, read::completeExceptionally));
+            try {
+                assertTrue(emitting.await(2, TimeUnit.SECONDS));
+                assertTrue(f.storage.setConfig("key", "newer").block(LIMIT));
+                assertFalse(read.isDone());
+            } finally { resume.countDown(); }
+            delivery.get(2, TimeUnit.SECONDS);
+            assertEquals("loaded", read.get(2, TimeUnit.SECONDS).asString());
+            when(f.backend.get("key")).thenReturn(Mono.just("newer"));
+            assertEquals("newer", f.storage.getConfig("key").block(LIMIT).asString());
+            assertEquals(0, f.manager.monitor.loadErrors.sum());
+        } finally { resume.countDown(); executor.shutdownNow(); }
     }
 
     @Test public void aCommittedWriteSurvivesWhenTheIndependentBatchLaterCompletes() {

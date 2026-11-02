@@ -184,9 +184,9 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     public Mono<Values> getConfigs(Collection<String> keys) {
         Mono<Values> cached = getCachedValues(keys);
         if (cached != null) return cached;
-        List<String> requested = new ArrayList<>(keys);
+        String[] requested = keys.toArray(new String[0]);
         // MonoSink supplies demand buffering and cancellation for this one batch.
-        return Mono.create(sink -> new BatchLoader(sink, requested.size()).start(requested));
+        return Mono.create(sink -> new BatchLoader(sink, requested.length).start(requested));
     }
 
     private Mono<Values> getCachedValues(Collection<String> keys) {
@@ -443,7 +443,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
             targets = Maps.newHashMapWithExpectedSize(size);
             values = Maps.newHashMapWithExpectedSize(size);
         }
-        void start(List<String> keys) {
+        void start(String[] keys) {
             sink.onCancel(this);
             if (isDisposed()) return;
             if (manager.isDisposed()) { sink.error(new CancellationException("Storage manager is disposed")); return; }
@@ -465,7 +465,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                 }
                 if (isDisposed()) return;
                 if (targets.isEmpty()) sink.success(resultValues());
-                else clusterCache.get(Collections.unmodifiableSet(targets.keySet())).subscribe(this);
+                else clusterCache.get(targets.keySet()).subscribe(this);
             } catch (Throwable failure) {
                 Exceptions.throwIfFatal(failure);
                 if (!isDisposed()) { cancel(); hookOnError(failure); }
@@ -483,8 +483,10 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
                     Value selected = received == null || received == NULL ? NULL : Value.simple(received);
                     BatchTarget expected = target.getValue();
                     Object value = expected.cache.store(expected.start, selected).get();
-                    if (value == null) values.remove(target.getKey());
-                    else values.put(target.getKey(), value);
+                    if (value != received) {
+                        if (value == null) values.remove(target.getKey());
+                        else values.put(target.getKey(), value);
+                    }
                 }
                 sink.success(resultValues());
             } catch (Throwable failure) {

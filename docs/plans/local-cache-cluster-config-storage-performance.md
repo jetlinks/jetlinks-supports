@@ -1,5 +1,61 @@
 # LocalCacheClusterConfigStorage 稳态读取优化
 
+## 局部固定成本优化
+
+最终仅保留三处批量删减：用 String[] 保存请求快照，按对象身份跳过终态重复 Map 回写，直接传递本订阅内不再修改的目标 keySet。没有新增操作符、同步状态、索引、开关或加载抽象。保留原来的 Sinks.one() 及其串行保护。
+
+Snapshot 身份与数值 version、冷注册/空移除配对、错误先清槽、Context、retry、需求/取消、成功写入后更新 L1及迟到结果隔离均保留。manager、监控字段、TTL、fallback 和前端未改；共享单键继续填充，底层控制期限，不新增 Storage 超时。
+
+最终源码重新编译并运行六个定向类105项全部通过，零失败/错误/跳过，无 onErrorDropped，包含真实 Redis 原子删除/序列化回归；原102项完整保留。新增3项覆盖请求集合修改后的 Context/retry/重复订阅、值相等但对象不同的并发写入与负值省略、已认领终态但尚未发射时发生写入。日志 `/private/tmp/config-local-cost-final-validation.log`。最终6个 Storage 生产 class 文件与测量 C 逐字节一致，复用 C 的有效测量结果，不在完成交付时重跑同一回归。
+
+对照 B=aa269b7，C=最终批量删减，N=已撤销的非序列化 Sink 候选。相同预编译夹具、依赖、JDK21/JMH1.35、512MiB堆、GC profiler，每 fork 3×1s预热、4×1s测量。CPU按 B/C/N/N/C/B，Sink复核按 C/N/N/C，最终异步/Redis按 B/C/C/B；每格为两个进程样本均值，不并行构建或本任务压测。原始数据 `/private/tmp/config-local-cost-results/`，脚本 `/private/tmp/config-local-cost-benchmark.py`。
+
+最终同步回源，ns/op：
+
+| 场景 | B | C | C/B | 分配 B→C，B/op |
+| --- | ---: | ---: | ---: | ---: |
+| 1线程 batchReload8 | 603.465 | 578.617 | -4.12% | 3184.3→3112.2 |
+| 1线程 singleReload | 99.045 | 98.976 | -0.07% | 448.0→448.0 |
+| 32线程 batchReload8 | 2542.761 | 2111.144 | -16.97% | 3174.3→3103.2 |
+| 32线程 singleReload | 515.676 | 324.981 | -36.98% | 445.8→446.8 |
+
+最终异步共享，ns/整轮：
+
+| 场景 | B | C | C/B | 分配 B→C，B/op |
+| --- | ---: | ---: | ---: | ---: |
+| 8线程 singleShared8 | 39901.629 | 28664.776 | -28.16% | 2856.5→2856.4 |
+
+最终真实 Redis32线程，µs/op；directSingle是独立 fork 环境参照，不与 Storage 时延相减：
+
+| 场景 | B | C | C/B | 分配 B→C，B/op |
+| --- | ---: | ---: | ---: | ---: |
+| 32线程 batchReload8 | 398.988 | 543.416 | +36.20% | 58102.8→58015.3 |
+| 32线程 directSingle | 329.834 | 465.186 | +41.04% | 14159.3→14189.8 |
+| 32线程 singleReload | 399.529 | 333.199 | -16.60% | 14463.7→14465.4 |
+
+最终8键批量同步均值 C/B 为1线程 -4.12%、32线程 -16.97%，每次分配减少约72B；同期未改动的单键也有显著波动，不能把32线程耗时下降全部归于优化。异步 B 为26848.174/52955.085ns、C为29186.472/28143.081ns，单键路径未变，不把离群样本拉低的均值差当作收益。
+
+保留 Redis 负向：批量 B为372.527/425.450µs、C为655.230/431.602µs，均值 +36.20%；直接 L2均值同时 +41.04%。两个版本的 RedisClusterCache、manager、monitor 共11个class逐字节一致。
+
+另用既有同进程交替夹具按 B/C/C/B，每轮各执行一次直接L2与Storage批量，沿用32线程/3×1s预热/4×1s测量/GC profiler，结果如下：
+
+| 版本 | µs/两次调用整轮 | Storage/直接L2累计用时 |
+| --- | ---: | ---: |
+| B | 1008.783 | 1.001764 |
+| C | 1768.951 | 0.999475 |
+| C | 1196.488 | 0.996298 |
+| B | 978.059 | 1.010514 |
+
+C整轮较慢时，直接L2与Storage也共同变慢，这支持共同链路/运行环境波动，尚未定位具体干扰源。配对夹具的混合负载与纯Storage不同，不能据此排除所有回退或宣称通过严格5%；不将配对结果与单次调用表混算。数据见 paired-*.json，本轮不再继续重跑或调参。
+
+非序列化 Sink 候选未采用：单线程单键 N/C 均值 -10.05%，但32线程首轮 +36.45%，一次独立复核仍为 +13.12%。虽然每次少32B分配且105项回归通过，仍没有证据满足高并发收益的采用条件，因此保留默认保护，不继续调参。该判断不是认定候选有正确性缺陷。
+
+波动控制：C/N 的 BatchLoader、BatchTarget、Cache、Snapshot 归一化字节码相同，32线程批量 N/C 却从首轮 +34.37% 反转为复核 -31.17%。B/C 的 getConfig 与命中 helper 也相同，同期32线程单键 C/B 为 -36.98%。这些变化不能归为批量优化或 Sink 的确定收益，说明运行时/环境波动足以影响本机耗时；不将样本占比或均值当作根因百分比。
+
+同步冷加载每线程独立 Storage/L1并清空条目，不代表32线程同时争抢同 Key。异步夹具每个 worker 内依次安装8个订阅，由另一线程释放源；普通单键路径未改，不能将异步耗时变化归因于本轮批量删减。正常命中分支和 helper 未改，不重复完整热读压测；旧版本热读数据不当作本轮严格上限证明。P99、长稳和真实32线程同 Key极限争用未覆盖。本轮只与 aa269b7 对照，不跨轮使用 d41e901 均值计算追平比例，原始整体5%预算仍不宣称通过。
+
+最终源码 SHA256 `0cf3790e309de7fa74afc999aba003534c79b94ca6d80287f5850af1dc15f6ee`；交付沿用 [PR #48](https://github.com/jetlinks/jetlinks-supports/pull/48)。
+
 ## 最小观测与加载边界
 
 本次交付限定为被动观测、明确缺陷修复和低成本性能优化。Owning module 为 `jetlinks-supports`；主要实现为 `LocalCacheClusterConfigStorage`、`EventBusStorageManager` 和 `ConfigStorageMonitor`。Redis 原子 getAndRemove 保留，前端不新增内容。
@@ -14,9 +70,9 @@ manager 不维护活动加载登记。关闭释放通知订阅、调度、监听
 
 正负缓存、空闲 TTL、一次单调取时、成功写入后才更新 L1、值/版本一致发布、失效与迟到结果隔离、单键旧值兜底均保留。正常读取和成功回源无观测包装、采样、计时或计数，不增加 TraceHolder span、新调度器、兼容开关、双实现或诊断任务。
 
-### 收敛验证与性能预算
+### aa269b7阶段的收敛验证与性能预算
 
-以 `6df2cd0` 为执行前 B、共享加载重构前 `d41e901` 为 D、最终收敛实现为 N。D 已包含最小监控与部分缺陷修复，并非整个 PR 的初始代码。当前 Storage 为 503 行（B 为 756），manager 为 454 行（B 为 482）。删除 FallbackLoad、BatchEntry 等待链、跨加载完成协调、读者引用计数、活动 Set 和 startLoad/endLoad；保留协议与代次校验需要的适配。
+以 `6df2cd0` 为执行前 B、共享加载重构前 `d41e901` 为 D、最终收敛实现为 N。D 已包含最小监控与部分缺陷修复，并非整个 PR 的初始代码。该阶段 Storage 为 503 行（B 为 756），manager 为 454 行（B 为 482）。删除 FallbackLoad、BatchEntry 等待链、跨加载完成协调、读者引用计数、活动 Set 和 startLoad/endLoad；保留协议与代次校验需要的适配。
 
 Maven 编译和六个定向测试类共 101 项通过；随后收紧关闭竞态 fixture，复核 29 项 followup 通过，再新增同步初始化抛错后 retry 清槽回归，复核 24 项 lifecycle 通过。累计覆盖 102 个不同用例，零失败/错误/跳过，无 onErrorDropped；生产代码未变，其余阶段证据复用。覆盖 Context、retry、正负缓存、TTL、写失败、失效后迟到结果、批量需求与取消、共享填充继续完成、关闭资源和确定性边界回归。日志 `/private/tmp/config-converged-final-validation.log`、`/private/tmp/config-converged-final-followup.log`、`/private/tmp/config-converged-final-lifecycle.log`。
 
