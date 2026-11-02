@@ -27,6 +27,7 @@ import javax.management.openmbean.CompositeType;
 import java.util.*;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -54,7 +55,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     final String id;
     private final EventBusStorageManager manager;
     private final ClusterCache<String, Object> clusterCache;
-    private final long expires;
+    private final long expiresNanos;
     private final Consumer<LocalCacheClusterConfigStorage> doOnClear;
     // Bounded error identity for the legacy search view; never retain a Throwable graph.
     volatile String lastError;
@@ -66,7 +67,8 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
         this.id = id;
         this.manager = manager;
         this.clusterCache = clusterCache;
-        this.expires = expires;
+        // Configuration remains in milliseconds; idle age uses a monotonic clock.
+        this.expiresNanos = TimeUnit.MILLISECONDS.toNanos(expires);
         this.doOnClear = doOnClear;
         this.caches = cacheContainer;
     }
@@ -101,7 +103,7 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
     }
 
     void cleanup() {
-        if (expires > 0) caches.forEach((key, cache) -> {
+        if (expiresNanos > 0) caches.forEach((key, cache) -> {
             if (cache.isExpired() && cache.loading == null && cache.batches == null) caches.remove(key, cache);
         });
     }
@@ -319,19 +321,24 @@ public class LocalCacheClusterConfigStorage implements ConfigStorage {
      */
     public class Cache {
         final String key;
-        volatile long t;
+        volatile long lastAccessNanos;
         private volatile Snapshot current = EMPTY;
         private volatile SingleLoader loading;
         private volatile BatchEntry batches;
         private Set<FallbackLoad> fallbacks;
         public Cache(String key) { this.key = key; touch(); }
         int version() { return current.version; }
-        boolean isExpired() { return expires > 0 && System.currentTimeMillis() - t > expires; }
-        void touch() { if (expires > 0) t = System.currentTimeMillis(); }
+        boolean isExpired() { return expiresNanos > 0 && System.nanoTime() - lastAccessNanos > expiresNanos; }
+        void touch() { if (expiresNanos > 0) lastAccessNanos = System.nanoTime(); }
         Snapshot cachedState() {
             Snapshot state = current;
-            if (state.value == null || isExpired()) return null;
-            touch();
+            if (state.value == null) return null;
+            if (expiresNanos > 0) {
+                // One monotonic tick covers both the expiry decision and idle renewal.
+                long now = System.nanoTime();
+                if (now - lastAccessNanos > expiresNanos) return null;
+                lastAccessNanos = now;
+            }
             return state;
         }
         public Value getCached() { Snapshot state = cachedState(); return state == null ? null : state.value; }

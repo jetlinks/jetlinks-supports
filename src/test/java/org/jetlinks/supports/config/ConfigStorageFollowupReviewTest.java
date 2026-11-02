@@ -383,7 +383,7 @@ public class ConfigStorageFollowupReviewTest {
         try (Fixture f = new Fixture(60_000)) {
             when(f.backend.get("key")).thenReturn(Mono.empty(), Mono.error(new IllegalStateException("L2 down")));
             assertNull(f.storage.getConfig("key").block(Duration.ofSeconds(3)));
-            f.entries.get("key").t = System.currentTimeMillis() - 60_001;
+            f.entries.get("key").lastAccessNanos = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(60_001);
             Value value = f.storage.getConfig("key", Mono.just("default")).block(Duration.ofSeconds(3));
             assertEquals("default", value.asString());
             verify(f.backend, times(2)).get("key");

@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -283,7 +284,7 @@ public class ConfigStorageMonitorTest {
             when(f.backend.get("name")).thenReturn(hasOldValue ? Mono.just("old") : Mono.empty(),
                 Mono.error(new IllegalStateException("down")));
             f.storage.getConfig("name").block();
-            f.entries.get("name").t = System.currentTimeMillis() - 60_001;
+            f.entries.get("name").lastAccessNanos = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(60_001);
             Value result = f.storage.getConfig("name").block();
             if (hasOldValue) {
                 assertEquals("old", result.asString());
@@ -321,8 +322,8 @@ public class ConfigStorageMonitorTest {
         Fixture f = fixture(60_000, new InternalEventBus());
         when(f.backend.get(anyCollection())).thenReturn(Flux.just(new AbstractMap.SimpleImmutableEntry<>("name", "value")));
         f.storage.getConfigs(Arrays.asList("name", "missing")).block();
-        long oldTime = System.currentTimeMillis() - 61_000;
-        f.entries.values().forEach(entry -> entry.t = oldTime);
+        long oldTime = System.nanoTime() - TimeUnit.SECONDS.toNanos(61);
+        f.entries.values().forEach(entry -> entry.lastAccessNanos = oldTime);
         EventBusStorageManager.ConfigStorageManagerMbean bean = bean(f);
         f.manager.scanCounts(System.currentTimeMillis());
         assertEquals(2L, bean.getStatistics().get("localEntryCount"));
@@ -335,7 +336,7 @@ public class ConfigStorageMonitorTest {
         }
         assertEquals(0, bean.inspect("not-held", 128).length);
         assertEquals(1, f.manager.cache.size());
-        f.entries.values().forEach(entry -> assertEquals(oldTime, entry.t));
+        f.entries.values().forEach(entry -> assertEquals(oldTime, entry.lastAccessNanos));
         verify(f.backend, times(1)).get(anyCollection());
     }
 

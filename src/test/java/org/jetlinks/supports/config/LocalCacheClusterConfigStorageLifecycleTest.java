@@ -243,17 +243,62 @@ public class LocalCacheClusterConfigStorageLifecycleTest {
             partial.getConfig("hot").block(LIMIT);
             partial.getConfig("negative").block(LIMIT);
             // getCachedValues is deliberately bypassed by putting the miss first.
-            long before = System.currentTimeMillis() - 30_000;
+            long before = System.nanoTime() - TimeUnit.SECONDS.toNanos(30);
             for (String key : Arrays.asList("hot", "negative")) {
-                entries.get(key).t = before;
+                entries.get(key).lastAccessNanos = before;
             }
             when(f.backend.get(anyCollection())).thenReturn(Flux.just(entry("miss", "M")));
             Values values = partial.getConfigs(Arrays.asList("miss", "hot", "negative")).block(LIMIT);
             assertEquals("H", values.getString("hot", ""));
             assertFalse(values.getAllValues().containsKey("negative"));
-            assertTrue(entries.get("hot").t > before);
-            assertTrue(entries.get("negative").t > before);
+            assertTrue(entries.get("hot").lastAccessNanos - before > 0);
+            assertTrue(entries.get("negative").lastAccessNanos - before > 0);
             verify(f.backend).get(Collections.singleton("miss"));
+        }
+    }
+
+    @Test public void idleExpiryUsesElapsedNanosAndTouchRenewsIt() {
+        try (Fixture f = new Fixture()) {
+            LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
+                "idle-clock", f.manager, f.backend, 60_000, null);
+            LocalCacheClusterConfigStorage.Cache cache = storage.new Cache("key");
+            cache.lastAccessNanos = System.nanoTime() - TimeUnit.SECONDS.toNanos(30);
+            assertFalse(cache.isExpired());
+            cache.lastAccessNanos = System.nanoTime() - TimeUnit.SECONDS.toNanos(61);
+            assertTrue(cache.isExpired());
+            long before = System.nanoTime();
+            cache.touch();
+            assertTrue(cache.lastAccessNanos - before >= 0);
+            assertFalse(cache.isExpired());
+        }
+    }
+
+    @Test public void nonPositiveIdleTtlDoesNotExpireOrTouchEntries() {
+        try (Fixture f = new Fixture()) {
+            for (long ttl : new long[]{0, -1, Long.MIN_VALUE}) {
+                LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
+                    "idle-disabled", f.manager, f.backend, ttl, null);
+                LocalCacheClusterConfigStorage.Cache cache = storage.new Cache("key");
+                long old = System.nanoTime() - TimeUnit.DAYS.toNanos(365);
+                cache.lastAccessNanos = old;
+                assertFalse(cache.isExpired());
+                cache.touch();
+                assertEquals(old, cache.lastAccessNanos);
+            }
+        }
+    }
+
+    @Test public void veryLargeIdleTtlStillRenewsWithoutConversionOverflow() {
+        try (Fixture f = new Fixture()) {
+            LocalCacheClusterConfigStorage storage = new LocalCacheClusterConfigStorage(
+                "idle-large", f.manager, f.backend, Long.MAX_VALUE, null);
+            LocalCacheClusterConfigStorage.Cache cache = storage.new Cache("key");
+            long old = System.nanoTime() - TimeUnit.SECONDS.toNanos(61);
+            cache.lastAccessNanos = old;
+            assertFalse(cache.isExpired());
+            cache.touch();
+            assertTrue(cache.lastAccessNanos - old >= TimeUnit.SECONDS.toNanos(61));
+            assertFalse(cache.isExpired());
         }
     }
 
