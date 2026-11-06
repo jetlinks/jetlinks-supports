@@ -38,6 +38,8 @@ import reactor.test.StepVerifier;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 
 public class JavaBeanCommandSupportTest {
 
@@ -65,6 +67,8 @@ public class JavaBeanCommandSupportTest {
                     org.junit.Assert.assertEquals(FunctionKind.query, MetadataSemantics.functionKind(metadata).orElseThrow());
                     org.junit.Assert.assertEquals("method", metadata.getExpand("custom").orElseThrow());
                     org.junit.Assert.assertEquals("string", metadata.getOutput().getId());
+                    org.junit.Assert.assertEquals(Map.of("primary", true, "observedAt", "sampledAt"),
+                                                  metadata.getExpand("presentation").orElseThrow());
                 }).verifyComplete();
         }
     }
@@ -77,17 +81,34 @@ public class JavaBeanCommandSupportTest {
         }
     }
 
+    @Test
+    public void nestedCommandAndMethodConflictsAreRejectedForBothAdaptations() {
+        for (Object handler : List.of(new TypedPresentationConflict(), new ReferencedPresentationConflict())) {
+            StepVerifier.create(Mono.fromSupplier(() -> new JavaBeanCommandSupport(handler)))
+                .expectError(org.hswebframework.web.exception.I18nSupportException.class).verify();
+        }
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Expands(key = "presentation")
+    public @interface CommandPresentation {
+        boolean primary();
+    }
+
     @FunctionSemantics(FunctionKind.query)
     @Expands(@Attr(key = "custom", value = "class"))
+    @CommandPresentation(primary = true)
     public static class ReadCommand extends AbstractCommand<Integer, ReadCommand> {}
 
     public static class ClassSemanticHandlers {
         @CommandHandler(id = "typed") @FunctionSemantics(FunctionKind.query)
         @Expands(@Attr(key = "custom", value = "method"))
+        @Expands(key = "presentation", value = @Attr(key = "observedAt", value = "sampledAt"))
         public String typed(ReadCommand ignored) { return "read"; }
 
         @CommandHandler(value = ReadCommand.class, id = "referenced")
         @Expands(@Attr(key = "custom", value = "method"))
+        @Expands(key = "presentation", value = @Attr(key = "observedAt", value = "sampledAt"))
         public String referenced() { return "read"; }
     }
 
@@ -99,6 +120,16 @@ public class JavaBeanCommandSupportTest {
     public static class ReferencedSemanticConflict {
         @CommandHandler(ReadCommand.class) @FunctionSemantics(FunctionKind.action)
         public String referenced() { return "write"; }
+    }
+
+    public static class TypedPresentationConflict {
+        @CommandHandler @CommandPresentation(primary = false)
+        public String typed(ReadCommand ignored) { return "read"; }
+    }
+
+    public static class ReferencedPresentationConflict {
+        @CommandHandler(ReadCommand.class) @CommandPresentation(primary = false)
+        public String referenced() { return "read"; }
     }
 
     @Test
