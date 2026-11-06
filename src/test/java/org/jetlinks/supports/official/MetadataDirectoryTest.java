@@ -7,6 +7,7 @@ import org.jetlinks.core.metadata.DeviceMetadataCodecs;
 import org.jetlinks.core.metadata.FunctionKind;
 import org.jetlinks.core.metadata.MetadataSemantics;
 import org.jetlinks.core.metadata.PropertySemanticRole;
+import org.jetlinks.core.metadata.RelationMetadata;
 import org.jetlinks.core.things.ThingMetadata;
 import org.junit.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -14,11 +15,29 @@ import org.springframework.util.StreamUtils;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.Assert.*;
 
 /** 默认设备及通用 Codec 的完整目录往返，不依赖平台或业务实现。 */
 public class MetadataDirectoryTest {
+
+    @Test
+    public void should_append_typed_relations_without_losing_lazy_directory_or_aliasing_collection() throws Exception {
+        DefaultThingsMetadata model = new DefaultThingsMetadata(JSON.parseObject(source()));
+        RelationMetadata relation = new RelationMetadata();
+        relation.setId("parent");
+        relation.setTargetType("org");
+        List<RelationMetadata> additions = new ArrayList<>(List.of(relation));
+        model.addRelations(additions);
+        additions.clear();
+        assertEquals(2, model.getRelationMetadata().size());
+        assertEquals(1, model.getRelationMetadata("space").size());
+        ThingMetadata decoded = new DefaultThingsMetadata(model.toJson());
+        assertEquals("parent", decoded.getRelationMetadata("org").get(0).getId());
+        assertEquals(model.getRelationMetadata().size(), decoded.getRelationMetadata().size());
+    }
 
     @Test
     public void should_roundtrip_full_metadata_through_default_device_and_thing_codecs() throws Exception {

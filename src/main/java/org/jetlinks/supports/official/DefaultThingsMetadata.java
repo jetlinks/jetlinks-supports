@@ -280,6 +280,19 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.propertyMetadataList = Collections.unmodifiableList(new ArrayList<>(this.properties.values()));
     }
 
+    /**
+     * 直接组合类型化关系目录；保留已延迟解析的目录，不要求调用方构造 JSON。
+     * 不加载目标模型或推断实例关系。
+     *
+     * @param metadata 本次追加的关系声明
+     * @since 1.3.3
+     */
+    public void addRelations(Collection<? extends RelationMetadata> metadata) {
+        List<RelationMetadata> additions = new ArrayList<>(getRelationMetadata());
+        additions.addAll(metadata);
+        relations = Collections.unmodifiableList(additions);
+    }
+
     public void addFunction(FunctionMetadata metadata) {
         if (this.functions == null) {
             this.functions = new LinkedHashMap<>();

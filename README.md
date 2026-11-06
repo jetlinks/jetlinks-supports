@@ -13,6 +13,7 @@ JetLinks 提供的一些默认实现以及集成
 默认 Codec 同时保留模型身份、`expands` 和可选的 `relations`、`modules` 目录。
 关系目录复用 core 的 `RelationMetadata`，JSON 为带 `targetType` 的列表；只描述另一端类型及关系含义，不加载目标实例。原关系 SPI 的 Map 接口不变。
 缺省目录为空，旧模型的 JSON 不额外输出空目录；设备和通用物模型使用同一解析实现。
+`DefaultThingsMetadata.addRelations` 接受类型化的 `RelationMetadata` 集合，追加时保留已解析或延迟解析的原目录，并复制集合；调用方无需拼装 JSON 或加载关联实例。
 与包含这些通用目录的 core 版本配套使用，语义词及未知扩展键按原值往返。
 
 物模型使用场景:
