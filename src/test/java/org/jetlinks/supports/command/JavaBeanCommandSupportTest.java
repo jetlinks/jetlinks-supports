@@ -9,7 +9,22 @@ import lombok.Setter;
 import lombok.ToString;
 import org.hibernate.validator.constraints.Range;
 import org.jetlinks.core.annotation.command.CommandHandler;
+import org.jetlinks.core.annotation.command.FunctionSemantics;
+import org.jetlinks.core.annotation.Attr;
+import org.jetlinks.core.annotation.Expands;
+import org.jetlinks.core.annotation.GraphSubject;
+import org.jetlinks.core.annotation.SemanticRole;
+import org.jetlinks.core.annotation.SemanticTypes;
+import org.jetlinks.core.annotation.ui.Presentation;
+import org.jetlinks.core.metadata.FunctionKind;
+import org.jetlinks.core.metadata.ExpandsMerge;
+import org.jetlinks.core.metadata.ExpandsMerges;
+import org.jetlinks.core.metadata.MetadataSemantics;
+import org.jetlinks.core.metadata.PropertySemanticRole;
+import org.jetlinks.core.metadata.SemanticType;
+import org.jetlinks.supports.official.JetLinksDeviceMetadataCodec;
 import org.jetlinks.core.command.AbstractConvertCommand;
+import org.jetlinks.core.command.AbstractCommand;
 import org.jetlinks.core.command.CommandSupport;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.types.ObjectType;
@@ -23,8 +38,191 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 
 public class JavaBeanCommandSupportTest {
+
+    @Test
+    public void registeredDefaultRulesApplyToBothCommandAdaptationsAndCodec() {
+        var registration = ExpandsMerges.register("registeredCommandOptions", ExpandsMerge.object(Map.of()));
+        JavaBeanCommandSupport support;
+        try {
+            support = new JavaBeanCommandSupport(new RegisteredRuleHandlers());
+            for (String id : List.of("registeredTyped", "registeredReference")) {
+                var metadata = support.getCommandMetadata(id).block();
+                org.junit.Assert.assertEquals(Map.of("method", "yes", "command", "yes"),
+                                              metadata.getExpand("registeredCommandOptions").orElseThrow());
+                var model = new org.jetlinks.supports.official.DefaultThingsMetadata("rules", "Rules");
+                model.addFunction(metadata);
+                var decoded = new JetLinksDeviceMetadataCodec().decode(model.toJson().toJSONString()).block();
+                org.junit.Assert.assertEquals(metadata.getExpands(), decoded.getFunctions().get(0).getExpands());
+            }
+        } finally {
+            registration.dispose();
+        }
+        var after = new JavaBeanCommandSupport(new RegisteredRuleHandlers());
+        org.junit.Assert.assertEquals(Map.of("method", "yes"), after.getCommandMetadata("registeredTyped")
+            .block().getExpand("registeredCommandOptions").orElseThrow());
+        org.junit.Assert.assertEquals(Map.of("method", "yes", "command", "yes"), support
+            .getCommandMetadata("registeredTyped").block().getExpand("registeredCommandOptions").orElseThrow());
+    }
+
+    @Expands(key = "registeredCommandOptions", value = @Attr(key = "command", value = "yes"))
+    public static class RegisteredRuleCommand extends AbstractCommand<String, RegisteredRuleCommand> {}
+
+    public static class RegisteredRuleHandlers {
+        @CommandHandler(id = "registeredTyped")
+        @Expands(key = "registeredCommandOptions", value = @Attr(key = "method", value = "yes"))
+        public String typed(RegisteredRuleCommand command) { return "read"; }
+
+        @CommandHandler(value = RegisteredRuleCommand.class, id = "registeredReference")
+        @Expands(key = "registeredCommandOptions", value = @Attr(key = "method", value = "yes"))
+        public String referenced() { return "read"; }
+    }
+
+    @Test
+    public void semanticHandlerMetadataRetainsClassification() {
+        JavaBeanCommandSupport support = new JavaBeanCommandSupport(new SemanticHandlers());
+        support.getCommandMetadata("read")
+            .as(StepVerifier::create)
+            .expectNextMatches(metadata -> MetadataSemantics.functionKind(metadata).orElse(null) == FunctionKind.query)
+            .verifyComplete();
+    }
+
+    @Test
+    public void conflictingHandlerClassificationIsRejected() {
+        StepVerifier.create(Mono.fromSupplier(() -> new JavaBeanCommandSupport(new ConflictingHandler())))
+            .expectError().verify();
+    }
+
+    @Test
+    public void commandClassSemanticsSurviveBothHandlerAdaptations() {
+        var support = new JavaBeanCommandSupport(new ClassSemanticHandlers());
+        for (String id : List.of("typed", "referenced")) {
+            support.getCommandMetadata(id).as(StepVerifier::create)
+                .assertNext(metadata -> {
+                    org.junit.Assert.assertEquals(FunctionKind.query, MetadataSemantics.functionKind(metadata).orElseThrow());
+                    org.junit.Assert.assertEquals("method", metadata.getExpand("custom").orElseThrow());
+                    org.junit.Assert.assertEquals("string", metadata.getOutput().getId());
+                    org.junit.Assert.assertEquals(Map.of("primary", true, "observedAt", "sampledAt"),
+                                                  metadata.getExpand("presentation").orElseThrow());
+                }).verifyComplete();
+        }
+    }
+
+    @Test
+    public void commandClassAndMethodConflictsAreRejectedForBothAdaptations() {
+        for (Object handler : List.of(new TypedSemanticConflict(), new ReferencedSemanticConflict())) {
+            StepVerifier.create(Mono.fromSupplier(() -> new JavaBeanCommandSupport(handler)))
+                .expectError(org.hswebframework.web.exception.I18nSupportException.class).verify();
+        }
+    }
+
+    @Test
+    public void nestedCommandAndMethodConflictsAreRejectedForBothAdaptations() {
+        for (Object handler : List.of(new TypedPresentationConflict(), new ReferencedPresentationConflict())) {
+            StepVerifier.create(Mono.fromSupplier(() -> new JavaBeanCommandSupport(handler)))
+                .expectError(org.hswebframework.web.exception.I18nSupportException.class).verify();
+        }
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Expands(key = "presentation")
+    public @interface CommandPresentation {
+        boolean primary();
+    }
+
+    @FunctionSemantics(FunctionKind.query)
+    @Expands(@Attr(key = "custom", value = "class"))
+    @CommandPresentation(primary = true)
+    public static class ReadCommand extends AbstractCommand<Integer, ReadCommand> {}
+
+    public static class ClassSemanticHandlers {
+        @CommandHandler(id = "typed") @FunctionSemantics(FunctionKind.query)
+        @Expands(@Attr(key = "custom", value = "method"))
+        @Expands(key = "presentation", value = @Attr(key = "observedAt", value = "sampledAt"))
+        public String typed(ReadCommand ignored) { return "read"; }
+
+        @CommandHandler(value = ReadCommand.class, id = "referenced")
+        @Expands(@Attr(key = "custom", value = "method"))
+        @Expands(key = "presentation", value = @Attr(key = "observedAt", value = "sampledAt"))
+        public String referenced() { return "read"; }
+    }
+
+    public static class TypedSemanticConflict {
+        @CommandHandler @FunctionSemantics(FunctionKind.action)
+        public String typed(ReadCommand ignored) { return "write"; }
+    }
+
+    public static class ReferencedSemanticConflict {
+        @CommandHandler(ReadCommand.class) @FunctionSemantics(FunctionKind.action)
+        public String referenced() { return "write"; }
+    }
+
+    public static class TypedPresentationConflict {
+        @CommandHandler @CommandPresentation(primary = false)
+        public String typed(ReadCommand ignored) { return "read"; }
+    }
+
+    public static class ReferencedPresentationConflict {
+        @CommandHandler(ReadCommand.class) @CommandPresentation(primary = false)
+        public String referenced() { return "read"; }
+    }
+
+    @Test
+    public void semanticAnnotationsSurviveTheOriginalMetadataCodec() {
+        var codec = JetLinksDeviceMetadataCodec.getInstance();
+        new JavaBeanCommandSupport(new SemanticHandlers()).getCommandMetadata("snapshot")
+            .map(metadata -> codec.doDecode(JSON.toJSONString(Map.of("functions", List.of(metadata.toJson())))))
+            .flatMap(codec::encode).flatMap(codec::decode)
+            .as(StepVerifier::create).assertNext(metadata -> {
+                var function = metadata.getFunctions().get(0);
+                org.junit.Assert.assertEquals(FunctionKind.query, MetadataSemantics.functionKind(function).orElse(null));
+                var output = (ObjectType) function.getOutput();
+                org.junit.Assert.assertEquals(true, output.getProperty("subject").orElseThrow().getExpands().get("graphSubject"));
+                org.junit.Assert.assertFalse(output.getProperty("subject").orElseThrow().getExpands().containsKey("semanticRole"));
+                org.junit.Assert.assertEquals("identity", output.getProperty("id").orElseThrow().getExpands().get("semanticRole"));
+                org.junit.Assert.assertEquals("futureRole", output.getProperty("custom").orElseThrow().getExpands().get("semanticRole"));
+                org.junit.Assert.assertEquals("sampled", ((Map<?, ?>) output.getProperty("value").orElseThrow()
+                    .getExpands().get("presentation")).get("observedAt"));
+                MetadataSemantics.validateOutput(output);
+            }).verifyComplete();
+    }
+
+    public static class SemanticHandlers {
+        @CommandHandler
+        @FunctionSemantics(FunctionKind.query)
+        public int read() { return 1; }
+
+        @CommandHandler
+        @FunctionSemantics(FunctionKind.query)
+        public SemanticSnapshot snapshot() { return new SemanticSnapshot(); }
+    }
+
+    @Getter
+    @Setter
+    @SemanticTypes({SemanticType.observation, SemanticType.result})
+    public static class SemanticSnapshot {
+        @Schema(title = "Record") @SemanticRole(PropertySemanticRole.identity)
+        private String id;
+        @Schema(title = "Subject") @GraphSubject
+        private String subject;
+        @Schema(title = "Sampled") @SemanticRole(PropertySemanticRole.observedAt)
+        private long sampled;
+        @Schema(title = "Value") @Presentation(primary = true, observedAt = "sampled")
+        private double value;
+        @Schema(title = "Custom") @Expands(@Attr(key = "semanticRole", value = "futureRole"))
+        private String custom;
+    }
+
+    public static class ConflictingHandler {
+        @CommandHandler(expands = @Attr(key = "functionKind", value = "action"))
+        @FunctionSemantics(FunctionKind.query)
+        public int read() { return 1; }
+    }
 
 
     public static final String TEST_COMMAND_NAME = "测试命令";
