@@ -40,6 +40,7 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -363,13 +364,14 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         }
 
         SimpleFunctionMetadata metadata = new SimpleFunctionMetadata();
+        metadata.setExpands(new HashMap<>());
         metadata.setId(id);
         metadata.setOutput(output);
         metadata.setInputs(inputs);
         metadata.setName(schema != null && StringUtils.hasText(schema.title()) ? schema.title() : name);
         metadata.setDescription(schema != null && StringUtils.hasText(schema.description()) ? schema.description() : description);
         if (expands != null) {
-            expands.forEach(metadata::expand);
+            MetadataUtils.mergeExpands(metadata.getExpands(), expands);
         }
         MethodCallCommandHandler handler = new MethodCallCommandHandler(
             this.target,
@@ -469,6 +471,7 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             metadata.setName(resolve.getName());
             metadata.setDescription(resolve.getDescription());
             metadata.setInputs(resolve.getInputs());
+            MetadataUtils.mergeExpands(metadata.getExpands(), resolve.getExpands());
         }
         //自定义了命令ID
         if (StringUtils.hasText(annotation.id())) {
@@ -483,9 +486,10 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             metadata.setDescription(LocaleUtils.resolveMessage(annotation.description(), annotation.description()));
         }
 
-        MetadataUtils
-            .parseExpands(method)
-            .forEach(metadata::expand);
+        // Preserve method precedence for ordinary options while rejecting conflicting command semantics.
+        Map<String, Object> methodExpands = MetadataUtils.parseExpands(method);
+        MetadataUtils.mergeExpands(methodExpands, metadata.getExpands());
+        metadata.setExpands(methodExpands);
 
         MetadataUtils.resolveAttrs(annotation.expands(), (key, value) ->
             MetadataUtils.mergeExpands(metadata.getExpands(), Collections.singletonMap(key, value)));

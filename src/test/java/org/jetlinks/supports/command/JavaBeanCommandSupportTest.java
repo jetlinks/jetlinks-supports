@@ -22,6 +22,7 @@ import org.jetlinks.core.metadata.PropertySemanticRole;
 import org.jetlinks.core.metadata.SemanticType;
 import org.jetlinks.supports.official.JetLinksDeviceMetadataCodec;
 import org.jetlinks.core.command.AbstractConvertCommand;
+import org.jetlinks.core.command.AbstractCommand;
 import org.jetlinks.core.command.CommandSupport;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.types.ObjectType;
@@ -53,6 +54,51 @@ public class JavaBeanCommandSupportTest {
     public void conflictingHandlerClassificationIsRejected() {
         StepVerifier.create(Mono.fromSupplier(() -> new JavaBeanCommandSupport(new ConflictingHandler())))
             .expectError().verify();
+    }
+
+    @Test
+    public void commandClassSemanticsSurviveBothHandlerAdaptations() {
+        var support = new JavaBeanCommandSupport(new ClassSemanticHandlers());
+        for (String id : List.of("typed", "referenced")) {
+            support.getCommandMetadata(id).as(StepVerifier::create)
+                .assertNext(metadata -> {
+                    org.junit.Assert.assertEquals(FunctionKind.query, MetadataSemantics.functionKind(metadata).orElseThrow());
+                    org.junit.Assert.assertEquals("method", metadata.getExpand("custom").orElseThrow());
+                    org.junit.Assert.assertEquals("string", metadata.getOutput().getId());
+                }).verifyComplete();
+        }
+    }
+
+    @Test
+    public void commandClassAndMethodConflictsAreRejectedForBothAdaptations() {
+        for (Object handler : List.of(new TypedSemanticConflict(), new ReferencedSemanticConflict())) {
+            StepVerifier.create(Mono.fromSupplier(() -> new JavaBeanCommandSupport(handler)))
+                .expectError(org.hswebframework.web.exception.I18nSupportException.class).verify();
+        }
+    }
+
+    @FunctionSemantics(FunctionKind.query)
+    @Expands(@Attr(key = "custom", value = "class"))
+    public static class ReadCommand extends AbstractCommand<Integer, ReadCommand> {}
+
+    public static class ClassSemanticHandlers {
+        @CommandHandler(id = "typed") @FunctionSemantics(FunctionKind.query)
+        @Expands(@Attr(key = "custom", value = "method"))
+        public String typed(ReadCommand ignored) { return "read"; }
+
+        @CommandHandler(value = ReadCommand.class, id = "referenced")
+        @Expands(@Attr(key = "custom", value = "method"))
+        public String referenced() { return "read"; }
+    }
+
+    public static class TypedSemanticConflict {
+        @CommandHandler @FunctionSemantics(FunctionKind.action)
+        public String typed(ReadCommand ignored) { return "write"; }
+    }
+
+    public static class ReferencedSemanticConflict {
+        @CommandHandler(ReadCommand.class) @FunctionSemantics(FunctionKind.action)
+        public String referenced() { return "write"; }
     }
 
     @Test
