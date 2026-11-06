@@ -17,6 +17,8 @@ import org.jetlinks.core.annotation.SemanticRole;
 import org.jetlinks.core.annotation.SemanticTypes;
 import org.jetlinks.core.annotation.ui.Presentation;
 import org.jetlinks.core.metadata.FunctionKind;
+import org.jetlinks.core.metadata.ExpandsMerge;
+import org.jetlinks.core.metadata.ExpandsMerges;
 import org.jetlinks.core.metadata.MetadataSemantics;
 import org.jetlinks.core.metadata.PropertySemanticRole;
 import org.jetlinks.core.metadata.SemanticType;
@@ -42,6 +44,44 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 
 public class JavaBeanCommandSupportTest {
+
+    @Test
+    public void registeredDefaultRulesApplyToBothCommandAdaptationsAndCodec() {
+        var registration = ExpandsMerges.register("registeredCommandOptions", ExpandsMerge.object(Map.of()));
+        JavaBeanCommandSupport support;
+        try {
+            support = new JavaBeanCommandSupport(new RegisteredRuleHandlers());
+            for (String id : List.of("registeredTyped", "registeredReference")) {
+                var metadata = support.getCommandMetadata(id).block();
+                org.junit.Assert.assertEquals(Map.of("method", "yes", "command", "yes"),
+                                              metadata.getExpand("registeredCommandOptions").orElseThrow());
+                var model = new org.jetlinks.supports.official.DefaultThingsMetadata("rules", "Rules");
+                model.addFunction(metadata);
+                var decoded = new JetLinksDeviceMetadataCodec().decode(model.toJson().toJSONString()).block();
+                org.junit.Assert.assertEquals(metadata.getExpands(), decoded.getFunctions().get(0).getExpands());
+            }
+        } finally {
+            registration.dispose();
+        }
+        var after = new JavaBeanCommandSupport(new RegisteredRuleHandlers());
+        org.junit.Assert.assertEquals(Map.of("method", "yes"), after.getCommandMetadata("registeredTyped")
+            .block().getExpand("registeredCommandOptions").orElseThrow());
+        org.junit.Assert.assertEquals(Map.of("method", "yes", "command", "yes"), support
+            .getCommandMetadata("registeredTyped").block().getExpand("registeredCommandOptions").orElseThrow());
+    }
+
+    @Expands(key = "registeredCommandOptions", value = @Attr(key = "command", value = "yes"))
+    public static class RegisteredRuleCommand extends AbstractCommand<String, RegisteredRuleCommand> {}
+
+    public static class RegisteredRuleHandlers {
+        @CommandHandler(id = "registeredTyped")
+        @Expands(key = "registeredCommandOptions", value = @Attr(key = "method", value = "yes"))
+        public String typed(RegisteredRuleCommand command) { return "read"; }
+
+        @CommandHandler(value = RegisteredRuleCommand.class, id = "registeredReference")
+        @Expands(key = "registeredCommandOptions", value = @Attr(key = "method", value = "yes"))
+        public String referenced() { return "read"; }
+    }
 
     @Test
     public void semanticHandlerMetadataRetainsClassification() {
