@@ -39,6 +39,7 @@ import java.lang.reflect.Parameter;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -486,7 +487,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
             .parseExpands(method)
             .forEach(metadata::expand);
 
-        MetadataUtils.resolveAttrs(annotation.expands(), metadata::expand);
+        MetadataUtils.resolveAttrs(annotation.expands(), (key, value) ->
+            MetadataUtils.mergeExpands(metadata.getExpands(), Collections.singletonMap(key, value)));
 
         if (metadata.getExpand(CommandConstant.responseFlux).isEmpty()) {
             metadata.expand(CommandConstant.responseFlux,

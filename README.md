@@ -16,6 +16,8 @@ JetLinks 提供的一些默认实现以及集成
 `DefaultThingsMetadata.addRelations` 接受类型化的 `RelationMetadata` 集合，追加时保留已解析或延迟解析的原目录，并复制集合；调用方无需拼装 JSON 或加载关联实例。
 与包含这些通用目录的 core 版本配套使用，语义词及未知扩展键按原值往返。
 
+`JavaBeanCommandSupport` 复用 core 的 `@FunctionSemantics`、`@SemanticRole`、`@SemanticTypes`、`@GraphSubject` 和 `@Presentation` 生成标准扩展。处理方法声明与原 `@CommandHandler(expands=...)` 合并时拒绝已知语义冲突；未分类的命令不推断为 query。原 codec 保留主体标记、记录 identity、未知角色以及主值对应的采样时间路径，不建立独立语义解析器。
+
 物模型使用场景:
 1. 前端通过模型定义动态展示设备运行状态或者设备操作界面
 2. 服务端可通过统一的API获取设备模型并进行相关操作,如: 在发送设备消息时进行参数校验,

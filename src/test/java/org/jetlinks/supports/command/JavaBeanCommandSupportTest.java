@@ -9,6 +9,18 @@ import lombok.Setter;
 import lombok.ToString;
 import org.hibernate.validator.constraints.Range;
 import org.jetlinks.core.annotation.command.CommandHandler;
+import org.jetlinks.core.annotation.command.FunctionSemantics;
+import org.jetlinks.core.annotation.Attr;
+import org.jetlinks.core.annotation.Expands;
+import org.jetlinks.core.annotation.GraphSubject;
+import org.jetlinks.core.annotation.SemanticRole;
+import org.jetlinks.core.annotation.SemanticTypes;
+import org.jetlinks.core.annotation.ui.Presentation;
+import org.jetlinks.core.metadata.FunctionKind;
+import org.jetlinks.core.metadata.MetadataSemantics;
+import org.jetlinks.core.metadata.PropertySemanticRole;
+import org.jetlinks.core.metadata.SemanticType;
+import org.jetlinks.supports.official.JetLinksDeviceMetadataCodec;
 import org.jetlinks.core.command.AbstractConvertCommand;
 import org.jetlinks.core.command.CommandSupport;
 import org.jetlinks.core.metadata.DataType;
@@ -23,8 +35,77 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 public class JavaBeanCommandSupportTest {
+
+    @Test
+    public void semanticHandlerMetadataRetainsClassification() {
+        JavaBeanCommandSupport support = new JavaBeanCommandSupport(new SemanticHandlers());
+        support.getCommandMetadata("read")
+            .as(StepVerifier::create)
+            .expectNextMatches(metadata -> MetadataSemantics.functionKind(metadata).orElse(null) == FunctionKind.query)
+            .verifyComplete();
+    }
+
+    @Test
+    public void conflictingHandlerClassificationIsRejected() {
+        StepVerifier.create(Mono.fromSupplier(() -> new JavaBeanCommandSupport(new ConflictingHandler())))
+            .expectError().verify();
+    }
+
+    @Test
+    public void semanticAnnotationsSurviveTheOriginalMetadataCodec() {
+        var codec = JetLinksDeviceMetadataCodec.getInstance();
+        new JavaBeanCommandSupport(new SemanticHandlers()).getCommandMetadata("snapshot")
+            .map(metadata -> codec.doDecode(JSON.toJSONString(Map.of("functions", List.of(metadata.toJson())))))
+            .flatMap(codec::encode).flatMap(codec::decode)
+            .as(StepVerifier::create).assertNext(metadata -> {
+                var function = metadata.getFunctions().get(0);
+                org.junit.Assert.assertEquals(FunctionKind.query, MetadataSemantics.functionKind(function).orElse(null));
+                var output = (ObjectType) function.getOutput();
+                org.junit.Assert.assertEquals(true, output.getProperty("subject").orElseThrow().getExpands().get("graphSubject"));
+                org.junit.Assert.assertFalse(output.getProperty("subject").orElseThrow().getExpands().containsKey("semanticRole"));
+                org.junit.Assert.assertEquals("identity", output.getProperty("id").orElseThrow().getExpands().get("semanticRole"));
+                org.junit.Assert.assertEquals("futureRole", output.getProperty("custom").orElseThrow().getExpands().get("semanticRole"));
+                org.junit.Assert.assertEquals("sampled", ((Map<?, ?>) output.getProperty("value").orElseThrow()
+                    .getExpands().get("presentation")).get("observedAt"));
+                MetadataSemantics.validateOutput(output);
+            }).verifyComplete();
+    }
+
+    public static class SemanticHandlers {
+        @CommandHandler
+        @FunctionSemantics(FunctionKind.query)
+        public int read() { return 1; }
+
+        @CommandHandler
+        @FunctionSemantics(FunctionKind.query)
+        public SemanticSnapshot snapshot() { return new SemanticSnapshot(); }
+    }
+
+    @Getter
+    @Setter
+    @SemanticTypes({SemanticType.observation, SemanticType.result})
+    public static class SemanticSnapshot {
+        @Schema(title = "Record") @SemanticRole(PropertySemanticRole.identity)
+        private String id;
+        @Schema(title = "Subject") @GraphSubject
+        private String subject;
+        @Schema(title = "Sampled") @SemanticRole(PropertySemanticRole.observedAt)
+        private long sampled;
+        @Schema(title = "Value") @Presentation(primary = true, observedAt = "sampled")
+        private double value;
+        @Schema(title = "Custom") @Expands(@Attr(key = "semanticRole", value = "futureRole"))
+        private String custom;
+    }
+
+    public static class ConflictingHandler {
+        @CommandHandler(expands = @Attr(key = "functionKind", value = "action"))
+        @FunctionSemantics(FunctionKind.query)
+        public int read() { return 1; }
+    }
 
 
     public static final String TEST_COMMAND_NAME = "测试命令";
