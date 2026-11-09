@@ -8,6 +8,10 @@ JetLinks 提供的一些默认实现以及集成
 
 ## 物模型定义
 
+声明适配器可以继承 `JavaBeanCommandSupport`，通过受保护的 `ResolvableType` 模板构造器
+及既有 `applyMetadata` 钩子取得最终命令元数据，避免另写命令 ID、参数和注解解析。
+实例执行仍使用 `copyWith(target)`；模板不保存请求身份或业务数据。
+
 物模型主要由: 属性(properties),功能(function),事件(event).组成
 
 默认 Codec 同时保留模型身份、`expands` 和可选的 `relations`、`modules` 目录。
