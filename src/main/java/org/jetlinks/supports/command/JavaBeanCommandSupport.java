@@ -170,7 +170,8 @@ public class JavaBeanCommandSupport extends AbstractCommandSupport {
         init(defaultFilter.and(filter));
     }
 
-    JavaBeanCommandSupport(ResolvableType targetType) {
+    /** 供声明适配器复用模板解析，并通过 applyMetadata 扩展元数据；不绑定执行实例。 */
+    protected JavaBeanCommandSupport(ResolvableType targetType) {
         this(targetType, method -> AnnotatedElementUtils
             .findMergedAnnotation(method, org.jetlinks.core.annotation.command.CommandHandler.class) != null);
     }
