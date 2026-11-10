@@ -6,6 +6,14 @@
 
 JetLinks 提供的一些默认实现以及集成
 
+## 设备会话读取
+
+`getDeviceSessionInfo(deviceId)` 保留现有尽力读取行为。需要区分远端失败和设备无会话时，
+使用 `getDeviceSessionSnapshot(deviceId)` 并检查 `DeviceSessionReadResult.isComplete()`。
+结果包含成功会话、本次请求节点和失败节点；失败节点不贡献部分会话，成功空会话仍计为读取成功。
+节点集合在每次订阅时从已发现的会话服务确定，包含本地节点；它不是全局事务或物理集群拓扑证明。
+实现复用原 RPC、追踪、超时及取消机制，不新增远程方法、常驻缓存或后台任务。
+
 ## 物模型定义
 
 声明适配器可以继承 `JavaBeanCommandSupport`，通过受保护的 `ResolvableType` 模板构造器

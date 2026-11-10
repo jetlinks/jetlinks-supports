@@ -8,6 +8,7 @@ import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
+import org.jetlinks.core.device.session.DeviceSessionReadResult;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
@@ -41,6 +42,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 @Slf4j
 public abstract class AbstractDeviceSessionManager implements DeviceSessionManager {
@@ -292,6 +294,29 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             return Flux.empty();
         }
         return Flux.just(DeviceSessionInfo.of(getCurrentServerId(), session));
+    }
+
+    /**
+     * Each node owns at most one session for a device. Wait for the node's terminal signal before
+     * accepting its snapshot; an error after an item or a malformed identity must not contribute data.
+     * RPC tracing/timeouts remain on the existing proxy; cancellation is propagated to the read.
+     */
+    protected final Mono<DeviceSessionReadResult> readDeviceSessionSnapshot(String serverId, String deviceId,
+                                                                           Supplier<Flux<DeviceSessionInfo>> read) {
+        return Flux.defer(read)
+            .singleOrEmpty()
+            .doOnNext(info -> {
+                if (!deviceId.equals(info.getDeviceId()) || !serverId.equals(info.getServerId())) {
+                    throw new IllegalStateException("session snapshot identity mismatch");
+                }
+            })
+            .map(List::of)
+            .defaultIfEmpty(List.of())
+            .map(infos -> new DeviceSessionReadResult(infos, Set.of(serverId), Set.of(), true))
+            .onErrorResume(error -> {
+                log.warn("session snapshot read failed on server [{}]", serverId, error);
+                return Mono.just(new DeviceSessionReadResult(List.of(), Set.of(serverId), Set.of(serverId), true));
+            });
     }
 
     @Override
