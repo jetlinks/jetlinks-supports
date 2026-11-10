@@ -22,7 +22,8 @@ public class LocalDeviceSessionManager extends AbstractDeviceSessionManager {
     @Override
     public Mono<DeviceSessionReadResult> getDeviceSessionSnapshot(String deviceId) {
         if (!StringUtils.hasText(deviceId)) return Mono.empty();
-        return readDeviceSessionSnapshot(getCurrentServerId(), deviceId, () -> getLocalDeviceSessionInfo(deviceId));
+        return readDeviceSessionSnapshot(getCurrentServerId(), () -> getLocalDeviceSessionInfo(deviceId))
+            .map(SessionRead::toResult);
     }
 
     @Override

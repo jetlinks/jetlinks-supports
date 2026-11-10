@@ -38,6 +38,28 @@ public class DeviceSessionSnapshotTest {
     }
 
     @Test
+    public void localOnlyClusterReadsOncePerSubscriptionAndNeverCallsItsOwnRpc() {
+        for (String[] servers : new String[][]{new String[0], {"one"}}) {
+            try (var fixture = new Fixture(servers)) {
+                var subscriptions = new java.util.concurrent.atomic.AtomicInteger();
+                fixture.local.set(Flux.defer(() -> {
+                    subscriptions.incrementAndGet();
+                    return Flux.just(info("one", 10));
+                }));
+                var pending = fixture.manager.getDeviceSessionSnapshot("device");
+                assertEquals(0, subscriptions.get());
+                var result = pending.block();
+                assertTrue(result.isComplete());
+                assertEquals(Set.of("one"), result.getRequestedServerIds());
+                assertEquals(1, result.getSessions().size());
+                pending.block();
+                assertEquals(2, subscriptions.get());
+                verify(fixture.remote, never()).deviceSessions(anyString());
+            }
+        }
+    }
+
+    @Test
     public void sameDeviceOnTwoNodesContributesEachConnectionOnce() {
         try (var fixture = new Fixture()) {
             fixture.local.set(Flux.just(info("one", 10, 20)));
@@ -68,10 +90,8 @@ public class DeviceSessionSnapshotTest {
     }
 
     @Test
-    public void malformedIdentityDuplicateRowsAndSynchronousFailuresAreNodeFailures() {
+    public void duplicateRowsAndSynchronousFailuresAreNodeFailures() {
         try (var fixture = new Fixture()) {
-            when(fixture.remote.deviceSessions("device")).thenReturn(Flux.just(info("other", 10)));
-            assertEquals(Set.of("two"), fixture.manager.getDeviceSessionSnapshot("device").block().getFailedServerIds());
             when(fixture.remote.deviceSessions("device")).thenReturn(Flux.just(info("two", 10), info("two", 20)));
             assertFalse(fixture.manager.getDeviceSessionSnapshot("device").block().isComplete());
             when(fixture.remote.deviceSessions("device")).thenThrow(new IllegalStateException("unavailable"));
@@ -136,10 +156,14 @@ public class DeviceSessionSnapshotTest {
         final ClusterDeviceSessionManager manager;
 
         Fixture() {
+            this("two");
+        }
+
+        Fixture(String... servers) {
             when(rpc.currentServerId()).thenReturn("one");
             when(rpc.registerService(any())).thenReturn(Disposables.single());
-            when(rpc.getServices(ClusterDeviceSessionManager.Service.class)).thenReturn(Flux.just(new RpcService<>() {
-                public String serverNodeId() { return "two"; }
+            when(rpc.getServices(ClusterDeviceSessionManager.Service.class)).thenReturn(Flux.fromArray(servers).map(server -> new RpcService<ClusterDeviceSessionManager.Service>() {
+                public String serverNodeId() { return server; }
                 public String id() { return "sessions"; }
                 public String name() { return "sessions"; }
                 public ClusterDeviceSessionManager.Service service() { return remote; }

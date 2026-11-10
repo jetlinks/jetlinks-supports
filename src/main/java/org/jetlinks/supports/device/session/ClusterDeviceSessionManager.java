@@ -32,7 +32,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -554,26 +554,33 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
         if (!StringUtils.hasText(deviceId)) return Mono.empty();
         return Mono.defer(() -> {
             // Freeze the discovered service set per subscription; a later removal must remain a failed read.
-            Map<String, ErrorHandleService> remote = new LinkedHashMap<>(services);
+            Map<String, ErrorHandleService> remote = new HashMap<>(services);
             String localServer = getCurrentServerId();
             remote.remove(localServer);
+            Mono<SessionRead> local = readDeviceSessionSnapshot(localServer, () -> getLocalDeviceSessionInfo(deviceId));
+            if (remote.isEmpty()) {
+                return local.map(SessionRead::toResult);
+            }
             Set<String> requested = new HashSet<>(remote.keySet());
             requested.add(localServer);
-            List<Mono<DeviceSessionReadResult>> reads = new ArrayList<>(remote.size() + 1);
-            reads.add(readDeviceSessionSnapshot(localServer, deviceId, () -> getLocalDeviceSessionInfo(deviceId)));
-            remote.forEach((server, service) -> reads.add(readDeviceSessionSnapshot(server, deviceId,
+            List<Mono<SessionRead>> reads = new ArrayList<>(remote.size() + 1);
+            reads.add(local);
+            remote.forEach((server, service) -> reads.add(readDeviceSessionSnapshot(server,
                 () -> service.deviceSessionsStrict(deviceId))));
             return Flux.fromIterable(reads).flatMap(read -> read).collectList()
                 .map(results -> mergeSessionReads(requested, results));
         });
     }
 
-    private static DeviceSessionReadResult mergeSessionReads(Set<String> requested, List<DeviceSessionReadResult> reads) {
-        List<DeviceSessionInfo> sessions = new ArrayList<>();
+    private static DeviceSessionReadResult mergeSessionReads(Set<String> requested, List<SessionRead> reads) {
+        List<DeviceSessionInfo> sessions = new ArrayList<>(reads.size());
         Set<String> failed = new HashSet<>();
-        for (DeviceSessionReadResult read : reads) {
-            sessions.addAll(read.getSessions());
-            failed.addAll(read.getFailedServerIds());
+        for (SessionRead read : reads) {
+            if (read.failed()) {
+                failed.add(read.serverId());
+            } else if (read.session() != null) {
+                sessions.add(read.session());
+            }
         }
         return new DeviceSessionReadResult(sessions, requested, failed, true);
     }

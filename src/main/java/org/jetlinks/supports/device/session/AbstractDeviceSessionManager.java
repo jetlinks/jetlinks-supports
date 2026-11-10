@@ -297,26 +297,30 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
     }
 
     /**
-     * Each node owns at most one session for a device. Wait for the node's terminal signal before
-     * accepting its snapshot; an error after an item or a malformed identity must not contribute data.
+     * Wait for the node's terminal signal before accepting its snapshot: an error after an item
+     * must not contribute data. The internal deviceSessions RPC already selects the device/node;
+     * do not revalidate the identity produced by getLocalDeviceSessionInfo here.
      * RPC tracing/timeouts remain on the existing proxy; cancellation is propagated to the read.
      */
-    protected final Mono<DeviceSessionReadResult> readDeviceSessionSnapshot(String serverId, String deviceId,
-                                                                           Supplier<Flux<DeviceSessionInfo>> read) {
+    protected final Mono<SessionRead> readDeviceSessionSnapshot(String serverId,
+                                                               Supplier<Flux<DeviceSessionInfo>> read) {
         return Flux.defer(read)
             .singleOrEmpty()
-            .doOnNext(info -> {
-                if (!deviceId.equals(info.getDeviceId()) || !serverId.equals(info.getServerId())) {
-                    throw new IllegalStateException("session snapshot identity mismatch");
-                }
-            })
-            .map(List::of)
-            .defaultIfEmpty(List.of())
-            .map(infos -> new DeviceSessionReadResult(infos, Set.of(serverId), Set.of(), true))
+            .map(info -> new SessionRead(serverId, info, false))
+            .defaultIfEmpty(new SessionRead(serverId, null, false))
             .onErrorResume(error -> {
-                log.warn("session snapshot read failed on server [{}]", serverId, error);
-                return Mono.just(new DeviceSessionReadResult(List.of(), Set.of(serverId), Set.of(serverId), true));
+                // Coverage exposes every failure. Keep per-read stacks at debug to avoid log amplification.
+                log.debug("session snapshot read failed on server [{}]", serverId, error);
+                return Mono.just(new SessionRead(serverId, null, true));
             });
+    }
+
+    /** Internal node outcome; create the public defensive-copy envelope only at the query boundary. */
+    protected record SessionRead(String serverId, DeviceSessionInfo session, boolean failed) {
+        DeviceSessionReadResult toResult() {
+            return new DeviceSessionReadResult(session == null ? List.of() : List.of(session),
+                Set.of(serverId), failed ? Set.of(serverId) : Set.of(), true);
+        }
     }
 
     @Override
