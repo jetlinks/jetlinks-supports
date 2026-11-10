@@ -1,8 +1,11 @@
 package org.jetlinks.supports.device.session;
 
 import org.jetlinks.core.device.session.DeviceSessionInfo;
+import org.jetlinks.core.device.session.DeviceSessionReadResult;
+import org.jetlinks.core.device.session.DeviceSessionStatistics;
 import org.jetlinks.core.server.session.DeviceSession;
 import org.jetlinks.core.utils.Reactors;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -15,6 +18,20 @@ public class LocalDeviceSessionManager extends AbstractDeviceSessionManager {
     @Override
     public String getCurrentServerId() {
         return "local";
+    }
+
+    @Override
+    public Mono<DeviceSessionReadResult> getDeviceSessionSnapshot(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) return Mono.empty();
+        return readSessionNode(getCurrentServerId(), () -> getLocalDeviceSessionInfo(deviceId))
+            .map(AbstractDeviceSessionManager::sessionResult);
+    }
+
+    @Override
+    public Mono<DeviceSessionStatistics> getDeviceSessionStatistics(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) return Mono.empty();
+        return readSessionNode(getCurrentServerId(), () -> getLocalDeviceSessionStatistics(deviceId))
+            .map(AbstractDeviceSessionManager::statisticsResult);
     }
 
     @Override

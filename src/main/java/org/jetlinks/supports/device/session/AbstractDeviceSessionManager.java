@@ -8,6 +8,8 @@ import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.DeviceOperator;
 import org.jetlinks.core.device.session.DeviceSessionEvent;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
+import org.jetlinks.core.device.session.DeviceSessionReadResult;
+import org.jetlinks.core.device.session.DeviceSessionStatistics;
 import org.jetlinks.core.device.session.DeviceSessionManager;
 import org.jetlinks.core.server.session.ChildrenDeviceSession;
 import org.jetlinks.core.server.session.DeviceSession;
@@ -15,6 +17,7 @@ import org.jetlinks.core.trace.DeviceTracer;
 import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.core.utils.json.ObjectMappers;
+import org.reactivestreams.Publisher;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
@@ -41,6 +44,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 @Slf4j
 public abstract class AbstractDeviceSessionManager implements DeviceSessionManager {
@@ -292,6 +296,46 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             return Flux.empty();
         }
         return Flux.just(DeviceSessionInfo.of(getCurrentServerId(), session));
+    }
+
+    /** Read only the requested local session; no registry scan or connection identity DTOs. */
+    protected Mono<DeviceSessionStatistics> getLocalDeviceSessionStatistics(String deviceId) {
+        return Mono.fromSupplier(() -> {
+            DeviceSessionRef ref = localSessions.get(deviceId);
+            return DeviceSessionStatistics.of(ref == null ? null : ref.loaded);
+        });
+    }
+
+    /**
+     * Wait for the terminal signal: an error after an item must not contribute data. Internal RPC
+     * already selects the device/node. Existing RPC tracing/timeouts and cancellation are retained.
+     */
+    protected final <T> Mono<SessionRead<T>> readSessionNode(String serverId,
+                                                           Supplier<? extends Publisher<T>> read) {
+        return Flux.defer(() -> Flux.from(read.get()))
+            .singleOrEmpty()
+            .map(value -> new SessionRead<>(serverId, value, false))
+            .defaultIfEmpty(new SessionRead<>(serverId, null, false))
+            .onErrorResume(error -> {
+                // Coverage exposes every failure. Keep per-read stacks at debug to avoid log amplification.
+                log.debug("session snapshot read failed on server [{}]", serverId, error);
+                return Mono.just(new SessionRead<>(serverId, null, true));
+            });
+    }
+
+    /** Internal node outcome; create the public defensive-copy envelope only at the query boundary. */
+    protected record SessionRead<T>(String serverId, T value, boolean failed) {
+    }
+
+    protected static DeviceSessionReadResult sessionResult(SessionRead<DeviceSessionInfo> read) {
+        return new DeviceSessionReadResult(read.value() == null ? List.of() : List.of(read.value()),
+            Set.of(read.serverId()), read.failed() ? Set.of(read.serverId()) : Set.of(), true);
+    }
+
+    protected static DeviceSessionStatistics statisticsResult(SessionRead<DeviceSessionStatistics> read) {
+        // Statistics RPC always returns a value, including zero sessions; an empty publisher is unknown.
+        return (read.value() == null ? new DeviceSessionStatistics() : read.value()).withCoverage(Set.of(read.serverId()),
+            read.failed() || read.value() == null ? Set.of(read.serverId()) : Set.of(), true);
     }
 
     @Override

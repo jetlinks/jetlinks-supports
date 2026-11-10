@@ -8,6 +8,8 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jctools.maps.NonBlockingHashMap;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
+import org.jetlinks.core.device.session.DeviceSessionReadResult;
+import org.jetlinks.core.device.session.DeviceSessionStatistics;
 import org.jetlinks.core.message.DeviceMessage;
 import org.jetlinks.core.message.MessageType;
 import org.jetlinks.core.rpc.RpcManager;
@@ -17,6 +19,7 @@ import org.jetlinks.core.server.session.PersistentSession;
 import org.jetlinks.core.utils.Reactors;
 import org.jetlinks.core.utils.SerializeUtils;
 import org.springframework.util.ObjectUtils;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.context.Context;
@@ -28,6 +31,11 @@ import java.io.ObjectInput;
 import java.io.ObjectOutput;
 import java.time.Duration;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.function.BiFunction;
@@ -38,7 +46,7 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
     private final RpcManager rpcManager;
 
-    private final Map<String, Service> services = new NonBlockingHashMap<>();
+    private final Map<String, ErrorHandleService> services = new NonBlockingHashMap<>();
 
     /**
      * 集群会话同步间隔
@@ -84,6 +92,10 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
 
         @ServiceMethod
         Flux<DeviceSessionInfo> deviceSessions(String deviceId);
+
+        /** Local statistics only. Missing devices return zero counts; unavailable services fail. */
+        @ServiceMethod
+        Mono<DeviceSessionStatistics> deviceStatistics(String deviceId);
 
         @ServiceMethod
         Mono<Void> sync(DeviceSessionInfo info);
@@ -212,6 +224,12 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
             return doWith(deviceId,
                           AbstractDeviceSessionManager::getLocalDeviceSessionInfo,
                           Flux.empty());
+        }
+
+        @Override
+        public Mono<DeviceSessionStatistics> deviceStatistics(String deviceId) {
+            return doWith(deviceId, AbstractDeviceSessionManager::getLocalDeviceSessionStatistics,
+                Mono.error(() -> new IllegalStateException("session manager unavailable")));
         }
 
         @Override
@@ -451,6 +469,17 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
                     return Flux.empty();
                 });
         }
+
+        // Coverage-aware reads must see the original failure; the published best-effort API keeps its fallback.
+        Flux<DeviceSessionInfo> deviceSessionsStrict(String deviceId) {
+            return service.deviceSessions(deviceId);
+        }
+
+        @Override
+        public Mono<DeviceSessionStatistics> deviceStatistics(String deviceId) {
+            // New RPC has no best-effort fallback: old/unavailable endpoints must remain failed coverage.
+            return service.deviceStatistics(deviceId);
+        }
     }
 
 
@@ -535,6 +564,72 @@ public class ClusterDeviceSessionManager extends AbstractDeviceSessionManager {
     protected Flux<DeviceSessionInfo> remoteDeviceSessions(String deviceId) {
         return getServices()
             .flatMap(service->service.deviceSessions(deviceId));
+    }
+
+    @Override
+    public Mono<DeviceSessionReadResult> getDeviceSessionSnapshot(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) return Mono.empty();
+        return Mono.defer(() -> {
+            // Freeze the discovered service set per subscription; a later removal must remain a failed read.
+            Map<String, ErrorHandleService> remote = new HashMap<>(services);
+            String localServer = getCurrentServerId();
+            remote.remove(localServer);
+            Mono<SessionRead<DeviceSessionInfo>> local = readSessionNode(localServer, () -> getLocalDeviceSessionInfo(deviceId));
+            if (remote.isEmpty()) {
+                return local.map(AbstractDeviceSessionManager::sessionResult);
+            }
+            Set<String> requested = new HashSet<>(remote.keySet());
+            requested.add(localServer);
+            List<Mono<SessionRead<DeviceSessionInfo>>> reads = new ArrayList<>(remote.size() + 1);
+            reads.add(local);
+            remote.forEach((server, service) -> reads.add(readSessionNode(server,
+                () -> service.deviceSessionsStrict(deviceId))));
+            return Flux.fromIterable(reads).flatMap(read -> read).collectList()
+                .map(results -> mergeSessionReads(requested, results));
+        });
+    }
+
+    private static DeviceSessionReadResult mergeSessionReads(Set<String> requested, List<SessionRead<DeviceSessionInfo>> reads) {
+        List<DeviceSessionInfo> sessions = new ArrayList<>(reads.size());
+        Set<String> failed = new HashSet<>();
+        for (SessionRead<DeviceSessionInfo> read : reads) {
+            if (read.failed()) {
+                failed.add(read.serverId());
+            } else if (read.value() != null) {
+                sessions.add(read.value());
+            }
+        }
+        return new DeviceSessionReadResult(sessions, requested, failed, true);
+    }
+
+    @Override
+    public Mono<DeviceSessionStatistics> getDeviceSessionStatistics(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) return Mono.empty();
+        return Mono.defer(() -> {
+            Map<String, ErrorHandleService> remote = new HashMap<>(services);
+            String localServer = getCurrentServerId();
+            remote.remove(localServer);
+            Mono<SessionRead<DeviceSessionStatistics>> local = readSessionNode(localServer,
+                () -> getLocalDeviceSessionStatistics(deviceId));
+            if (remote.isEmpty()) return local.map(AbstractDeviceSessionManager::statisticsResult);
+            Set<String> requested = new HashSet<>(remote.keySet());
+            requested.add(localServer);
+            List<Mono<SessionRead<DeviceSessionStatistics>>> reads = new ArrayList<>(remote.size() + 1);
+            reads.add(local);
+            remote.forEach((server, service) -> reads.add(readSessionNode(server, () -> service.deviceStatistics(deviceId))));
+            return Flux.fromIterable(reads).flatMap(read -> read).collectList()
+                .map(results -> mergeStatistics(requested, results));
+        });
+    }
+
+    private static DeviceSessionStatistics mergeStatistics(Set<String> requested, List<SessionRead<DeviceSessionStatistics>> reads) {
+        List<DeviceSessionStatistics> successful = new ArrayList<>(reads.size());
+        Set<String> failed = new HashSet<>();
+        for (SessionRead<DeviceSessionStatistics> read : reads) {
+            if (read.failed() || read.value() == null) failed.add(read.serverId());
+            else successful.add(read.value());
+        }
+        return DeviceSessionStatistics.aggregate(successful).withCoverage(requested, failed, true);
     }
 
     private Flux<Service> getServices() {
