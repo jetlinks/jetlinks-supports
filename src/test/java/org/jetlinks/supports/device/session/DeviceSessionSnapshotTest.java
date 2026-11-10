@@ -2,6 +2,7 @@ package org.jetlinks.supports.device.session;
 
 import org.jetlinks.core.device.session.DeviceConnectionInfo;
 import org.jetlinks.core.device.session.DeviceSessionInfo;
+import org.jetlinks.core.device.session.DeviceSessionStatistics;
 import org.jetlinks.core.rpc.RpcManager;
 import org.jetlinks.core.rpc.RpcService;
 import org.jetlinks.core.rpc.ServiceEvent;
@@ -148,11 +149,116 @@ public class DeviceSessionSnapshotTest {
         return result;
     }
 
+    @Test
+    public void statisticsRpcUsesOnlyLocalAggregatesAndMergesEveryNodeOnce() {
+        try (var fixture = new Fixture()) {
+            fixture.local.set(Flux.error(new AssertionError("must not read session details")));
+            fixture.localStatistics.set(Mono.just(statistics(10, 20)));
+            when(fixture.remote.deviceStatistics("device")).thenReturn(Mono.just(statistics(30)));
+            var local = new ClusterDeviceSessionManager.ServiceImpl(() -> fixture.manager).deviceStatistics("device").block();
+            assertEquals(30, local.getMetrics().getReadBytes());
+            verify(fixture.remote, never()).deviceStatistics(anyString());
+            var result = fixture.manager.getDeviceSessionStatistics("device").block();
+            assertTrue(result.isComplete());
+            assertEquals(Set.of("one", "two"), result.getRequestedServerIds());
+            assertEquals(2, result.getSessionCount());
+            assertEquals(Long.valueOf(3), result.getConnectionCount());
+            assertEquals(60, result.getMetrics().getReadBytes());
+            verify(fixture.remote).deviceStatistics("device");
+            verify(fixture.remote, never()).deviceSessions(anyString());
+        }
+    }
+
+    @Test
+    public void statisticsDistinguishZeroSessionsFromFailedEmptyAndOldEndpoints() {
+        try (var fixture = new Fixture()) {
+            var complete = fixture.manager.getDeviceSessionStatistics("device").block();
+            assertTrue(complete.isComplete());
+            assertEquals(0, complete.getSessionCount());
+            assertEquals(Long.valueOf(0), complete.getConnectionCount());
+            fixture.localStatistics.set(Mono.just(statistics(10)));
+            for (Mono<DeviceSessionStatistics> failure : List.of(
+                Mono.<DeviceSessionStatistics>empty(),
+                Mono.<DeviceSessionStatistics>error(new UnsupportedOperationException("old endpoint")),
+                Mono.fromDirect(Flux.concat(Flux.just(statistics(30)), Flux.error(new IllegalStateException("failed after item")))))) {
+                when(fixture.remote.deviceStatistics("device")).thenReturn(failure);
+                var result = fixture.manager.getDeviceSessionStatistics("device").block();
+                assertFalse(result.isComplete());
+                assertEquals(Set.of("two"), result.getFailedServerIds());
+                assertEquals(1, result.getSessionCount());
+                assertEquals(10, result.getMetrics().getReadBytes());
+            }
+            when(fixture.remote.deviceStatistics("device")).thenThrow(new IllegalStateException("synchronous failure"));
+            assertFalse(fixture.manager.getDeviceSessionStatistics("device").block().isComplete());
+        }
+    }
+
+    @Test
+    public void statisticsCancellationAndContextReachTheRemoteRead() {
+        try (var fixture = new Fixture()) {
+            var subscribed = new AtomicBoolean();
+            var cancelled = new AtomicBoolean();
+            when(fixture.remote.deviceStatistics("device")).thenReturn(Mono.deferContextual(context -> {
+                assertEquals("value", context.get("test"));
+                subscribed.set(true);
+                return Mono.<DeviceSessionStatistics>never().doOnCancel(() -> cancelled.set(true));
+            }));
+            var read = fixture.manager.getDeviceSessionStatistics("device")
+                .contextWrite(context -> context.put("test", "value")).subscribe();
+            try { assertTrue(subscribed.get()); }
+            finally { read.dispose(); }
+            assertTrue(cancelled.get());
+        }
+    }
+
+    @Test
+    public void statisticsServiceRemovalDoesNotRewriteInFlightCoverage() {
+        try (var fixture = new Fixture()) {
+            when(fixture.remote.deviceStatistics("device")).thenReturn(Mono.defer(() -> {
+                fixture.events.tryEmitNext(new ServiceEvent("sessions", "sessions", "two", ServiceEvent.Type.removed));
+                return Mono.error(new IllegalStateException("removed during read"));
+            }));
+            var first = fixture.manager.getDeviceSessionStatistics("device").block();
+            assertEquals(Set.of("one", "two"), first.getRequestedServerIds());
+            assertEquals(Set.of("two"), first.getFailedServerIds());
+            var second = fixture.manager.getDeviceSessionStatistics("device").block();
+            assertTrue(second.isComplete());
+            assertEquals(Set.of("one"), second.getRequestedServerIds());
+        }
+    }
+
+    @Test
+    public void localStatisticsReadPerSubscriptionWithoutSelfRpc() {
+        var local = LocalDeviceSessionManager.create();
+        assertTrue(local.getDeviceSessionStatistics("device").block().isComplete());
+        assertNull(local.getDeviceSessionStatistics(" ").block());
+        for (String[] servers : new String[][]{new String[0], {"one"}}) {
+            try (var fixture = new Fixture(servers)) {
+                var subscriptions = new java.util.concurrent.atomic.AtomicInteger();
+                fixture.localStatistics.set(Mono.fromSupplier(() -> {
+                    subscriptions.incrementAndGet();
+                    return statistics(10);
+                }));
+                var pending = fixture.manager.getDeviceSessionStatistics("device");
+                assertEquals(0, subscriptions.get());
+                assertTrue(pending.block().isComplete());
+                pending.block();
+                assertEquals(2, subscriptions.get());
+                verify(fixture.remote, never()).deviceStatistics(anyString());
+            }
+        }
+    }
+
+    private static DeviceSessionStatistics statistics(long... bytes) {
+        return DeviceSessionStatistics.fromSessions(List.of(info("node", bytes)));
+    }
+
     private static final class Fixture implements AutoCloseable {
         final RpcManager rpc = mock(RpcManager.class);
         final ClusterDeviceSessionManager.Service remote = mock(ClusterDeviceSessionManager.Service.class);
         final Sinks.Many<ServiceEvent> events = Sinks.many().unicast().onBackpressureBuffer();
         final AtomicReference<Flux<DeviceSessionInfo>> local = new AtomicReference<>(Flux.empty());
+        final AtomicReference<Mono<DeviceSessionStatistics>> localStatistics = new AtomicReference<>(Mono.fromSupplier(DeviceSessionStatistics::new));
         final ClusterDeviceSessionManager manager;
 
         Fixture() {
@@ -170,10 +276,15 @@ public class DeviceSessionSnapshotTest {
             }));
             when(rpc.listen(ClusterDeviceSessionManager.Service.class)).thenReturn(events.asFlux());
             when(remote.deviceSessions(anyString())).thenReturn(Flux.empty());
+            when(remote.deviceStatistics(anyString())).thenAnswer(ignored -> Mono.just(new DeviceSessionStatistics()));
             manager = new ClusterDeviceSessionManager(rpc) {
                 @Override
                 protected Flux<DeviceSessionInfo> getLocalDeviceSessionInfo(String deviceId) {
                     return local.get();
+                }
+                @Override
+                protected Mono<DeviceSessionStatistics> getLocalDeviceSessionStatistics(String deviceId) {
+                    return localStatistics.get();
                 }
             };
             manager.init();
