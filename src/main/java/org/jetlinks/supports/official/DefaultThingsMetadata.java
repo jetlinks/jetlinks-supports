@@ -67,8 +67,8 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.name = another.getName();
         this.description = another.getDescription();
         this.expands = another.getExpands() == null ? null : new LinkedHashMap<>(another.getExpands());
-        this.relations = another.getRelationMetadata();
-        this.modules = another.getModules();
+        this.relations = copyRelations(another.getRelationMetadata());
+        this.modules = copyModules(another.getModules());
         this.properties = another
             .getProperties()
             .stream()
@@ -96,7 +96,24 @@ public class DefaultThingsMetadata implements ThingMetadata {
     }
 
     static JSONObject toJSONObject(Object obj) {
-        return (JSONObject) JSONObject.toJSON(obj);
+        return Jsonable.requireObject(obj);
+    }
+
+    // 目录列表只读仍不足以隔离可变条目；副本和合并结果都需要独立的模型对象。
+    private static List<RelationMetadata> copyRelations(List<RelationMetadata> metadata) {
+        List<RelationMetadata> copied = new ArrayList<>(metadata.size());
+        for (RelationMetadata relation : metadata) {
+            copied.add(new RelationMetadata(relation.getTargetType(), relation));
+        }
+        return Collections.unmodifiableList(copied);
+    }
+
+    private static List<ThingMetadata> copyModules(List<ThingMetadata> metadata) {
+        List<ThingMetadata> copied = new ArrayList<>(metadata.size());
+        for (ThingMetadata module : metadata) {
+            copied.add(new DefaultThingsMetadata(module));
+        }
+        return Collections.unmodifiableList(copied);
     }
 
     /**
@@ -336,12 +353,11 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.propertyMetadataList = null;
         this.relations = null;
         this.modules = null;
-        if (json != null) {
-            this.id = json.getString("id");
-            this.name = json.getString("name");
-            this.description = json.getString("description");
-            this.expands = json.getJSONObject("expands");
-        }
+        // 根空输入表示空模型，重载时也必须清除旧身份和扩展。
+        this.id = json == null ? null : json.getString("id");
+        this.name = json == null ? null : json.getString("name");
+        this.description = json == null ? null : json.getString("description");
+        this.expands = json == null ? null : json.getJSONObject("expands");
 
     }
 
@@ -371,8 +387,8 @@ public class DefaultThingsMetadata implements ThingMetadata {
     public <T extends ThingMetadata> ThingMetadata merge(T metadata, MergeOption... options) {
         DefaultThingsMetadata deviceMetadata = copy();
         CompositeThingMetadata combined = new CompositeThingMetadata(this, metadata);
-        deviceMetadata.relations = combined.getRelationMetadata();
-        deviceMetadata.modules = combined.getModules();
+        deviceMetadata.relations = copyRelations(combined.getRelationMetadata());
+        deviceMetadata.modules = copyModules(combined.getModules());
         Map<String, Object> mergedExpands = combined.getExpands();
         deviceMetadata.expands = mergedExpands == null ? null : new LinkedHashMap<>(mergedExpands);
 
