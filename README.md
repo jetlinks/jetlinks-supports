@@ -33,7 +33,9 @@ JetLinks 提供的一些默认实现以及集成
 
 默认 Codec 将根 `null`、空串、空白及 JSON `null` 解析为空模型；对已有模型调用
 `fromJson(null)` 会清除旧身份、扩展及全部目录。目录缺失或为 `null` 表示没有定义，
-但目录中的每个条目必须是对象，空项、标量和数组条目会返回带 i18n code 的格式错误。
+目录必须为对象数组，空项、标量、数组条目及非法目录结构会返回带 i18n code 的格式错误。
+目录、功能输入和嵌套属性共用 core 的 `MetadataDefinitionParser`，以普通 `Map` / `Collection`
+解析结构，重复标识沿用第一个定义；`JSONObject` 仅在既有公开签名边界适配。
 复制和合并结果持有独立的关系声明及递归模块对象，各层扩展 Map 独立，嵌套扩展值沿用原值语义。
 core 的 `SimpleDeviceMetadata` 同样支持属性、功能、事件、标签、关系与模块的完整 JSON 往返，
 使用 core 已注册的数据类型，不依赖 supports 的实现类。

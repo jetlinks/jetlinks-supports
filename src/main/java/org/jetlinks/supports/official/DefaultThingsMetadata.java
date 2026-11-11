@@ -95,10 +95,6 @@ public class DefaultThingsMetadata implements ThingMetadata {
 
     }
 
-    static JSONObject toJSONObject(Object obj) {
-        return Jsonable.requireObject(obj);
-    }
-
     // 目录列表只读仍不足以隔离可变条目；副本和合并结果都需要独立的模型对象。
     private static List<RelationMetadata> copyRelations(List<RelationMetadata> metadata) {
         List<RelationMetadata> copied = new ArrayList<>(metadata.size());
@@ -123,15 +119,12 @@ public class DefaultThingsMetadata implements ThingMetadata {
     @Override
     public List<RelationMetadata> getRelationMetadata() {
         if (relations == null) {
-            List<RelationMetadata> parsed = new ArrayList<>();
-            List<?> definitions = jsonObject == null ? null : jsonObject.getJSONArray("relations");
-            if (definitions != null) {
-                for (Object value : definitions) {
+            List<RelationMetadata> parsed = MetadataDefinitionParser.parseList(
+                jsonObject == null ? null : jsonObject.get("relations"), definition -> {
                     RelationMetadata relation = new RelationMetadata();
-                    relation.fromJson(toJSONObject(value));
-                    parsed.add(relation);
-                }
-            }
+                    relation.fromJson(new JSONObject(definition));
+                    return relation;
+                });
             relations = Collections.unmodifiableList(parsed);
         }
         return relations;
@@ -144,12 +137,9 @@ public class DefaultThingsMetadata implements ThingMetadata {
     @Override
     public List<ThingMetadata> getModules() {
         if (modules == null) {
-            List<ThingMetadata> parsed = new ArrayList<>();
-            if (jsonObject != null && jsonObject.getJSONArray("modules") != null) {
-                for (Object value : jsonObject.getJSONArray("modules")) {
-                    parsed.add(new DefaultThingsMetadata(toJSONObject(value)));
-                }
-            }
+            List<ThingMetadata> parsed = MetadataDefinitionParser.parseList(
+                jsonObject == null ? null : jsonObject.get("modules"),
+                definition -> new DefaultThingsMetadata(new JSONObject(definition)));
             modules = Collections.unmodifiableList(parsed);
         }
         return modules;
@@ -161,18 +151,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
             return this.propertyMetadataList;
         }
         if (this.properties == null && jsonObject != null) {
-            this.properties = Optional
-                .ofNullable(jsonObject.getJSONArray("properties"))
-                .map(Collection::stream)
-                .<Map<String, PropertyMetadata>>map(stream -> stream
-                    .map(obj -> new JetLinksPropertyMetadata(toJSONObject(obj)))
-                    .collect(Collectors.toMap(
-                        PropertyMetadata::getId,
-                        Function.identity(),
-                        (a, b) -> a,
-                        LinkedHashMap::new))
-                )
-                .orElse(Collections.emptyMap());
+            this.properties = parseMetadata("properties", definition -> new JetLinksPropertyMetadata(new JSONObject(definition)));
         }
 
         if (this.propertyMetadataList == null && this.properties != null) {
@@ -185,17 +164,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
     @Override
     public List<FunctionMetadata> getFunctions() {
         if (functions == null && jsonObject != null) {
-            functions = Optional
-                .ofNullable(jsonObject.getJSONArray("functions"))
-                .map(Collection::stream)
-                .<Map<String, FunctionMetadata>>map(stream -> stream
-                    .map(obj -> new JetLinksDeviceFunctionMetadata(toJSONObject(obj)))
-                    .collect(Collectors.toMap(
-                        FunctionMetadata::getId,
-                        Function.identity(),
-                        (a, b) -> a, LinkedHashMap::new))
-                )
-                .orElse(Collections.emptyMap());
+            functions = parseMetadata("functions", definition -> new JetLinksDeviceFunctionMetadata(new JSONObject(definition)));
         }
         if (functions == null) {
             this.functions = new LinkedHashMap<>();
@@ -206,18 +175,7 @@ public class DefaultThingsMetadata implements ThingMetadata {
     @Override
     public List<PropertyMetadata> getTags() {
         if (tags == null && jsonObject != null) {
-            tags = Optional
-                .ofNullable(jsonObject.getJSONArray("tags"))
-                .map(Collection::stream)
-                .<Map<String, PropertyMetadata>>map(stream -> stream
-                    .map(obj -> new JetLinksPropertyMetadata(toJSONObject(obj)))
-                    .collect(Collectors.toMap(
-                        PropertyMetadata::getId,
-                        Function.identity(),
-                        (a, b) -> a,
-                        LinkedHashMap::new))
-                )
-                .orElse(Collections.emptyMap());
+            tags = parseMetadata("tags", definition -> new JetLinksPropertyMetadata(new JSONObject(definition)));
         }
         if (tags == null) {
             this.tags = new LinkedHashMap<>();
@@ -228,23 +186,20 @@ public class DefaultThingsMetadata implements ThingMetadata {
     @Override
     public List<EventMetadata> getEvents() {
         if (events == null && jsonObject != null) {
-            events = Optional
-                .ofNullable(jsonObject.getJSONArray("events"))
-                .map(Collection::stream)
-                .<Map<String, EventMetadata>>map(stream -> stream
-                    .map(obj -> new JetLinksEventMetadata(toJSONObject(obj)))
-                    .collect(Collectors.toMap(
-                        EventMetadata::getId,
-                        Function.identity(),
-                        (a, b) -> a,
-                        LinkedHashMap::new))
-                )
-                .orElse(Collections.emptyMap());
+            events = parseMetadata("events", definition -> new JetLinksEventMetadata(new JSONObject(definition)));
         }
         if (events == null) {
             this.events = new LinkedHashMap<>();
         }
         return new ArrayList<>(events.values());
+    }
+
+    private <M extends Metadata> Map<String, M> parseMetadata(String directory, Function<Map<String, Object>, M> decoder) {
+        Map<String, M> parsed = new LinkedHashMap<>();
+        for (M metadata : MetadataDefinitionParser.parseList(jsonObject.get(directory), decoder)) {
+            parsed.putIfAbsent(metadata.getId(), metadata);
+        }
+        return parsed;
     }
 
     @Override

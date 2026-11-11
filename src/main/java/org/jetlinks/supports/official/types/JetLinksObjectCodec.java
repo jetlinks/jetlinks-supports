@@ -4,7 +4,7 @@ import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
 import org.jetlinks.core.metadata.PropertyMetadata;
-import org.jetlinks.core.metadata.Jsonable;
+import org.jetlinks.core.metadata.MetadataDefinitionParser;
 import org.jetlinks.core.metadata.types.ObjectType;
 import org.jetlinks.supports.official.JetLinksPropertyMetadata;
 
@@ -25,14 +25,9 @@ public class JetLinksObjectCodec extends AbstractDataTypeCodec<ObjectType> {
     @Override
     public ObjectType decode(ObjectType type, Map<String, Object> config) {
         super.decode(type, config);
-        JSONObject jsonObject = new JSONObject(config);
-
-        ofNullable(jsonObject.getJSONArray("properties"))
-                .map(list -> list
-                        .stream()
-                        .map(Jsonable::requireObject)
-                        .<PropertyMetadata>map(JetLinksPropertyMetadata::new)
-                        .collect(Collectors.toList()))
+        ofNullable(config.get("properties"))
+                .map(definitions -> MetadataDefinitionParser.<PropertyMetadata>parseList(definitions,
+                    definition -> new JetLinksPropertyMetadata(new JSONObject(definition))))
                 .ifPresent(type::setProperties);
 
 
