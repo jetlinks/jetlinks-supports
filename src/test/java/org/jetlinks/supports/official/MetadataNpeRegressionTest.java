@@ -4,6 +4,7 @@ import com.alibaba.fastjson.JSONObject;
 import org.hswebframework.web.exception.I18nSupportException;
 import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.SimpleDeviceMetadata;
+import org.jetlinks.core.metadata.SimpleEventMetadata;
 import org.jetlinks.core.metadata.types.ArrayType;
 import org.jetlinks.core.metadata.types.EnumType;
 import org.jetlinks.core.utils.json.ObjectMappers;
@@ -27,6 +28,22 @@ public class MetadataNpeRegressionTest {
         var decoded = codec.doDecode(codec.doEncode(simple));
         assertEquals("unknown", decoded.getEventOrNull("e").getType().getId());
         assertEquals(decoded.toJson(), codec.doDecode(codec.doEncode(decoded)).toJson());
+    }
+
+    @Test
+    public void should_copy_an_event_whose_source_returns_a_null_type() {
+        SimpleEventMetadata source = new SimpleEventMetadata() {
+            @Override
+            public DataType getType() {
+                return null;
+            }
+        };
+        source.setId("legacy");
+        JetLinksEventMetadata copied = new JetLinksEventMetadata(source);
+        assertEquals("unknown", copied.getType().getId());
+        JetLinksEventMetadata decoded = new JetLinksEventMetadata(copied.toJson());
+        assertEquals("unknown", decoded.getType().getId());
+        assertEquals(copied.toJson(), decoded.toJson());
     }
 
     @Test
