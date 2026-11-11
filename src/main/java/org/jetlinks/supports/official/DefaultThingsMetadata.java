@@ -336,10 +336,12 @@ public class DefaultThingsMetadata implements ThingMetadata {
         this.propertyMetadataList = null;
         this.relations = null;
         this.modules = null;
-        this.id = json.getString("id");
-        this.name = json.getString("name");
-        this.description = json.getString("description");
-        this.expands = json.getJSONObject("expands");
+        if (json != null) {
+            this.id = json.getString("id");
+            this.name = json.getString("name");
+            this.description = json.getString("description");
+            this.expands = json.getJSONObject("expands");
+        }
 
     }
 
