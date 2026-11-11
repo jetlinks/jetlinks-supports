@@ -7,16 +7,17 @@ import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.DeviceMetadataType;
 import org.jetlinks.core.metadata.EventMetadata;
 import org.jetlinks.core.metadata.MergeOption;
-import org.jetlinks.core.metadata.types.DataTypes;
+import org.jetlinks.core.metadata.MetadataDefinitionParser;
 import org.jetlinks.core.metadata.types.UnknownType;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.function.Supplier;
 
 /**
+ * 默认事件声明，惰性读取载荷类型；未声明或无法识别类型时使用 UnknownType。
+ * 实例只保存模型描述或复制来源，不订阅事件或加载设备对象。
+ *
  * @author zhouhao
  * @since 1.0.0
  */
@@ -68,19 +69,15 @@ public class JetLinksEventMetadata implements EventMetadata {
     @Override
     public DataType getType() {
         if (type == null && jsonObject != null) {
-            JSONObject typeJson = jsonObject.getJSONObject("valueType");
-
-            type = Optional.ofNullable(typeJson.getString("type"))
-                           .map(DataTypes::lookup)
-                           .map(Supplier::get)
-                           .orElseGet(UnknownType::new);
-
-            type = JetLinksDataTypeCodecs.decode(type, typeJson);
+            Object definition = jsonObject.get("valueType");
+            type = JetLinksDataTypeCodecs
+                .decode(definition == null ? null : MetadataDefinitionParser.parseObject(definition))
+                .orElseGet(UnknownType::new);
         }
         if (type == null && another != null) {
             type = another.getType();
         }
-        return type;
+        return type == null ? UnknownType.GLOBAL : type;
     }
 
     @Override

@@ -40,6 +40,10 @@ JetLinks 提供的一些默认实现以及集成
 core 的 `SimpleDeviceMetadata` 同样支持属性、功能、事件、标签、关系与模块的完整 JSON 往返，
 使用 core 已注册的数据类型，不依赖 supports 的实现类。
 
+事件未声明类型时按未知类型处理，可经过默认 Codec 往返；属性未声明类型仍保留 null，
+字符串描述使用 unknown。数组元素与枚举值类型共用 `JetLinksDataTypeCodecs` 的解析规则，
+支持类型名简写和对象定义；缺失或 null 的可选定义保持空值，显式空对象或未注册类型返回 i18n 格式错误。
+
 默认 Codec 同时保留模型身份、`expands` 和可选的 `relations`、`modules` 目录。
 关系目录复用 core 的 `RelationMetadata`，JSON 为带 `targetType` 的列表；只描述另一端类型及关系含义，不加载目标实例。原关系 SPI 的 Map 接口不变。
 缺省目录为空，旧模型的 JSON 不额外输出空目录；设备和通用物模型使用同一解析实现。

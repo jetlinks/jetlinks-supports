@@ -14,6 +14,9 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
+ * 默认属性声明，惰性读取类型；未声明类型时保持 null，不加载设备状态。
+ * 字符串描述允许未完成类型声明，实际编解码由注册的类型 Codec 负责。
+ *
  * @author zhouhao
  * @since 1.0.0
  */
@@ -122,9 +125,9 @@ public class JetLinksPropertyMetadata implements PropertyMetadata {
 
     @Override
     public String toString() {
-        //  /* 测试 */ int name,
+        DataType type = getValueType();
         return String.join("",
-                           getValueType().getId(), " ", getId(), " /* ", getName(), " */ "
+                           type == null ? UnknownType.ID : type.getId(), " ", getId(), " /* ", getName(), " */ "
         );
 
     }
