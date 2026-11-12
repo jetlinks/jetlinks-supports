@@ -1,6 +1,5 @@
 package org.jetlinks.supports.official;
 
-import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
@@ -78,14 +77,8 @@ public class JetLinksDeviceFunctionMetadata implements FunctionMetadata {
     @Override
     public List<PropertyMetadata> getInputs() {
         if (inputs == null && jsonObject != null) {
-            JSONArray arr = jsonObject.getJSONArray("inputs");
-            if (arr != null) {
-                inputs = new ArrayList<>(arr.size());
-                for (int i = 0, size = arr.size(); i < size; i++) {
-                    JSONObject object = arr.getJSONObject(i);
-                    inputs.add(new JetLinksPropertyMetadata(object));
-                }
-            }
+            inputs = MetadataDefinitionParser.parseList(jsonObject.get("inputs"),
+                definition -> new JetLinksPropertyMetadata(new JSONObject(definition)));
         }
         if (inputs == null && another != null) {
             inputs = another

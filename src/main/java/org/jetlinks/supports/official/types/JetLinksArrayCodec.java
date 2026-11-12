@@ -1,17 +1,20 @@
 package org.jetlinks.supports.official.types;
 
-import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.DataType;
 import org.jetlinks.core.metadata.types.ArrayType;
-import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.supports.official.JetLinksDataTypeCodecs;
 
 import java.util.Map;
 
 import static java.util.Optional.ofNullable;
 
+/**
+ * 默认数组类型 Codec，保留可选元素类型及类型名简写。
+ * 显式元素定义通过公共类型解析入口校验，不加载业务模型或忽略未注册类型。
+ *
+ * @see JetLinksDataTypeCodecs#decodeNow(Object)
+ */
 @Getter
 @Setter
 public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
@@ -24,25 +27,8 @@ public class JetLinksArrayCodec extends AbstractDataTypeCodec<ArrayType> {
     @Override
     public ArrayType decode(ArrayType type, Map<String, Object> config) {
         super.decode(type, config);
-        JSONObject jsonObject = new JSONObject(config);
-        ofNullable(jsonObject.get("elementType"))
-            .map(v -> {
-                if (v instanceof Map) {
-                    return new JSONObject(((Map) v));
-                }
-                JSONObject eleType = new JSONObject();
-                eleType.put("type", v);
-                return eleType;
-            })
-            .map(eleType -> {
-                DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
-
-                JetLinksDataTypeCodecs
-                    .getCodec(dataType.getId())
-                    .ifPresent(codec -> codec.decode(dataType, eleType));
-
-                return dataType;
-            })
+        ofNullable(config.get("elementType"))
+            .map(JetLinksDataTypeCodecs::decodeNow)
             .ifPresent(type::setElementType);
 
         return type;

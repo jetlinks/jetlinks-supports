@@ -5,8 +5,6 @@ import com.alibaba.fastjson.JSONObject;
 import com.google.common.collect.Maps;
 import lombok.Getter;
 import lombok.Setter;
-import org.jetlinks.core.metadata.DataType;
-import org.jetlinks.core.metadata.types.DataTypes;
 import org.jetlinks.core.metadata.types.EnumType;
 import org.jetlinks.supports.official.JetLinksDataTypeCodecs;
 
@@ -15,9 +13,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static java.util.Optional.of;
 import static java.util.Optional.ofNullable;
 
+/**
+ * 默认枚举类型 Codec，读取枚举选项与可选值类型，不加载业务对象。
+ * 值类型与数组元素共用类型解析边界，保留类型名简写并拒绝显式无效定义。
+ *
+ * @see JetLinksDataTypeCodecs#decodeNow(Object)
+ */
 @Getter
 @Setter
 public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
@@ -50,25 +53,8 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
         }
 
 
-        ofNullable(jsonObject.get("valueType"))
-            .map(v -> {
-                if (v instanceof Map) {
-                    return new JSONObject(((Map<String, Object>) v));
-                }
-                // {valueType:int}
-                JSONObject eleType = new JSONObject();
-                eleType.put("type", v);
-                return eleType;
-            })
-            .map(eleType -> {
-                DataType dataType = DataTypes.lookup(eleType.getString("type")).get();
-
-                JetLinksDataTypeCodecs
-                    .getCodec(dataType.getId())
-                    .ifPresent(codec -> codec.decode(dataType, eleType));
-
-                return dataType;
-            })
+        ofNullable(config.get("valueType"))
+            .map(JetLinksDataTypeCodecs::decodeNow)
             .ifPresent(type::setValueType);
 
         type.setMulti(jsonObject.getBooleanValue("multi"));
