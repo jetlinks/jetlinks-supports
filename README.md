@@ -44,6 +44,9 @@ core 的 `SimpleDeviceMetadata` 同样支持属性、功能、事件、标签、
 字符串描述使用 unknown。数组元素与枚举值类型共用 `JetLinksDataTypeCodecs` 的解析规则，
 支持类型名简写和对象定义；缺失或 null 的可选定义保持空值，显式空对象或未注册类型返回 i18n 格式错误。
 
+枚举选项的 null、空字符串与字面量 `"null"` 描述按原值往返，不混淆三者。
+未声明 `elements` 时仍保留 `valueType`、`multi`；显式空选项列表保持为空列表，重复编解码不应改变配置内容。
+
 默认 Codec 同时保留模型身份、`expands` 和可选的 `relations`、`modules` 目录。
 关系目录复用 core 的 `RelationMetadata`，JSON 为带 `targetType` 的列表；只描述另一端类型及关系含义，不加载目标实例。原关系 SPI 的 Map 接口不变。
 缺省目录为空，旧模型的 JSON 不额外输出空目录；设备和通用物模型使用同一解析实现。

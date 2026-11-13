@@ -7,6 +7,7 @@ import org.jetlinks.core.metadata.SimpleDeviceMetadata;
 import org.jetlinks.core.metadata.SimpleEventMetadata;
 import org.jetlinks.core.metadata.types.ArrayType;
 import org.jetlinks.core.metadata.types.EnumType;
+import org.jetlinks.core.metadata.types.StringType;
 import org.jetlinks.core.utils.json.ObjectMappers;
 import org.junit.Test;
 import reactor.core.publisher.Mono;
@@ -109,14 +110,98 @@ public class MetadataNpeRegressionTest {
         assertEquals("string p /* P */ ", typed.toString());
     }
 
+    @Test
+    public void should_preserve_null_empty_and_literal_null_enum_descriptions() {
+        EnumType type = new EnumType();
+        type.setValueType(StringType.GLOBAL);
+        type.setElements(List.of(
+            EnumType.Element.of("1", "Enabled", null),
+            EnumType.Element.of("2", "Disabled", ""),
+            EnumType.Element.of("3", "Unknown", "null"),
+            EnumType.Element.of("4", "Other", "Description")));
+
+        Map<String, Object> encoded = JetLinksDataTypeCodecs
+            .encode(type)
+            .orElseThrow(AssertionError::new);
+        for (int round = 0; round < 2; round++) {
+            type = (EnumType) JetLinksDataTypeCodecs.decodeNow(encoded);
+            assertNull(type
+                .getElements()
+                .get(0)
+                .getDescription());
+            assertEquals("", type
+                .getElements()
+                .get(1)
+                .getDescription());
+            assertEquals("null", type
+                .getElements()
+                .get(2)
+                .getDescription());
+            assertEquals("Description", type
+                .getElements()
+                .get(3)
+                .getDescription());
+            Map<String, Object> restored = JetLinksDataTypeCodecs
+                .encode(type)
+                .orElseThrow(AssertionError::new);
+            assertEquals(encoded, restored);
+            encoded = restored;
+        }
+    }
+
+    @Test
+    public void should_preserve_enum_value_type_and_selection_mode_without_elements() {
+        for (boolean multi : new boolean[]{false, true}) {
+            DefaultThingsMetadata source = model("enum", Map.of("valueType", "string", "multi", multi));
+            EnumType original = (EnumType) source
+                .getPropertyOrNull("p")
+                .getValueType();
+            assertNull(original.getElements());
+            assertEquals(multi, original.isMulti());
+
+            DefaultThingsMetadata restored = new DefaultThingsMetadata(source.toJson());
+            EnumType type = (EnumType) restored
+                .getPropertyOrNull("p")
+                .getValueType();
+            assertNull(type.getElements());
+            assertNotNull(type.getValueType());
+            assertEquals("string", type
+                .getValueType()
+                .getId());
+            assertEquals(multi, type.isMulti());
+            Map<String, Object> encoded = JetLinksDataTypeCodecs
+                .encode(type)
+                .orElseThrow(AssertionError::new);
+            assertEquals(multi, encoded.get("multi"));
+            assertFalse(encoded.containsKey("elements"));
+            assertEquals(source.toJson(), restored.toJson());
+        }
+    }
+
+    @Test
+    public void should_preserve_explicit_empty_enum_elements() {
+        DefaultThingsMetadata source = model("enum", Map.of(
+            "elements", List.of(), "valueType", "string", "multi", true));
+        DefaultThingsMetadata restored = new DefaultThingsMetadata(source.toJson());
+        EnumType type = (EnumType) restored
+            .getPropertyOrNull("p")
+            .getValueType();
+
+        assertNotNull(type.getElements());
+        assertTrue(type
+            .getElements()
+            .isEmpty());
+        assertEquals("string", type
+            .getValueType()
+            .getId());
+        assertTrue(type.isMulti());
+        assertEquals(source.toJson(), restored.toJson());
+    }
+
     private static DefaultThingsMetadata model(String kind, Map<String, Object> fields) {
         JSONObject type = new JSONObject();
         type.put("type", kind);
         type.putAll(fields);
-        // 枚举编码在存在 elements 时才输出其余选项，使用真实的非空目录覆盖完整往返。
-        if ("enum".equals(kind)) {
-            type.put("elements", List.of(Map.of("value", "a", "text", "A", "description", "Description")));
-        }
         return new DefaultThingsMetadata(new JSONObject(Map.of("properties", List.of(Map.of("id", "p", "valueType", type)))));
     }
 
