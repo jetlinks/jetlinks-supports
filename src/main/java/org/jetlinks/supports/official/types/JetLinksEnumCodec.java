@@ -11,6 +11,7 @@ import org.jetlinks.supports.official.JetLinksDataTypeCodecs;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static java.util.Optional.ofNullable;
@@ -30,6 +31,9 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
         return EnumType.ID;
     }
 
+    /**
+     * 保留枚举选项原始空值，避免传输往返产生虚假的配置差异。
+     */
     @Override
     public EnumType decode(EnumType type, Map<String, Object> config) {
         super.decode(type, config);
@@ -42,7 +46,7 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
                 if (obj instanceof Map) {
                     elements.add(
                         EnumType.Element.of(
-                            Maps.transformValues((Map<String, Object>) obj, String::valueOf)
+                            Maps.transformValues((Map<String, Object>) obj, value -> Objects.toString(value, null))
                         )
                     );
                 } else if (obj instanceof EnumType.Element) {
@@ -62,18 +66,23 @@ public class JetLinksEnumCodec extends AbstractDataTypeCodec<EnumType> {
         return type;
     }
 
+    /**
+     * 值类型和多选配置不依赖选项列表，未声明选项时仍需完整编码。
+     */
     @Override
     protected void doEncode(Map<String, Object> encoded, EnumType type) {
         super.doEncode(encoded, type);
-        if (type.getElements() == null) {
-            return;
+        if (type.getElements() != null) {
+            encoded.put("elements", type
+                .getElements()
+                .stream()
+                .map(EnumType.Element::toMap)
+                .collect(Collectors.toList()));
         }
-        encoded.put("elements", type
-            .getElements()
-            .stream()
-            .map(EnumType.Element::toMap).collect(Collectors.toList()));
 
-        encoded.put("valueType", JetLinksDataTypeCodecs.encode(type.getValueType()).orElse(null));
+        encoded.put("valueType", JetLinksDataTypeCodecs
+            .encode(type.getValueType())
+            .orElse(null));
 
         encoded.put("multi", type.isMulti());
 
