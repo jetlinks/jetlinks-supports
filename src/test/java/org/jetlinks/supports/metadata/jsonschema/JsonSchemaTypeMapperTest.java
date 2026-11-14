@@ -23,6 +23,51 @@ import static org.junit.Assert.*;
  */
 public class JsonSchemaTypeMapperTest {
 
+    @Test
+    public void preservesNumericEnumCodesAndLabels() {
+        EnumType type = new EnumType();
+        type.setValueType(new LongType());
+        type.addElement(EnumType.Element.of("0", "离线"));
+        type.addElement(EnumType.Element.of("1", "在线"));
+        JsonNode schema = JsonSchemaTypeMapper.mapFromDataType(type);
+        assertEquals("integer", schema.path("type").asText());
+        assertTrue(schema.path("enum").get(0).isIntegralNumber());
+        EnumType restored = (EnumType) JsonSchemaTypeMapper.mapToDataType(schema);
+        assertTrue(restored.getValueType() instanceof LongType);
+        assertEquals("离线", restored.getElements().get(0).getText());
+        assertEquals(schema, JsonSchemaTypeMapper.mapFromDataType(restored));
+    }
+
+    @Test
+    public void preservesNestedUnitsAndSemanticDeclarations() {
+        SimplePropertyMetadata property = new SimplePropertyMetadata();
+        property.setId("bytes");
+        property.setName("流量");
+        DoubleType type = new DoubleType();
+        type.setUnit(org.jetlinks.core.metadata.unit.ValueUnits.lookup("B").orElseThrow());
+        property.setValueType(type);
+        property.expand("semanticId", "urn:example:bytes");
+        ObjectType model = new ObjectType();
+        model.addPropertyMetadata(property);
+        JsonNode schema = JsonSchemaTypeMapper.mapFromDataType(model);
+        ObjectType restored = (ObjectType) JsonSchemaTypeMapper.mapToDataType(schema);
+        PropertyMetadata field = restored.getProperty("bytes").orElseThrow();
+        assertEquals("urn:example:bytes", field.getExpands().get("semanticId"));
+        assertEquals("B", ((NumberType<?>) field.getValueType()).getUnit().getSymbol());
+        assertEquals(schema, JsonSchemaTypeMapper.mapFromDataType(restored));
+    }
+
+    @Test
+    public void preservesLongPrecision() {
+        LongType type = new LongType();
+        type.setMax(Long.MAX_VALUE);
+        JsonNode schema = JsonSchemaTypeMapper.mapFromDataType(type);
+        assertEquals(Long.MAX_VALUE, schema.path("maximum").longValue());
+        DataType restored = JsonSchemaTypeMapper.mapToDataType(schema);
+        assertTrue(restored instanceof LongType);
+        assertEquals(Long.MAX_VALUE, restored.getExpands().get("max"));
+    }
+
     private static final ObjectMapper objectMapper = ObjectMappers.JSON_MAPPER;
 
     // ==================== mapToDataType 测试 ====================
@@ -505,7 +550,7 @@ public class JsonSchemaTypeMapperTest {
         
         JsonNode schema = JsonSchemaTypeMapper.mapFromDataType(unknownType);
         
-        assertEquals("string", schema.get("type").asText());
+        assertFalse(schema.has("type"));
     }
 
     // ==================== mapFromProperty 测试 ====================

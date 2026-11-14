@@ -5,13 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.jetlinks.core.metadata.DataType;
+import org.jetlinks.core.metadata.Converter;
 import org.jetlinks.core.metadata.PropertyMetadata;
 import org.jetlinks.core.metadata.SimplePropertyMetadata;
 import org.jetlinks.core.metadata.types.*;
+import org.jetlinks.core.metadata.unit.ValueUnits;
 import org.jetlinks.core.utils.json.ObjectMappers;
 
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 
 /**
  * JetLinks DataType 与 JSON Schema 类型映射器
@@ -34,7 +37,7 @@ public class JsonSchemaTypeMapper {
 
         String type = schemaJson.get("type").asText();
 
-        return switch (type) {
+        DataType result = schemaJson.has("enum") ? mapEnumType(schemaJson) : switch (type) {
             case "string" -> mapStringType(schemaJson);
             case "number" -> mapNumberType(schemaJson);
             case "integer" -> mapIntegerType(schemaJson);
@@ -43,6 +46,61 @@ public class JsonSchemaTypeMapper {
             case "array" -> mapArrayType(schemaJson);
             default -> new UnknownType();
         };
+        readExpands(schemaJson).forEach(result::expand);
+        if (result instanceof NumberType<?> number) {
+            if (schemaJson.has("x-unit")) {
+                ValueUnits.lookup(schemaJson.get("x-unit").asText()).ifPresent(number::setUnit);
+            }
+        }
+        return result;
+    }
+
+    /** 还原字段名称和显式扩展；扩展沿用输出端的 x- 前缀，不推断语义。 */
+    public static SimplePropertyMetadata mapToProperty(JsonNode schema) {
+        SimplePropertyMetadata property = new SimplePropertyMetadata();
+        if (schema.has("$id")) property.setId(schema.get("$id").asText());
+        if (schema.has("title")) property.setName(schema.get("title").asText());
+        if (schema.has("description")) property.setDescription(schema.get("description").asText());
+        property.setValueType(mapToDataType(schema));
+        property.setExpands(readExpands(schema));
+        return property;
+    }
+
+    private static Map<String, Object> readExpands(JsonNode schema) {
+        Map<String, Object> expands = new LinkedHashMap<>();
+        schema.fields().forEachRemaining(entry -> {
+            if (entry.getKey().startsWith("x-")) {
+                expands.put(entry.getKey().substring(2), OBJECT_MAPPER.convertValue(entry.getValue(), Object.class));
+            }
+        });
+        return expands;
+    }
+
+    private static EnumType mapEnumType(JsonNode schema) {
+        EnumType result = new EnumType();
+        String type = schema.path("type").asText();
+        result.setValueType(switch (type) {
+            case "integer" -> mapIntegerType(schema);
+            case "number" -> mapNumberType(schema);
+            case "boolean" -> new BooleanType();
+            default -> new StringType();
+        });
+        int index = 0;
+        for (JsonNode value : schema.get("enum")) {
+            boolean compatible = switch (type) {
+                case "integer" -> value.isIntegralNumber();
+                case "number" -> value.isNumber();
+                case "boolean" -> value.isBoolean();
+                default -> value.isTextual();
+            };
+            if (compatible) {
+                Object code = OBJECT_MAPPER.convertValue(value, Object.class);
+                String label = schema.path("enumNames").path(index).asText(value.asText());
+                result.addElement(EnumType.Element.of(code.toString(), label));
+            }
+            index++;
+        }
+        return result;
     }
 
     public static JsonNode mapFromDataType(DataType dataType) {
@@ -102,19 +160,6 @@ public class JsonSchemaTypeMapper {
             }
         }
 
-        // 处理枚举
-        if (schemaJson.has("enum")) {
-            JsonNode enumArray = schemaJson.get("enum");
-            EnumType enumType = new EnumType();
-            for (JsonNode enumValue : enumArray) {
-                if (enumValue.isTextual()) {
-                    String value = enumValue.asText();
-                    enumType.addElement(EnumType.Element.of(value, value));
-                }
-            }
-            return enumType;
-        }
-
         StringType stringType = new StringType();
         return applyStringConstraints(stringType, schemaJson);
     }
@@ -151,6 +196,12 @@ public class JsonSchemaTypeMapper {
     }
 
     private static DataType mapIntegerType(JsonNode schemaJson) {
+        if ("int64".equals(schemaJson.path("format").asText())) {
+            LongType type = new LongType();
+            if (schemaJson.has("minimum")) type.expand("min", schemaJson.get("minimum").asLong());
+            if (schemaJson.has("maximum")) type.expand("max", schemaJson.get("maximum").asLong());
+            return type;
+        }
         IntType intType = new IntType();
 
         if (schemaJson.has("minimum")) {
@@ -192,20 +243,11 @@ public class JsonSchemaTypeMapper {
                 .fieldNames()
                 .forEachRemaining(propertyName -> {
                     JsonNode propertySchema = properties.get(propertyName);
-                    DataType propertyType = mapToDataType(propertySchema);
-
-                    SimplePropertyMetadata propertyMetadata = new SimplePropertyMetadata();
+                    SimplePropertyMetadata propertyMetadata = mapToProperty(propertySchema);
                     propertyMetadata.setId(propertyName);
-                    propertyMetadata.setValueType(propertyType);
 
-                    if (propertySchema.has("title")) {
-                        propertyMetadata.setName(propertySchema.get("title").asText());
-                    } else {
+                    if (propertyMetadata.getName() == null) {
                         propertyMetadata.setName(propertyName);
-                    }
-
-                    if (propertySchema.has("description")) {
-                        propertyMetadata.setDescription(propertySchema.get("description").asText());
                     }
 
                     objectType.addPropertyMetadata(propertyMetadata);
@@ -249,6 +291,7 @@ public class JsonSchemaTypeMapper {
             case "short":
             case "byte":
                 schema.put("type", "integer");
+                if ("long".equals(typeId)) schema.put("format", "int64");
                 mapNumberTypeToSchema(dataType, schema);
                 break;
             case "double":
@@ -285,10 +328,13 @@ public class JsonSchemaTypeMapper {
             case GeoType.ID:
                 mapGeoTypeToSchema(schema);
                 break;
+            case UnknownType.ID:
+                break;
             default:
                 schema.put("type", "string");
                 break;
         }
+        if (dataType.getExpands() != null) mapExpandsToSchema(dataType.getExpands(), schema);
     }
 
     private static void mapStringTypeToSchema(StringType stringType, ObjectNode schema) {
@@ -311,11 +357,12 @@ public class JsonSchemaTypeMapper {
 
     private static void mapNumberTypeToSchema(DataType dataType, ObjectNode schema) {
         if (dataType instanceof NumberType<?> numberType) {
+            if (numberType.getUnit() != null) schema.put("x-unit", numberType.getUnit().getId());
             if (numberType.getMax() != null) {
-                schema.put("maximum", numberType.getMax().doubleValue());
+                schema.set("maximum", OBJECT_MAPPER.valueToTree(numberType.getMax()));
             }
             if (numberType.getMin() != null) {
-                schema.put("minimum", numberType.getMin().doubleValue());
+                schema.set("minimum", OBJECT_MAPPER.valueToTree(numberType.getMin()));
             }
         }
     }
@@ -359,18 +406,24 @@ public class JsonSchemaTypeMapper {
     }
 
     private static void mapEnumTypeToSchema(EnumType enumType, ObjectNode schema) {
-        schema.put("type", "string");
+        DataType valueType = enumType.getValueType();
+        mapDataTypeToSchema(valueType == null ? new StringType() : valueType, schema);
         ArrayNode enumArray = OBJECT_MAPPER.createArrayNode();
+        ArrayNode names = OBJECT_MAPPER.createArrayNode();
 
         List<EnumType.Element> elements = enumType.getElements();
         if (elements != null) {
             for (EnumType.Element element : elements) {
-                enumArray.add(element.getValue().toString());
+                Object value = element.getValue();
+                if (valueType instanceof Converter<?> converter) value = converter.convert(value);
+                enumArray.add(OBJECT_MAPPER.valueToTree(value));
+                names.add(element.getText());
             }
         }
 
-        if (enumArray.size() > 0) {
-            schema.set("enum", enumArray);
+        schema.set("enum", enumArray);
+        if (names.size() > 0) {
+            schema.set("enumNames", names);
         }
     }
 
@@ -407,20 +460,20 @@ public class JsonSchemaTypeMapper {
     private static void mapExpandsToSchema(Map<String, Object> expands, ObjectNode schema) {
         // 映射一些通用的扩展属性
         if (expands.containsKey("default")) {
-            schema.putPOJO("default", expands.get("default"));
+            schema.set("default", OBJECT_MAPPER.valueToTree(expands.get("default")));
         }
         if (expands.containsKey("examples")) {
-            schema.putPOJO("examples", expands.get("examples"));
+            schema.set("examples", OBJECT_MAPPER.valueToTree(expands.get("examples")));
         }
         if (expands.containsKey("const")) {
-            schema.putPOJO("const", expands.get("const"));
+            schema.set("const", OBJECT_MAPPER.valueToTree(expands.get("const")));
         }
 
         // 其他扩展属性作为自定义字段
         for (Map.Entry<String, Object> entry : expands.entrySet()) {
             String key = entry.getKey();
             if (!isStandardJsonSchemaProperty(key)) {
-                schema.putPOJO("x-" + key, entry.getValue());
+                schema.set("x-" + key, OBJECT_MAPPER.valueToTree(entry.getValue()));
             }
         }
     }
