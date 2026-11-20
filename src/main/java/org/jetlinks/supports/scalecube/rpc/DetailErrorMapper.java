@@ -173,7 +173,8 @@ public class DetailErrorMapper implements ServiceClientErrorMapper, ServiceProvi
             .builder()
             .qualifier(qualifier)
             .header(HEADER_ERROR_TYPE, String.valueOf(errorType))
-            .header(ERROR_INFO, encodeInfo(throwable))
+            // 标准 RPC 异常沿原类型头恢复，不能被通用异常编码覆盖。
+            .header(ERROR_INFO, throwable instanceof ServiceException ? "" : encodeInfo(throwable))
             .header(ERROR_DETAIL, createDetail(topTrace, throwable))
             .data(new ErrorData(errorCode, errorMessage))
             .build();

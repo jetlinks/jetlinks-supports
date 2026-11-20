@@ -3,8 +3,13 @@ package org.jetlinks.supports.scalecube.rpc;
 import io.scalecube.services.api.ErrorData;
 import io.scalecube.services.api.ServiceMessage;
 import io.scalecube.services.exceptions.*;
+import org.hswebframework.web.exception.BusinessException;
+import org.hswebframework.web.i18n.MessageSourceInitializer;
 import org.junit.Before;
 import org.junit.Test;
+import org.springframework.context.support.StaticMessageSource;
+
+import java.util.Locale;
 
 import static io.scalecube.services.api.ServiceMessage.HEADER_ERROR_TYPE;
 import static org.junit.Assert.*;
@@ -16,6 +21,24 @@ public class DetailErrorMapperTest {
     @Before
     public void setUp() {
         mapper = new DetailErrorMapper();
+    }
+
+    @Test
+    public void originalReasonAndArgumentsSurviveRpcTranslation() {
+        String code = "error.rpc.field_rejected";
+        StaticMessageSource messages = new StaticMessageSource();
+        messages.addMessage(code, Locale.CHINESE, "拒绝字段 {0}");
+        messages.addMessage(code, Locale.ENGLISH, "Rejected field {0}");
+        MessageSourceInitializer.init(messages);
+        BusinessException original = new BusinessException.NoStackTrace(code, 409, "value");
+        for (int hop = 0; hop < 2; hop++) {
+            original = (BusinessException) mapper.toError(mapper.toMessage("review/read", original));
+            assertEquals(code, original.getI18nCode());
+            assertArrayEquals(new Object[]{"value"}, original.getArgs());
+            assertEquals(409, original.getStatus());
+            assertEquals("拒绝字段 value", original.getLocalizedMessage(Locale.CHINESE));
+            assertEquals("Rejected field value", original.getLocalizedMessage(Locale.ENGLISH));
+        }
     }
 
     @Test
@@ -405,6 +428,27 @@ public class DetailErrorMapperTest {
         assertNotNull(decoded);
         assertTrue(decoded.length > topTrace.length);
         assertEquals("TopClass", decoded[0].getClassName());
+    }
+
+    @Test
+    public void standardServiceErrorsKeepTheirTypeCodeAndStackAcrossHops() {
+        for (ServiceException original : new ServiceException[]{
+            new BadRequestException(1400, "bad request"),
+            new UnauthorizedException(1401, "unauthorized"),
+            new ForbiddenException(1403, "forbidden"),
+            new ServiceUnavailableException(1503, "unavailable"),
+            new InternalServiceException(1500, "internal")}) {
+            Throwable current = original;
+            for (int hop = 0; hop < 2; hop++) {
+                ServiceMessage message = mapper.toMessage("test.qualifier", current);
+                assertEquals("", message.header(DetailErrorMapper.ERROR_INFO));
+                current = mapper.toError(message);
+                assertEquals(original.getClass(), current.getClass());
+                assertEquals(original.errorCode(), ((ServiceException) current).errorCode());
+                assertEquals(original.getMessage(), current.getMessage());
+                assertArrayEquals(original.getStackTrace(), current.getStackTrace());
+            }
+        }
     }
 
     @Test
