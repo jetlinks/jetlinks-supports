@@ -8,6 +8,8 @@ JetLinks 提供的一些默认实现以及集成
 
 ## 设备会话读取
 
+真实连接在平台停机期间关闭时仍执行原集群会话检查：其他节点还有会话则保留在线状态，最后一个连接关闭才更新设备离线时间并发布注销事件。重新连接使用新连接的起点；会话恢复不能使已确认的连接中断继续沿用旧上线时间。该行为由 `AbstractDeviceSessionManager.closeSession0` 统一处理，持久化宿主的关闭流程复用同一边界。
+
 `getDeviceSessionInfo(deviceId)` 保留现有尽力读取行为。需要区分远端失败和设备无会话时，
 使用 `getDeviceSessionSnapshot(deviceId)` 并检查 `DeviceSessionReadResult.isComplete()`。
 结果包含成功会话、本次请求节点和失败节点；失败节点不贡献部分会话，成功空会话仍计为读取成功。
