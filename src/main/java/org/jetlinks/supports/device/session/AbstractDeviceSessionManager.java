@@ -433,7 +433,8 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
             session.close();
         } catch (Throwable ignore) {
         }
-        if (session.getOperator() == null || isShutdown()) {
+        // 停机期间的真实断开仍须检查其他节点并完成离线事件，不能沿用旧上线时间。
+        if (session.getOperator() == null) {
             CLOSE_WIP.decrementAndGet(this);
             return Mono.empty();
         }
@@ -681,6 +682,10 @@ public abstract class AbstractDeviceSessionManager implements DeviceSessionManag
         }
 
         private Mono<DeviceSession> handleLoaded(DeviceSession session) {
+            if (manager.isShutdown()) {
+                session.close();
+                return Mono.empty();
+            }
             if (isDisposed()) {
                 DeviceSessionRef ref = manager.localSessions.get(deviceId);
                 if (ref != null && ref != this) {
