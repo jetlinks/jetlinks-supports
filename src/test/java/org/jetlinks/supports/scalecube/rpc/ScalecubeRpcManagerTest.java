@@ -285,14 +285,14 @@ public class ScalecubeRpcManagerTest {
 
         manager3.getService(node1.alias(), "n1", Service.class)
                 .flatMapMany(service -> service.read("test"))
-                .map(buf -> buf.toString(StandardCharsets.UTF_8))
+                .map(buf -> { try { return buf.toString(StandardCharsets.UTF_8); } finally { buf.release(); } })
                 .as(StepVerifier::create)
                 .expectNext("hel", "lo")
                 .verifyComplete();
 
         manager3.getService(node1.alias(), "n1", Service.class)
-                .flatMapMany(service -> service.read0(Unpooled.wrappedBuffer("test".getBytes())))
-                .map(buf -> buf.toString(StandardCharsets.UTF_8))
+                .flatMapMany(service -> Flux.using(() -> Unpooled.wrappedBuffer("test".getBytes()), service::read0, ByteBuf::release))
+                .map(buf -> { try { return buf.toString(StandardCharsets.UTF_8); } finally { buf.release(); } })
                 .as(StepVerifier::create)
                 .expectNext("test", "hel", "lo")
                 .verifyComplete();

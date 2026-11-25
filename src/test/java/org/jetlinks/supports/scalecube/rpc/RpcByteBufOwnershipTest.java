@@ -11,6 +11,7 @@ import io.scalecube.services.methods.MethodInfo;
 import org.jetlinks.core.rpc.SerializedContext;
 import org.junit.Test;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
 import reactor.util.context.Context;
 import reactor.util.context.ContextView;
 import io.scalecube.services.ServiceCall;
@@ -29,6 +30,9 @@ public class RpcByteBufOwnershipTest {
     public interface Service {
         @ServiceMethod @RequestType(ByteBuf.class) Mono<ByteBuf> envelope(ServiceMessage request);
         @ServiceMethod Mono<ByteBuf> legacy(ByteBuf request);
+        @ServiceMethod Mono<Void> voidResponse(ByteBuf request);
+        @ServiceMethod Flux<ByteBuf> stream(ByteBuf request);
+        @ServiceMethod Flux<ByteBuf> channel(Flux<ByteBuf> request);
     }
 
     private ServiceMessage prepare(Object request, ContextView context) throws Throwable {
@@ -42,9 +46,10 @@ public class RpcByteBufOwnershipTest {
             request instanceof ServiceMessage ? ServiceMessage.class : ByteBuf.class);
         MethodInfo info = Reflect.methodsInfo(Service.class).get(api);
         Method factory = node.getClass().getDeclaredMethod("toServiceMessage0", ContextView.class, MethodInfo.class,
-            Object.class, SerializedContext.class);
+            Object.class, ByteBuf.class, SerializedContext.class);
         factory.setAccessible(true);
-        try { return (ServiceMessage) factory.invoke(node, context, info, request, serialized); }
+        ByteBuf payload = request instanceof ByteBuf buffer ? buffer : ((ServiceMessage) request).data();
+        try { return (ServiceMessage) factory.invoke(node, context, info, request, payload.retainedDuplicate(), serialized); }
         catch (InvocationTargetException error) { throw error.getCause(); }
     }
 
@@ -78,6 +83,146 @@ public class RpcByteBufOwnershipTest {
             for (Runnable task; (task = queue.poll()) != null;) task.run();
             assertNull(error.get()); assertEquals(0, owner.refCnt()); verifyNoInteractions(transport);
         } finally { scheduler.dispose(); if (owner.refCnt() > 0) owner.release(); }
+    }
+
+    @Test public void bareRequestIsRetainedBeforeSchedulingAndReleasedOnCancellation() throws Exception {
+        var queue = new java.util.concurrent.ConcurrentLinkedQueue<Runnable>();
+        Scheduler scheduler = Schedulers.fromExecutor(queue::add);
+        var transport = mock(ServiceCall.class);
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        reactor.core.Disposable subscription = null;
+        try {
+            subscription = proxy(transport, scheduler).legacy(owner).subscribe(ByteBuf::release);
+            assertEquals(2, owner.refCnt());
+            subscription.dispose(); assertEquals(1, owner.refCnt());
+            for (Runnable task; (task = queue.poll()) != null;) task.run();
+            verifyNoInteractions(transport);
+        } finally {
+            if (subscription != null) subscription.dispose();
+            scheduler.dispose(); owner.release();
+        }
+        assertEquals(0, owner.refCnt());
+    }
+
+    @Test public void bareRequestPreparationBorrowsWithoutCopyOrConsumption() throws Throwable {
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        ByteBuf lease = null;
+        try {
+            lease = prepare(owner, Context.empty()).data();
+            assertEquals(2, owner.refCnt()); assertEquals(owner.memoryAddress(), lease.memoryAddress());
+            assertEquals(123, lease.readLong()); assertEquals(0, owner.readerIndex());
+        } finally { if (lease != null) lease.release(); if (owner.refCnt() > 0) owner.release(); }
+        assertEquals(0, owner.refCnt());
+    }
+
+    @Test public void unreleasableDuplicateCannotProtectAgainstCallerCancellation() {
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        ByteBuf notOwned = Unpooled.unreleasableBuffer(owner).retainedDuplicate();
+        assertEquals(1, owner.refCnt()); owner.release();
+        try { notOwned.readLong(); fail("unreleasable duplicate must not keep the allocation alive"); }
+        catch (io.netty.util.IllegalReferenceCountException expected) { assertEquals(0, notOwned.refCnt()); }
+    }
+
+    @Test public void cancellationDoesNotInvalidateAnAttemptStillBeingEncoded() throws Exception {
+        ServiceCall transport = mock(ServiceCall.class);
+        var pending = new java.util.concurrent.atomic.AtomicReference<ByteBuf>();
+        when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+            pending.set(((ServiceMessage) call.getArgument(0)).data());
+            return Mono.<ServiceMessage>never();
+        });
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        ByteBuf lease = null;
+        try {
+            Service service = proxy(transport, Schedulers.immediate());
+            var subscription = Mono.using(() -> owner, service::legacy, ByteBuf::release).subscribe();
+            lease = pending.get(); assertNotNull(lease); assertEquals(owner.memoryAddress(), lease.memoryAddress());
+            subscription.dispose();
+            assertEquals(123, lease.readLong());
+            lease.release(); lease = null; assertEquals(0, owner.refCnt());
+        } finally { if (lease != null) lease.release(); if (owner.refCnt() > 0) owner.release(); }
+    }
+
+    @Test public void bareRequestRetryGetsIndependentAttemptIndexes() throws Exception {
+        ServiceCall transport = mock(ServiceCall.class);
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+            ByteBuf data = ((ServiceMessage) call.getArgument(0)).data();
+            assertEquals(owner.memoryAddress(), data.memoryAddress());
+            assertEquals(0, data.readerIndex()); assertEquals(123, data.readLong()); data.release();
+            return attempts.incrementAndGet() == 1 ? Mono.error(new IllegalStateException("retry")) :
+                Mono.just(ServiceMessage.builder().data(Unpooled.buffer(8).writeLong(456)).build());
+        });
+        Service service = proxy(transport, Schedulers.immediate());
+        try {
+            ByteBuf response = service.legacy(owner)
+                .contextWrite(Context.of(reactor.util.retry.Retry.class, reactor.util.retry.Retry.max(0))).retry(1).block();
+            try { assertEquals(456, response.readLong()); } finally { response.release(); }
+            assertEquals(2, attempts.get()); assertEquals(0, owner.readerIndex()); assertEquals(1, owner.refCnt());
+        } finally { owner.release(); }
+        assertEquals(0, owner.refCnt());
+    }
+
+    @Test public void synchronousContextFailureReturnsTheCallReference() throws Exception {
+        var codec = new org.jetlinks.core.rpc.ContextCodec() {
+            @Override public SerializedContext serialize(ContextView context) { throw new IllegalStateException("context"); }
+        };
+        var transport = mock(ServiceCall.class);
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        try {
+            Service service = proxy(transport, Schedulers.immediate(), codec);
+            reactor.test.StepVerifier.create(service.legacy(owner)).expectErrorMessage("context").verify();
+            assertEquals(1, owner.refCnt()); verifyNoInteractions(transport);
+        } finally { owner.release(); }
+    }
+
+    @Test public void voidResponseAndStreamAlsoBorrowWithoutConsumingTheCaller() throws Exception {
+        var transport = mock(ServiceCall.class);
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        java.util.function.Consumer<ServiceMessage> consume = message -> {
+            ByteBuf data = message.data();
+            try { assertEquals(owner.memoryAddress(), data.memoryAddress()); assertEquals(123, data.readLong()); }
+            finally { data.release(); }
+        };
+        when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class)))
+            .thenAnswer(call -> { consume.accept(call.getArgument(0)); return Mono.empty(); });
+        when(transport.requestMany(any(ServiceMessage.class), any(java.lang.reflect.Type.class)))
+            .thenAnswer(call -> { consume.accept(call.getArgument(0)); return Flux.empty(); });
+        try {
+            Service service = proxy(transport, Schedulers.immediate());
+            service.voidResponse(owner).block(); service.stream(owner).blockLast();
+            assertEquals(0, owner.readerIndex()); assertEquals(1, owner.refCnt());
+        } finally { owner.release(); }
+    }
+
+    @Test public void channelTransfersEachEmittedReferenceWithoutAnExtraRetain() throws Exception {
+        var transport = mock(ServiceCall.class);
+        ByteBuf first = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        ByteBuf second = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(456);
+        var index = new java.util.concurrent.atomic.AtomicInteger();
+        when(transport.requestBidirectional(any(org.reactivestreams.Publisher.class), any(java.lang.reflect.Type.class)))
+            .thenAnswer(call -> Flux.from((org.reactivestreams.Publisher<ServiceMessage>) call.getArgument(0)).map(message -> {
+                ByteBuf data = message.data();
+                assertSame(index.getAndIncrement() == 0 ? first : second, data);
+                data.release(); return ServiceMessage.builder().data(Unpooled.EMPTY_BUFFER).build();
+            }));
+        Service service = proxy(transport, Schedulers.immediate());
+        service.channel(Flux.just(first, second)).then().block();
+        assertEquals(2, index.get()); assertEquals(0, first.refCnt()); assertEquals(0, second.refCnt());
+    }
+
+    @Test public void channelCancellationReleasesTheQueuedUnsentBuffer() throws Exception {
+        var transport = mock(ServiceCall.class);
+        ByteBuf first = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        ByteBuf second = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(456);
+        when(transport.requestBidirectional(any(org.reactivestreams.Publisher.class), any(java.lang.reflect.Type.class)))
+            .thenAnswer(call -> Flux.from((org.reactivestreams.Publisher<ServiceMessage>) call.getArgument(0)).take(1).map(message -> {
+                ((ByteBuf) message.data()).release();
+                return ServiceMessage.builder().data(Unpooled.EMPTY_BUFFER).build();
+            }));
+        Service service = proxy(transport, Schedulers.immediate());
+        service.channel(Flux.just(first, second).publishOn(Schedulers.immediate(), 2)).then().block();
+        assertEquals(0, first.refCnt()); assertEquals(0, second.refCnt());
     }
 
     @Test public void cancellationAfterPreparationReleasesTheTransportLease() throws Exception {
@@ -191,14 +336,14 @@ public class RpcByteBufOwnershipTest {
         assertEquals(0, owner.refCnt());
     }
 
-    @Test public void legacyUnreleasableArgumentStillGetsAnOwnedCopy() throws Throwable {
+    @Test public void bareRequestLeaseSurvivesTheCallerRelease() throws Throwable {
         ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
-        ByteBuf copy = prepare(Unpooled.unreleasableBuffer(owner), Context.empty()).data();
+        ByteBuf lease = prepare(owner, Context.empty()).data();
         try {
-            assertNotEquals(owner.memoryAddress(), copy.memoryAddress());
-            owner.release(); assertEquals(123, copy.readLong());
-        } finally { copy.release(); }
-        assertEquals(0, owner.refCnt()); assertEquals(0, copy.refCnt());
+            assertEquals(owner.memoryAddress(), lease.memoryAddress());
+            owner.release(); assertEquals(123, lease.readLong());
+        } finally { lease.release(); }
+        assertEquals(0, owner.refCnt()); assertEquals(0, lease.refCnt());
     }
 
     @Test public void failedEnvelopePreparationDoesNotRetainTheBorrowedOwner() throws Throwable {
@@ -212,14 +357,14 @@ public class RpcByteBufOwnershipTest {
         } finally { owner.release(); }
     }
 
-    @Test public void failedLegacyPreparationReleasesItsCopyAsWellAsTheArgument() throws Throwable {
-        ByteBuf argument = spy(Unpooled.buffer(8).writeLong(123));
-        ByteBuf copy = Unpooled.buffer(8).writeLong(123);
-        doReturn(copy).when(argument).copy();
-        boolean rejected = false;
-        try { prepare(argument, Context.of(ScalecubeRpcManager.CONTEXT_CALL_DEPTH_KEY, 256)); }
-        catch (org.hswebframework.web.exception.I18nSupportException expected) { rejected = true; }
-        assertTrue(rejected);
-        assertEquals(0, argument.refCnt()); assertEquals(0, copy.refCnt());
+    @Test public void failedBarePreparationReleasesOnlyTheAttemptReference() throws Throwable {
+        ByteBuf argument = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        try {
+            boolean rejected = false;
+            try { prepare(argument, Context.of(ScalecubeRpcManager.CONTEXT_CALL_DEPTH_KEY, 256)); }
+            catch (org.hswebframework.web.exception.I18nSupportException expected) { rejected = true; }
+            assertTrue(rejected); assertEquals(1, argument.refCnt());
+        } finally { argument.release(); }
+        assertEquals(0, argument.refCnt());
     }
 }
