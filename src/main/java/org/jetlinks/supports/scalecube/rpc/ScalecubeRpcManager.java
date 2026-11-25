@@ -730,14 +730,20 @@ public class ScalecubeRpcManager implements RpcManager {
         return Qualifier.asString(serviceId, qualifier);
     }
 
-    private void tryRelease(ServiceMessage serviceMessage) {
-        if (ReferenceCountUtil.refCnt(serviceMessage.data()) > 0) {
+    private static void tryRelease(ServiceMessage serviceMessage) {
+        Object data = serviceMessage.data();
+        if (ReferenceCountUtil.refCnt(data) > 0) {
             try {
-                ReferenceCountUtil.release(serviceMessage.data());
+                ReferenceCountUtil.release(data);
             } catch (Throwable e) {
                 log.warn("release service message data [{}] error", serviceMessage, e);
             }
         }
+    }
+
+    private static void discardRpcData(Object value) {
+        if (value instanceof ServiceMessage message) tryRelease(message);
+        else ReferenceCountUtil.safeRelease(value);
     }
 
     @SafeVarargs
@@ -947,7 +953,6 @@ public class ScalecubeRpcManager implements RpcManager {
             try {
                 ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, request);
                 if (ownedData != null) builder.data(ownedData);
-                builder = TraceHolder.writeContextTo(ctx, builder, ServiceMessage.Builder::header);
 
                 String sctx = serialized.getContext();
                 if (sctx != null) {
@@ -996,6 +1001,14 @@ public class ScalecubeRpcManager implements RpcManager {
 
         private <T> Flux<T> withRequestMany(ByteBuf payload, Function<ByteBuf, Flux<T>> action) {
             return payload == null ? action.apply(null) : Flux.using(payload::retainedSlice, action, ByteBuf::release);
+        }
+
+        private <T> Mono<T> scheduleRequest(Mono<T> request, Scheduler scheduler) {
+            return scheduler == Schedulers.immediate() ? request : request.subscribeOn(scheduler);
+        }
+
+        private <T> Flux<T> scheduleRequest(Flux<T> request, Scheduler scheduler) {
+            return scheduler == Schedulers.immediate() ? request : request.subscribeOn(scheduler);
         }
 
 
@@ -1064,13 +1077,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                             return wrap(
                                                 ctx,
                                                 method,
-                                                toServiceMessage(ctx, methodInfo, request, payload, serialize)
-                                                    .flatMap(msg -> serviceCall.oneWay(msg))
-                                                    .doOnDiscard(
-                                                        ServiceMessage.class,
-                                                        ScalecubeRpcManager.this::tryRelease)
-                                                    .subscribeOn(requestScheduler))
-                                                .doFinally(ignore -> serialize.dispose());
+                                                scheduleRequest(toServiceMessage(ctx, methodInfo, request, payload, serialize)
+                                                    .flatMap(msg -> serviceCall.oneWay(msg)), requestScheduler))
+                                                .doFinally(ignore -> serialize.dispose())
+                                                .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData);
                                         }));
 
                                 case REQUEST_RESPONSE:
@@ -1080,13 +1090,10 @@ public class ScalecubeRpcManager implements RpcManager {
                                             return wrap(
                                                 ctx,
                                                 method,
-                                                toServiceMessage(ctx, methodInfo, request, payload, serialize)
-                                                    .flatMap(msg -> serviceCall.requestOne(msg, returnType))
-                                                    .doOnDiscard(
-                                                        ServiceMessage.class,
-                                                        ScalecubeRpcManager.this::tryRelease)
-                                                    .subscribeOn(requestScheduler))
-                                                .doFinally(ignore -> serialize.dispose());
+                                                scheduleRequest(toServiceMessage(ctx, methodInfo, request, payload, serialize)
+                                                    .flatMap(msg -> serviceCall.requestOne(msg, returnType)), requestScheduler))
+                                                .doFinally(ignore -> serialize.dispose())
+                                                .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData);
                                         }))
                                         .transform(asMono(isServiceMessage));
 
@@ -1099,11 +1106,9 @@ public class ScalecubeRpcManager implements RpcManager {
                                                 method,
                                                 toServiceMessage(ctx, methodInfo, request, payload, serialize)
                                                     .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
-                                                    .doOnDiscard(
-                                                        ServiceMessage.class,
-                                                        ScalecubeRpcManager.this::tryRelease)
                                             )
-                                                .doFinally(ignore -> serialize.dispose());
+                                                .doFinally(ignore -> serialize.dispose())
+                                                .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData);
                                         }))
                                         .transform(asFlux(isServiceMessage));
 
@@ -1116,7 +1121,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                             SerializedContext serialize = contextCodec.serialize(ctx);
                                             return wrap(ctx,
                                                         method,
-                                                        serviceCall
+                                                        scheduleRequest(serviceCall
                                                             .requestBidirectional(
                                                                 Flux
                                                                     .from((Publisher<?>) request)
@@ -1129,13 +1134,9 @@ public class ScalecubeRpcManager implements RpcManager {
                                                                             ReferenceCountUtil.safeRelease(requestBuffer(data));
                                                                             throw error;
                                                                         }
-                                                                    })
-                                                                    .doOnDiscard(ByteBuf.class, ReferenceCountUtil::safeRelease), returnType)
-                                                            .subscribeOn(requestScheduler)
-                                                            .doOnDiscard(
-                                                                ServiceMessage.class,
-                                                                ScalecubeRpcManager.this::tryRelease))
-                                                .doFinally(ignore -> serialize.dispose());
+                                                                    }), returnType), requestScheduler))
+                                                .doFinally(ignore -> serialize.dispose())
+                                                .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData);
                                         })
                                         .transform(asFlux(isServiceMessage));
 
@@ -1148,16 +1149,18 @@ public class ScalecubeRpcManager implements RpcManager {
         }
 
 
+        @SuppressWarnings("unchecked")
         private Function<Flux<ServiceMessage>, Flux<Object>> asFlux(boolean isReturnTypeServiceMessage) {
             if (isReturnTypeServiceMessage) {
-                return flux -> flux.cast(Object.class);
+                return flux -> (Flux<Object>) (Flux<?>) flux;
             }
             return flux -> flux.map(ServiceMessage::data);
         }
 
+        @SuppressWarnings("unchecked")
         private Function<Mono<ServiceMessage>, Mono<Object>> asMono(boolean isReturnTypeServiceMessage) {
             if (isReturnTypeServiceMessage) {
-                return mono -> mono.cast(Object.class);
+                return mono -> (Mono<Object>) (Mono<?>) mono;
             }
             return mono -> mono.map(ServiceMessage::data);
         }

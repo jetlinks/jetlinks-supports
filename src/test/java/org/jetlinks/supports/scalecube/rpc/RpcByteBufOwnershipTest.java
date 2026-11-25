@@ -33,6 +33,9 @@ public class RpcByteBufOwnershipTest {
         @ServiceMethod Mono<Void> voidResponse(ByteBuf request);
         @ServiceMethod Flux<ByteBuf> stream(ByteBuf request);
         @ServiceMethod Flux<ByteBuf> channel(Flux<ByteBuf> request);
+        @ServiceMethod @RequestType(ByteBuf.class) Mono<ServiceMessage> envelopeResponse(ServiceMessage request);
+        @ServiceMethod Flux<ServiceMessage> envelopeStream(ByteBuf request);
+        @ServiceMethod @RequestType(ByteBuf.class) Flux<ServiceMessage> envelopeChannel(Flux<ServiceMessage> request);
     }
 
     private ServiceMessage prepare(Object request, ContextView context) throws Throwable {
@@ -244,6 +247,69 @@ public class RpcByteBufOwnershipTest {
         Service service = proxy(transport, Schedulers.immediate());
         service.channel(Flux.just(first, second).publishOn(Schedulers.immediate(), 2)).then().block();
         assertEquals(0, first.refCnt()); assertEquals(0, second.refCnt());
+    }
+
+    @Test public void channelCancellationAlsoReleasesQueuedServiceMessages() throws Exception {
+        var transport = mock(ServiceCall.class);
+        ByteBuf first = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        ByteBuf second = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(456);
+        when(transport.requestBidirectional(any(org.reactivestreams.Publisher.class), any(java.lang.reflect.Type.class)))
+            .thenAnswer(call -> Flux.from((org.reactivestreams.Publisher<ServiceMessage>) call.getArgument(0)).take(1).map(message -> {
+                ((ByteBuf) message.data()).release();
+                return ServiceMessage.builder().build();
+            }));
+        Service service = proxy(transport, Schedulers.immediate());
+        service.envelopeChannel(Flux.just(ServiceMessage.builder().data(first).build(), ServiceMessage.builder().data(second).build())
+            .publishOn(Schedulers.immediate(), 2)).then().block();
+        assertEquals(0, first.refCnt()); assertEquals(0, second.refCnt());
+    }
+
+    @Test public void lateResponseAfterCancellationIsDiscardedForBothReturnShapes() throws Exception {
+        for (boolean envelope : new boolean[]{false, true}) {
+            var transport = mock(ServiceCall.class);
+            var pending = new java.util.concurrent.atomic.AtomicReference<reactor.core.publisher.MonoSink<ServiceMessage>>();
+            when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+                ((ByteBuf) ((ServiceMessage) call.getArgument(0)).data()).release();
+                return Mono.<ServiceMessage>create(pending::set);
+            });
+            ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+            ByteBuf reply = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(456);
+            try {
+                Service service = proxy(transport, Schedulers.immediate());
+                Mono<?> call = envelope ? service.envelopeResponse(ServiceMessage.builder().data(owner).build()) : service.legacy(owner);
+                var subscription = call.subscribe(); subscription.dispose();
+                pending.get().success(ServiceMessage.builder().data(reply).build());
+                assertEquals(0, reply.refCnt()); assertEquals(1, owner.refCnt());
+            } finally { owner.release(); if (reply.refCnt() > 0) reply.release(); }
+        }
+    }
+
+    @Test public void envelopeReturnKeepsIdentityAndDoesNotSerializeDiscardHooks() throws Exception {
+        var transport = mock(ServiceCall.class);
+        var codec = new org.jetlinks.core.rpc.ContextCodec() {
+            @Override public SerializedContext serialize(ContextView context) {
+                assertEquals("preserved", context.get("caller"));
+                assertFalse(context.hasKey("reactor.onDiscard.local"));
+                return SerializedContext.empty();
+            }
+        };
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        ByteBuf reply = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(456);
+        ServiceMessage response = ServiceMessage.builder().header("reply", "kept").data(reply).build();
+        java.util.function.Consumer<ServiceMessage> consume = message -> ((ByteBuf) message.data()).release();
+        when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+            consume.accept(call.getArgument(0)); return Mono.just(response);
+        });
+        when(transport.requestMany(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+            consume.accept(call.getArgument(0)); return Flux.just(response);
+        });
+        try {
+            Service service = proxy(transport, Schedulers.immediate(), codec);
+            assertSame(response, service.envelopeResponse(ServiceMessage.builder().data(owner).build())
+                .contextWrite(Context.of("caller", "preserved")).block());
+            assertSame(response, service.envelopeStream(owner).contextWrite(Context.of("caller", "preserved")).blockLast());
+            assertEquals("kept", response.header("reply")); assertEquals(456, reply.readLong()); assertEquals(1, owner.refCnt());
+        } finally { owner.release(); reply.release(); }
     }
 
     @Test public void cancellationAfterPreparationReleasesTheTransportLease() throws Exception {

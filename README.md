@@ -321,6 +321,8 @@ core 的 `SimpleDeviceMetadata` 同样支持属性、功能、事件、标签、
 
 请求构造保留 hide() 边界，防止 Reactor 标量 flatMap 绕过 supplier 的取消检查；构造头信息期间被取消的未发送消息由 discard 释放，不再进入 transport。
 
+每次调用只在重试外层安装一次局部 discard 钩子，同时处理 ServiceMessage 载荷及通道中的原始引用计数对象；钩子在 Context 序列化之后进入订阅链，避免把本地清理状态带入传输上下文。即时调度直接订阅，实际异步调度仍保留 subscribeOn。必要的资源作用域与取消检查不能按操作符数量删除。
+
 请求通道按 Reactive Streams 的 onNext 转交每条消息的一份引用；源必须逐次订阅/重试提供新引用，若仍需保留原 buffer，应发送 retainedDuplicate。RPC 不再复制首帧，后续帧也不重复 retain；丢弃或构造失败时消费未发送引用。
 
 迁移：旧裸 ByteBuf 参数由 RPC 复制并消费入参，现改为借用。原直接交出入参且不释放的调用方应补齐 using 生命周期；旧 unreleasable 包装应删除。设备操作 Broker 已同步迁移，平台 EventBus/结构化订阅调用方须与本 supports 制品配套升级，不能单独替换 supports。
