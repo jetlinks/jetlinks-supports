@@ -115,6 +115,27 @@ public class RpcByteBufOwnershipTest {
         assertEquals(0, owner.refCnt());
     }
 
+    @Test public void callSnapshotsOnlyTheReadableRegionWithoutCopyingIt() throws Exception {
+        var transport = mock(ServiceCall.class);
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(64)
+            .writeInt(999).writeLong(123).writeLong(456).writeInt(888).setIndex(4, 20);
+        when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+            ByteBuf data = ((ServiceMessage) call.getArgument(0)).data();
+            try {
+                assertEquals(0, data.readerIndex()); assertEquals(16, data.writerIndex()); assertEquals(16, data.capacity());
+                assertEquals(owner.memoryAddress() + 4, data.memoryAddress());
+                assertEquals(123, data.readLong()); assertEquals(456, data.readLong());
+                assertEquals(4, owner.readerIndex()); assertEquals(20, owner.writerIndex());
+            } finally { data.release(); }
+            return Mono.just(ServiceMessage.builder().data(Unpooled.EMPTY_BUFFER).build());
+        });
+        try {
+            proxy(transport, Schedulers.immediate()).legacy(owner).block().release();
+            assertEquals(1, owner.refCnt());
+        } finally { owner.release(); }
+        assertEquals(0, owner.refCnt());
+    }
+
     @Test public void unreleasableDuplicateCannotProtectAgainstCallerCancellation() {
         ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
         ByteBuf notOwned = Unpooled.unreleasableBuffer(owner).retainedDuplicate();

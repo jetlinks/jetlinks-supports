@@ -991,11 +991,11 @@ public class ScalecubeRpcManager implements RpcManager {
 
         private <T> Mono<T> withRequest(ByteBuf payload, Function<ByteBuf, Mono<T>> action) {
             // Own a call reference before Context serialization or request scheduling; attempts borrow from it.
-            return payload == null ? action.apply(null) : Mono.using(payload::retainedDuplicate, action, ByteBuf::release);
+            return payload == null ? action.apply(null) : Mono.using(payload::retainedSlice, action, ByteBuf::release);
         }
 
         private <T> Flux<T> withRequestMany(ByteBuf payload, Function<ByteBuf, Flux<T>> action) {
-            return payload == null ? action.apply(null) : Flux.using(payload::retainedDuplicate, action, ByteBuf::release);
+            return payload == null ? action.apply(null) : Flux.using(payload::retainedSlice, action, ByteBuf::release);
         }
 
 
