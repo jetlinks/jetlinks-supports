@@ -16,6 +16,7 @@ import io.scalecube.services.exceptions.MessageCodecException;
 import io.scalecube.services.exceptions.ServiceUnavailableException;
 import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodRegistry;
+import io.scalecube.services.routing.Router;
 import io.scalecube.services.transport.api.DataCodec;
 import io.scalecube.services.transport.api.ServerTransport;
 import io.scalecube.services.transport.api.ServiceMessageDataDecoder;
@@ -730,14 +731,20 @@ public class ScalecubeRpcManager implements RpcManager {
         return Qualifier.asString(serviceId, qualifier);
     }
 
-    private void tryRelease(ServiceMessage serviceMessage) {
-        if (ReferenceCountUtil.refCnt(serviceMessage.data()) > 0) {
+    private static void tryRelease(ServiceMessage serviceMessage) {
+        Object data = serviceMessage.data();
+        if (ReferenceCountUtil.refCnt(data) > 0) {
             try {
-                ReferenceCountUtil.release(serviceMessage.data());
+                ReferenceCountUtil.release(data);
             } catch (Throwable e) {
                 log.warn("release service message data [{}] error", serviceMessage, e);
             }
         }
+    }
+
+    private static void discardRpcData(Object value) {
+        if (value instanceof ServiceMessage message) tryRelease(message);
+        else ReferenceCountUtil.safeRelease(value);
     }
 
     @SafeVarargs
@@ -836,28 +843,33 @@ public class ScalecubeRpcManager implements RpcManager {
         private <I> RpcServiceCall<I> createApiCall(String serviceId, Class<I> clazz) {
             String name = Reflect.serviceName(clazz);
 
-            ServiceCall call = serviceCall
-                .router((serviceRegistry, request) -> {
-                    ClusterNode node = ScalecubeRpcManager.this.serverServiceRef.get(this.id);
-                    Set<ServiceReferenceInfo> refs = node == null ? null
-                        : node.serviceReferencesByQualifier.get(request.qualifier());
-                    if (refs == null) {
-                        tryRelease(request);
-                        return Optional.empty();
-                    }
-                    for (ServiceReferenceInfo ref : refs) {
-                        return Optional.of(ref.reference);
-                    }
-                    tryRelease(request);
+            Router router = (serviceRegistry, request) -> {
+                ClusterNode node = ScalecubeRpcManager.this.serverServiceRef.get(this.id);
+                Set<ServiceReferenceInfo> refs = node == null ? null
+                    : node.serviceReferencesByQualifier.get(request.qualifier());
+                if (refs == null) {
                     return Optional.empty();
-                })
+                }
+                for (ServiceReferenceInfo ref : refs) {
+                    return Optional.of(ref.reference);
+                }
+                return Optional.empty();
+            };
+            ServiceCall channelCall = serviceCall
+                .router(router)
                 .serviceRegistry(NoneServiceRegistry.INSTANCE)
                 .errorMapper(errorMapper);
+            ServiceCall call = channelCall.router((registry, request) -> {
+                Optional<ServiceReference> selected = router.route(registry, request);
+                // switchOnFirst owns channel frames; single requests have no upstream queue to discard them.
+                if (selected.isEmpty()) tryRelease(request);
+                return selected;
+            });
 
             return new RpcServiceCall<>(this.id,
                                         serviceId,
                                         name,
-                                        api(call, serviceId, clazz),
+                                        api(call, channelCall, serviceId, clazz),
                                         serviceId + "/" + name);
         }
 
@@ -932,50 +944,85 @@ public class ScalecubeRpcManager implements RpcManager {
         private Mono<ServiceMessage> toServiceMessage(ContextView ctx,
                                                       MethodInfo methodInfo,
                                                       Object request,
+                                                      ByteBuf payload,
                                                       SerializedContext serialized) {
-            return Mono.fromSupplier(() -> toServiceMessage0(ctx, methodInfo, request, serialized));
+            // Scalar flatMap bypasses supplier cancellation/discard while headers are being prepared.
+            return Mono.fromSupplier(() -> toServiceMessage0(ctx, methodInfo, request,
+                payload == null ? null : payload.retainedDuplicate(), serialized)).hide();
         }
 
         private ServiceMessage toServiceMessage0(ContextView ctx,
                                                  MethodInfo methodInfo,
                                                  Object request,
+                                                 ByteBuf ownedData,
                                                  SerializedContext serialized) {
-            if (request instanceof ByteBuf buf) {
-                // copy 新的 bytebuf,避免上游cancel时buf被提前release.
-                request = buf.copy();
-                ReferenceCountUtil.safeRelease(buf);
-            }
-            ServiceMessage.Builder builder = TraceHolder
-                .writeContextTo(ctx, toServiceMessageBuilder(methodInfo, request), (ServiceMessage.Builder::header));
+            try {
+                ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, request);
+                if (ownedData != null) builder.data(ownedData);
 
-            String sctx = serialized.getContext();
-            if (sctx != null) {
-                builder = builder.header(HEADER_CONTEXT, sctx);
-            }
-            if (maxCallDepth > 0) {
-                //调用深度
-                Object depth = ctx.<Object>getOrDefault(CONTEXT_CALL_DEPTH_KEY, 0);
-                if (depth instanceof String str) {
-                    depth = Integer.parseInt(str) + 1;
-                    if ((int) depth > maxCallDepth) {
-                        throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
-                            .withSource(methodInfo.qualifier());
-                    }
-                    builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(depth));
-                } else if (depth instanceof Number number) {
-                    int _depth = number.intValue() + 1;
-                    if (_depth > maxCallDepth) {
-                        throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
-                            .withSource(methodInfo.qualifier());
-                    }
-                    builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(_depth));
+                String sctx = serialized.getContext();
+                if (sctx != null) {
+                    builder = builder.header(HEADER_CONTEXT, sctx);
                 }
+                if (maxCallDepth > 0) {
+                    //调用深度
+                    Object depth = ctx.<Object>getOrDefault(CONTEXT_CALL_DEPTH_KEY, 0);
+                    if (depth instanceof String str) {
+                        depth = Integer.parseInt(str) + 1;
+                        if ((int) depth > maxCallDepth) {
+                            throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
+                                .withSource(methodInfo.qualifier());
+                        }
+                        builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(depth));
+                    } else if (depth instanceof Number number) {
+                        int _depth = number.intValue() + 1;
+                        if (_depth > maxCallDepth) {
+                            throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
+                                .withSource(methodInfo.qualifier());
+                        }
+                        builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(_depth));
+                    }
+                }
+
+                return TraceHolder
+                    .writeContextTo(ctx, builder, (ServiceMessage.Builder::header))
+                    .build();
+            } catch (Throwable error) {
+                ReferenceCountUtil.safeRelease(ownedData);
+                throw error;
             }
 
-            return TraceHolder
-                .writeContextTo(ctx, builder, (ServiceMessage.Builder::header))
-                .build();
+        }
 
+        private ByteBuf requestBuffer(Object request) {
+            if (request instanceof ByteBuf buffer) return buffer;
+            if (request instanceof ServiceMessage message && message.hasData(ByteBuf.class)) return message.data();
+            return null;
+        }
+
+        private record CallResources(ByteBuf payload, SerializedContext serialized) implements Disposable {
+            @Override public void dispose() {
+                try { serialized.dispose(); }
+                finally { if (payload != null) payload.release(); }
+            }
+        }
+
+        private CallResources callResources(ContextView context, ByteBuf request) {
+            // Acquire the call reference before Context serialization; attempts own separate transport references.
+            ByteBuf payload = request == null ? null : request.retainedSlice();
+            try { return new CallResources(payload, contextCodec.serialize(context)); }
+            catch (Throwable error) {
+                ReferenceCountUtil.safeRelease(payload);
+                throw error;
+            }
+        }
+
+        private <T> Mono<T> scheduleRequest(Mono<T> request, Scheduler scheduler) {
+            return scheduler == Schedulers.immediate() ? request : request.subscribeOn(scheduler);
+        }
+
+        private <T> Flux<T> scheduleRequest(Flux<T> request, Scheduler scheduler) {
+            return scheduler == Schedulers.immediate() ? request : request.subscribeOn(scheduler);
         }
 
 
@@ -994,7 +1041,7 @@ public class ScalecubeRpcManager implements RpcManager {
         }
 
         @SuppressWarnings("all")
-        private <T> T api(ServiceCall serviceCall, String id, Class<T> serviceInterface) {
+        private <T> T api(ServiceCall serviceCall, ServiceCall channelCall, String id, Class<T> serviceInterface) {
 
             final Map<Method, MethodInfo> genericReturnTypes = new HashMap<>(Reflect.methodsInfo(serviceInterface));
             for (Map.Entry<Method, MethodInfo> entry : genericReturnTypes.entrySet()) {
@@ -1039,52 +1086,40 @@ public class ScalecubeRpcManager implements RpcManager {
                             switch (methodInfo.communicationMode()) {
                                 case FIRE_AND_FORGET:
                                     return Mono
-                                        .deferContextual(ctx -> {
-                                            SerializedContext serialize = contextCodec.serialize(ctx);
-                                            return wrap(
+                                        .deferContextual(ctx -> Mono.using(
+                                            () -> callResources(ctx, requestBuffer(request)),
+                                            resources -> wrap(
                                                 ctx,
                                                 method,
-                                                toServiceMessage(ctx, methodInfo, request, serialize)
-                                                    .flatMap(msg -> serviceCall.oneWay(msg))
-                                                    .doOnDiscard(
-                                                        ServiceMessage.class,
-                                                        ScalecubeRpcManager.this::tryRelease)
-                                                    .subscribeOn(requestScheduler))
-                                                .doFinally(ignore -> serialize.dispose());
-                                        });
+                                                scheduleRequest(toServiceMessage(ctx, methodInfo, request, resources.payload(), resources.serialized())
+                                                    .flatMap(msg -> serviceCall.oneWay(msg)), requestScheduler)),
+                                            CallResources::dispose, false)
+                                            .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData));
 
                                 case REQUEST_RESPONSE:
                                     return Mono
-                                        .deferContextual(ctx -> {
-                                            SerializedContext serialize = contextCodec.serialize(ctx);
-                                            return wrap(
+                                        .deferContextual(ctx -> Mono.using(
+                                            () -> callResources(ctx, requestBuffer(request)),
+                                            resources -> wrap(
                                                 ctx,
                                                 method,
-                                                toServiceMessage(ctx, methodInfo, request, serialize)
-                                                    .flatMap(msg -> serviceCall.requestOne(msg, returnType))
-                                                    .doOnDiscard(
-                                                        ServiceMessage.class,
-                                                        ScalecubeRpcManager.this::tryRelease)
-                                                    .subscribeOn(requestScheduler))
-                                                .doFinally(ignore -> serialize.dispose());
-                                        })
+                                                scheduleRequest(toServiceMessage(ctx, methodInfo, request, resources.payload(), resources.serialized())
+                                                    .flatMap(msg -> serviceCall.requestOne(msg, returnType)), requestScheduler)),
+                                            CallResources::dispose, false)
+                                            .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData))
                                         .transform(asMono(isServiceMessage));
 
                                 case REQUEST_STREAM:
                                     return Flux
-                                        .deferContextual(ctx -> {
-                                            SerializedContext serialize = contextCodec.serialize(ctx);
-                                            return wrap(
+                                        .deferContextual(ctx -> Flux.using(
+                                            () -> callResources(ctx, requestBuffer(request)),
+                                            resources -> wrap(
                                                 ctx,
                                                 method,
-                                                toServiceMessage(ctx, methodInfo, request, serialize)
+                                                toServiceMessage(ctx, methodInfo, request, resources.payload(), resources.serialized())
                                                     .flatMapMany(msg -> serviceCall.requestMany(msg, returnType))
-                                                    .doOnDiscard(
-                                                        ServiceMessage.class,
-                                                        ScalecubeRpcManager.this::tryRelease)
-                                            )
-                                                .doFinally(ignore -> serialize.dispose());
-                                        })
+                                            ), CallResources::dispose, false)
+                                            .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData))
                                         .transform(asFlux(isServiceMessage));
 
                                 case REQUEST_CHANNEL:
@@ -1092,26 +1127,26 @@ public class ScalecubeRpcManager implements RpcManager {
                                     // be a publisher - its safe to cast.
                                     //noinspection rawtypes
                                     return Flux
-                                        .deferContextual(ctx -> {
-                                            SerializedContext serialize = contextCodec.serialize(ctx);
-                                            return wrap(ctx,
+                                        .deferContextual(ctx -> Flux.using(
+                                            () -> callResources(ctx, null),
+                                            resources -> wrap(ctx,
                                                         method,
-                                                        serviceCall
+                                                        scheduleRequest(channelCall
                                                             .requestBidirectional(
                                                                 Flux
                                                                     .from((Publisher<?>) request)
                                                                     .index((o, data) -> {
                                                                         if (o == 0) {
-                                                                            return toServiceMessage0(ctx, methodInfo, data, serialize);
+                                                                            return toServiceMessage0(ctx, methodInfo, data, requestBuffer(data), resources.serialized());
                                                                         }
-                                                                        return toServiceMessageBuilder(methodInfo, data).build();
-                                                                    }), returnType)
-                                                            .subscribeOn(requestScheduler)
-                                                            .doOnDiscard(
-                                                                ServiceMessage.class,
-                                                                ScalecubeRpcManager.this::tryRelease))
-                                                .doFinally(ignore -> serialize.dispose());
-                                        })
+                                                                        try { return toServiceMessageBuilder(methodInfo, data).build(); }
+                                                                        catch (Throwable error) {
+                                                                            ReferenceCountUtil.safeRelease(requestBuffer(data));
+                                                                            throw error;
+                                                                        }
+                                                                    }), returnType), requestScheduler)),
+                                            CallResources::dispose, false)
+                                            .doOnDiscard(Object.class, ScalecubeRpcManager::discardRpcData))
                                         .transform(asFlux(isServiceMessage));
 
                                 default:
@@ -1123,16 +1158,18 @@ public class ScalecubeRpcManager implements RpcManager {
         }
 
 
+        @SuppressWarnings("unchecked")
         private Function<Flux<ServiceMessage>, Flux<Object>> asFlux(boolean isReturnTypeServiceMessage) {
             if (isReturnTypeServiceMessage) {
-                return flux -> flux.cast(Object.class);
+                return flux -> (Flux<Object>) (Flux<?>) flux;
             }
             return flux -> flux.map(ServiceMessage::data);
         }
 
+        @SuppressWarnings("unchecked")
         private Function<Mono<ServiceMessage>, Mono<Object>> asMono(boolean isReturnTypeServiceMessage) {
             if (isReturnTypeServiceMessage) {
-                return mono -> mono.cast(Object.class);
+                return mono -> (Mono<Object>) (Mono<?>) mono;
             }
             return mono -> mono.map(ServiceMessage::data);
         }

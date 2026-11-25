@@ -313,3 +313,23 @@ core 的 `SimpleDeviceMetadata` 同样支持属性、功能、事件、标签、
             ]
         }
 
+## ByteBuf RPC 请求所有权
+
+单请求 RPC 的裸 ByteBuf 参数和 ServiceMessage ByteBuf 载荷统一为借用：调用方持有一个可正常 retain/release 的、发送期间不可变的 buffer，并在返回 Publisher 终止后释放自身引用。RPC 每次订阅在 Context 序列化和异步调度之前以 retainedSlice() 固定当前可读区间并取得调用引用，每次发送尝试再对此固定视图创建独立 retainedDuplicate 交给 transport；调用结束释放调用引用，transport 负责发送引用。重试和多副本调用共享字节，各自持有独立读索引，不复制整包。ServiceMessage 参数仍需 @RequestType(ByteBuf.class) 声明载荷。
+
+调用方可用 Mono.using / Flux.using 管理原引用；不得再传 unreleasableBuffer，它的 retainedDuplicate 不增加引用计数，不能作为独立发送引用。服务实现消费并释放接收载荷，响应由读取方释放。请求构造失败或未发送就被取消时，RPC 释放自有引用，不释放借用的原引用。已经移交 transport 的引用不能在 RPC 的 doFinally 中再次释放，取消不表示异步编码/发送已经退出。
+
+调用引用和 SerializedContext 由同一个调用资源、一次非 eager 的 using 共同管理。每次订阅创建一次，内部重试共享，完成/错误/取消均释放一次；下游交付期间仍保留资源。Context 创建失败时归还已取得的调用引用，Publisher 构造失败也会清理已返回的上下文。codec 在返回 SerializedContext 前若发生部分创建失败，须自行回滚已创建的 support 资源，外层 using 尚无法接管它们。
+
+请求构造保留 hide() 边界，防止 Reactor 标量 flatMap 绕过 supplier 的取消检查；构造头信息期间被取消的未发送消息由 discard 释放，不再进入 transport。
+
+每次调用只在重试外层安装一次局部 discard 钩子，同时处理 ServiceMessage 载荷及通道中的原始引用计数对象；钩子在 Context 序列化之后进入订阅链，避免把本地清理状态带入传输上下文。即时调度直接订阅，实际异步调度仍保留 subscribeOn。必要的资源作用域与取消检查不能按操作符数量删除。
+
+请求通道按 Reactive Streams 的 onNext 转交每条消息的一份引用；源必须逐次订阅/重试提供新引用，若仍需保留原 buffer，应发送 retainedDuplicate。RPC 不再复制首帧，后续帧也不重复 retain；丢弃或构造失败时消费未发送引用。
+
+迁移：旧裸 ByteBuf 参数由 RPC 复制并消费入参，现改为借用。原直接交出入参且不释放的调用方应补齐 using 生命周期；旧 unreleasable 包装应删除。设备操作 Broker 已同步迁移，平台 EventBus/结构化订阅调用方须与本 supports 制品配套升级，不能单独替换 supports。
+
+设计依据：[Netty 引用计数与派生缓冲](https://netty.io/wiki/reference-counted-objects.html)、[Reactor 资源清理与 discard](https://projectreactor.io/docs/core/release/reference/advancedFeatures/cleanup.html)。
+
+选择派生视图取决于边界：retainedSlice() 将可读内容映射到索引 0，capacity 限于该消息长度；retainedDuplicate() 保留原视图的容量和索引，适合重试时复制已固定消息的游标。两者都共享底层内存，切片不会减少父缓冲的实际占用，也不会使字节内容不可变，不应将性能差异当作选型前提。
+

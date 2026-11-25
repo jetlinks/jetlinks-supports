@@ -122,16 +122,13 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
             .from(message)
             .flatMap(msg -> {
                 msg.addHeader(Headers.sendFrom, rpcManager.currentServerId());
-                ByteBuf buf = encode(msg);
-                ByteBuf unreleasableBuffer = Unpooled.unreleasableBuffer(buf);
                 //  addAwaitReplyKey(msg);
-                return rpcManager
+                return Mono.using(() -> encode(msg), buf -> rpcManager
                     .getService(deviceGatewayServerId, Service.class)
                     .flatMap(service -> service
-                        .send(unreleasableBuffer)
+                        .send(buf)
                         .then(Reactors.ALWAYS_ONE))
-                    .switchIfEmpty(Reactors.ALWAYS_ZERO)
-                    .doFinally(ignore -> ReferenceCountUtil.release(buf));
+                    .switchIfEmpty(Reactors.ALWAYS_ZERO), ByteBuf::release);
             })
             .reduce(0, Integer::sum);
     }
@@ -230,12 +227,8 @@ public class RpcDeviceOperationBroker extends AbstractDeviceOperationBroker {
                 .getServices(Service.class)
                 .map(RpcService::service);
         }
-        ByteBuf buf = encode(reply);
-        ByteBuf unreleasableBuffer = Unpooled.unreleasableBuffer(buf);
-        return serviceFlux
-            .flatMap(service -> service.reply(unreleasableBuffer))
-            .then()
-            .doFinally(ignore -> ReferenceCountUtil.release(buf));
+        return Mono.using(() -> encode(reply), buf -> serviceFlux
+            .flatMap(service -> service.reply(buf)).then(), ByteBuf::release);
     }
 
     @SneakyThrows
