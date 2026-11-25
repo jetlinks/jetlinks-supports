@@ -933,48 +933,60 @@ public class ScalecubeRpcManager implements RpcManager {
                                                       MethodInfo methodInfo,
                                                       Object request,
                                                       SerializedContext serialized) {
-            return Mono.fromSupplier(() -> toServiceMessage0(ctx, methodInfo, request, serialized));
+            // Scalar flatMap bypasses supplier cancellation/discard while headers are being prepared.
+            return Mono.fromSupplier(() -> toServiceMessage0(ctx, methodInfo, request, serialized)).hide();
         }
 
         private ServiceMessage toServiceMessage0(ContextView ctx,
                                                  MethodInfo methodInfo,
                                                  Object request,
                                                  SerializedContext serialized) {
-            if (request instanceof ByteBuf buf) {
-                // copy 新的 bytebuf,避免上游cancel时buf被提前release.
-                request = buf.copy();
-                ReferenceCountUtil.safeRelease(buf);
-            }
-            ServiceMessage.Builder builder = TraceHolder
-                .writeContextTo(ctx, toServiceMessageBuilder(methodInfo, request), (ServiceMessage.Builder::header));
-
-            String sctx = serialized.getContext();
-            if (sctx != null) {
-                builder = builder.header(HEADER_CONTEXT, sctx);
-            }
-            if (maxCallDepth > 0) {
-                //调用深度
-                Object depth = ctx.<Object>getOrDefault(CONTEXT_CALL_DEPTH_KEY, 0);
-                if (depth instanceof String str) {
-                    depth = Integer.parseInt(str) + 1;
-                    if ((int) depth > maxCallDepth) {
-                        throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
-                            .withSource(methodInfo.qualifier());
-                    }
-                    builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(depth));
-                } else if (depth instanceof Number number) {
-                    int _depth = number.intValue() + 1;
-                    if (_depth > maxCallDepth) {
-                        throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
-                            .withSource(methodInfo.qualifier());
-                    }
-                    builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(_depth));
+            ByteBuf ownedData = null;
+            try {
+                if (request instanceof ByteBuf buf) {
+                    // copy 新的 bytebuf,避免上游cancel时buf被提前release.
+                    request = buf.copy();
+                    ReferenceCountUtil.safeRelease(buf);
+                    ownedData = (ByteBuf) request;
+                } else if (request instanceof ServiceMessage message && message.hasData(ByteBuf.class)) {
+                    // Retain before context/header work can race cancellation of the caller's buffer.
+                    ownedData = ((ByteBuf) message.data()).retainedDuplicate();
                 }
-            }
+                ServiceMessage.Builder builder = toServiceMessageBuilder(methodInfo, request);
+                if (ownedData != null) builder.data(ownedData);
+                builder = TraceHolder.writeContextTo(ctx, builder, ServiceMessage.Builder::header);
 
-            return TraceHolder
-                .writeContextTo(ctx, builder, (ServiceMessage.Builder::header))
-                .build();
+                String sctx = serialized.getContext();
+                if (sctx != null) {
+                    builder = builder.header(HEADER_CONTEXT, sctx);
+                }
+                if (maxCallDepth > 0) {
+                    //调用深度
+                    Object depth = ctx.<Object>getOrDefault(CONTEXT_CALL_DEPTH_KEY, 0);
+                    if (depth instanceof String str) {
+                        depth = Integer.parseInt(str) + 1;
+                        if ((int) depth > maxCallDepth) {
+                            throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
+                                .withSource(methodInfo.qualifier());
+                        }
+                        builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(depth));
+                    } else if (depth instanceof Number number) {
+                        int _depth = number.intValue() + 1;
+                        if (_depth > maxCallDepth) {
+                            throw new I18nSupportException.NoStackTrace("error.out_of_max_call_depth",maxCallDepth )
+                                .withSource(methodInfo.qualifier());
+                        }
+                        builder = builder.header(HEADER_CALL_DEPTH, String.valueOf(_depth));
+                    }
+                }
+
+                return TraceHolder
+                    .writeContextTo(ctx, builder, (ServiceMessage.Builder::header))
+                    .build();
+            } catch (Throwable error) {
+                ReferenceCountUtil.safeRelease(ownedData);
+                throw error;
+            }
 
         }
 

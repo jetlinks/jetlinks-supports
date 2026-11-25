@@ -313,3 +313,11 @@ core 的 `SimpleDeviceMetadata` 同样支持属性、功能、事件、标签、
             ]
         }
 
+## ByteBuf RPC 请求所有权
+
+普通 ByteBuf 参数保留原有的复制与消费语义，兼容通过 unreleasableBuffer 保护重试的调用方。需要零整包复制的请求可使用 ServiceMessage 参数，并通过 @RequestType(ByteBuf.class) 声明载荷：调用方保留一个可正常 retain/release 的、发送期间不可变的 ByteBuf，RPC 每次发送尝试创建独立 retainedDuplicate，供 transport 消费。调用方在返回 Publisher 终止后释放自身引用；重试和多副本调用共享字节，各自持有独立读索引和引用。
+
+显式信封的 data 不应使用 unreleasableBuffer：它的 retainedDuplicate 不增加引用计数，不能作为独立 transport 租约。接收方负责消费并释放 ByteBuf 载荷，响应由读取方释放。请求构造失败时 RPC 释放已创建的自有副本/租约，不释放显式信封借用的调用方引用。
+
+请求构造保留 hide() 边界，防止 Reactor 标量 flatMap 绕过 supplier 的取消检查；构造头信息期间被取消的未发送消息由 discard 释放，不再进入 transport。
+
