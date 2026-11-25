@@ -72,9 +72,9 @@ public class RpcByteBufOwnershipTest {
         Field field = ScalecubeRpcManager.class.getDeclaredField("requestScheduler");
         field.setAccessible(true); field.set(rpc, scheduler);
         var node = rpc.new ClusterNode();
-        Method api = node.getClass().getDeclaredMethod("api", ServiceCall.class, String.class, Class.class);
+        Method api = node.getClass().getDeclaredMethod("api", ServiceCall.class, ServiceCall.class, String.class, Class.class);
         api.setAccessible(true);
-        return (Service) api.invoke(node, transport, "owned", Service.class);
+        return (Service) api.invoke(node, transport, transport, "owned", Service.class);
     }
 
     @Test public void cancellationBeforeScheduledEncodingDoesNotLeakOrSend() throws Exception {
@@ -92,6 +92,57 @@ public class RpcByteBufOwnershipTest {
             for (Runnable task; (task = queue.poll()) != null;) task.run();
             assertNull(error.get()); assertEquals(0, owner.refCnt()); verifyNoInteractions(transport);
         } finally { scheduler.dispose(); if (owner.refCnt() > 0) owner.release(); }
+    }
+
+    private Service missingRoute() throws Exception {
+        var rpc = new ScalecubeRpcManager();
+        rpc.setRetry(reactor.util.retry.Retry.max(0));
+        Field call = ScalecubeRpcManager.class.getDeclaredField("serviceCall");
+        call.setAccessible(true);
+        call.set(rpc, new ServiceCall().transport(mock(io.scalecube.services.transport.api.ClientTransport.class)));
+        Field scheduler = ScalecubeRpcManager.class.getDeclaredField("requestScheduler");
+        scheduler.setAccessible(true);
+        scheduler.set(rpc, Schedulers.immediate());
+        var node = rpc.new ClusterNode();
+        Field id = node.getClass().getDeclaredField("id");
+        id.setAccessible(true);
+        id.set(node, "departed");
+        Method factory = node.getClass().getDeclaredMethod("createApiCall", String.class, Class.class);
+        factory.setAccessible(true);
+        return ((ScalecubeRpcManager.RpcServiceCall<Service>) factory.invoke(node, "owned", Service.class)).service();
+    }
+
+    @Test public void missingRouteDiscardsTheChannelFrameOnce() throws Exception {
+        Service service = missingRoute();
+        for (boolean envelope : new boolean[]{false, true}) {
+            ByteBuf owner = Unpooled.buffer(8).writeLong(123);
+            try {
+                ByteBuf sent = owner.retainedDuplicate();
+                Flux<?> response = envelope
+                    ? service.envelopeChannel(Flux.just(ServiceMessage.builder().data(sent).build()))
+                    : service.channel(Flux.just(sent));
+                try { response.blockLast(); fail("route must fail"); }
+                catch (Exception error) {
+                    assertTrue(error.getCause() instanceof io.scalecube.services.exceptions.ServiceUnavailableException);
+                }
+                assertEquals(1, owner.refCnt());
+                assertEquals(123, owner.getLong(0));
+            } finally { if (owner.refCnt() > 0) owner.release(owner.refCnt()); }
+        }
+    }
+
+    @Test public void missingRouteReleasesTheAttemptForSingleRequests() throws Exception {
+        Service service = missingRoute();
+        ByteBuf owner = Unpooled.buffer(8).writeLong(123);
+        try {
+            for (Mono<?> response : new Mono<?>[]{service.legacy(owner), service.voidResponse(owner), service.stream(owner).then()}) {
+                try { response.block(); fail("route must fail"); }
+                catch (Exception error) {
+                    assertTrue(error.getCause() instanceof io.scalecube.services.exceptions.ServiceUnavailableException);
+                }
+                assertEquals(1, owner.refCnt());
+            }
+        } finally { if (owner.refCnt() > 0) owner.release(owner.refCnt()); }
     }
 
     @Test public void bareRequestIsRetainedBeforeSchedulingAndReleasedOnCancellation() throws Exception {

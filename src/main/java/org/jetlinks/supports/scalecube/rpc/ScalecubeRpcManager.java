@@ -16,6 +16,7 @@ import io.scalecube.services.exceptions.MessageCodecException;
 import io.scalecube.services.exceptions.ServiceUnavailableException;
 import io.scalecube.services.methods.MethodInfo;
 import io.scalecube.services.methods.ServiceMethodRegistry;
+import io.scalecube.services.routing.Router;
 import io.scalecube.services.transport.api.DataCodec;
 import io.scalecube.services.transport.api.ServerTransport;
 import io.scalecube.services.transport.api.ServiceMessageDataDecoder;
@@ -842,28 +843,33 @@ public class ScalecubeRpcManager implements RpcManager {
         private <I> RpcServiceCall<I> createApiCall(String serviceId, Class<I> clazz) {
             String name = Reflect.serviceName(clazz);
 
-            ServiceCall call = serviceCall
-                .router((serviceRegistry, request) -> {
-                    ClusterNode node = ScalecubeRpcManager.this.serverServiceRef.get(this.id);
-                    Set<ServiceReferenceInfo> refs = node == null ? null
-                        : node.serviceReferencesByQualifier.get(request.qualifier());
-                    if (refs == null) {
-                        tryRelease(request);
-                        return Optional.empty();
-                    }
-                    for (ServiceReferenceInfo ref : refs) {
-                        return Optional.of(ref.reference);
-                    }
-                    tryRelease(request);
+            Router router = (serviceRegistry, request) -> {
+                ClusterNode node = ScalecubeRpcManager.this.serverServiceRef.get(this.id);
+                Set<ServiceReferenceInfo> refs = node == null ? null
+                    : node.serviceReferencesByQualifier.get(request.qualifier());
+                if (refs == null) {
                     return Optional.empty();
-                })
+                }
+                for (ServiceReferenceInfo ref : refs) {
+                    return Optional.of(ref.reference);
+                }
+                return Optional.empty();
+            };
+            ServiceCall channelCall = serviceCall
+                .router(router)
                 .serviceRegistry(NoneServiceRegistry.INSTANCE)
                 .errorMapper(errorMapper);
+            ServiceCall call = channelCall.router((registry, request) -> {
+                Optional<ServiceReference> selected = router.route(registry, request);
+                // switchOnFirst owns channel frames; single requests have no upstream queue to discard them.
+                if (selected.isEmpty()) tryRelease(request);
+                return selected;
+            });
 
             return new RpcServiceCall<>(this.id,
                                         serviceId,
                                         name,
-                                        api(call, serviceId, clazz),
+                                        api(call, channelCall, serviceId, clazz),
                                         serviceId + "/" + name);
         }
 
@@ -1035,7 +1041,7 @@ public class ScalecubeRpcManager implements RpcManager {
         }
 
         @SuppressWarnings("all")
-        private <T> T api(ServiceCall serviceCall, String id, Class<T> serviceInterface) {
+        private <T> T api(ServiceCall serviceCall, ServiceCall channelCall, String id, Class<T> serviceInterface) {
 
             final Map<Method, MethodInfo> genericReturnTypes = new HashMap<>(Reflect.methodsInfo(serviceInterface));
             for (Map.Entry<Method, MethodInfo> entry : genericReturnTypes.entrySet()) {
@@ -1125,7 +1131,7 @@ public class ScalecubeRpcManager implements RpcManager {
                                             () -> callResources(ctx, null),
                                             resources -> wrap(ctx,
                                                         method,
-                                                        scheduleRequest(serviceCall
+                                                        scheduleRequest(channelCall
                                                             .requestBidirectional(
                                                                 Flux
                                                                     .from((Publisher<?>) request)
