@@ -287,7 +287,7 @@ public class RpcByteBufOwnershipTest {
         when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
             ServiceMessage message = call.getArgument(0);
             assertEquals("context", message.header(ScalecubeRpcManager.HEADER_CONTEXT));
-            assertEquals(0, contexts.getLast().disposals);
+            assertEquals(0, contexts.get(contexts.size() - 1).disposals);
             ((ByteBuf) message.data()).release();
             return attempts.incrementAndGet() == 1 ? Mono.error(new IllegalStateException("retry")) :
                 Mono.just(ServiceMessage.builder().data(Unpooled.EMPTY_BUFFER).build());
@@ -295,11 +295,11 @@ public class RpcByteBufOwnershipTest {
         ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
         try {
             Service service = proxy(transport, Schedulers.immediate(), codec, reactor.util.retry.Retry.max(1));
-            Mono<ByteBuf> call = service.legacy(owner).doOnNext(reply -> assertEquals(0, contexts.getLast().disposals));
+            Mono<ByteBuf> call = service.legacy(owner).doOnNext(reply -> assertEquals(0, contexts.get(contexts.size() - 1).disposals));
             assertTrue(contexts.isEmpty()); call.block().release();
-            assertEquals(2, attempts.get()); assertEquals(1, contexts.size()); assertEquals(1, contexts.getFirst().disposals);
+            assertEquals(2, attempts.get()); assertEquals(1, contexts.size()); assertEquals(1, contexts.get(0).disposals);
             call.block().release();
-            assertEquals(2, contexts.size()); assertEquals(1, contexts.getLast().disposals); assertEquals(1, owner.refCnt());
+            assertEquals(2, contexts.size()); assertEquals(1, contexts.get(contexts.size() - 1).disposals); assertEquals(1, owner.refCnt());
         } finally { owner.release(); }
     }
 
