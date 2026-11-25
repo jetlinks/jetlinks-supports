@@ -319,6 +319,8 @@ core 的 `SimpleDeviceMetadata` 同样支持属性、功能、事件、标签、
 
 调用方可用 Mono.using / Flux.using 管理原引用；不得再传 unreleasableBuffer，它的 retainedDuplicate 不增加引用计数，不能作为独立发送引用。服务实现消费并释放接收载荷，响应由读取方释放。请求构造失败或未发送就被取消时，RPC 释放自有引用，不释放借用的原引用。已经移交 transport 的引用不能在 RPC 的 doFinally 中再次释放，取消不表示异步编码/发送已经退出。
 
+调用引用和 SerializedContext 由同一个调用资源、一次非 eager 的 using 共同管理。每次订阅创建一次，内部重试共享，完成/错误/取消均释放一次；下游交付期间仍保留资源。Context 创建失败时归还已取得的调用引用，Publisher 构造失败也会清理已返回的上下文。codec 在返回 SerializedContext 前若发生部分创建失败，须自行回滚已创建的 support 资源，外层 using 尚无法接管它们。
+
 请求构造保留 hide() 边界，防止 Reactor 标量 flatMap 绕过 supplier 的取消检查；构造头信息期间被取消的未发送消息由 discard 释放，不再进入 transport。
 
 每次调用只在重试外层安装一次局部 discard 钩子，同时处理 ServiceMessage 载荷及通道中的原始引用计数对象；钩子在 Context 序列化之后进入订阅链，避免把本地清理状态带入传输上下文。即时调度直接订阅，实际异步调度仍保留 subscribeOn。必要的资源作用域与取消检查不能按操作符数量删除。

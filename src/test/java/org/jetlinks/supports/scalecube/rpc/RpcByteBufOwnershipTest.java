@@ -61,8 +61,14 @@ public class RpcByteBufOwnershipTest {
     }
 
     private Service proxy(ServiceCall transport, Scheduler scheduler, org.jetlinks.core.rpc.ContextCodec codec) throws Exception {
+        return proxy(transport, scheduler, codec, null);
+    }
+
+    private Service proxy(ServiceCall transport, Scheduler scheduler, org.jetlinks.core.rpc.ContextCodec codec,
+                          reactor.util.retry.Retry retry) throws Exception {
         var rpc = new ScalecubeRpcManager();
         rpc.setContextCodec(codec);
+        if (retry != null) rpc.setRetry(retry);
         Field field = ScalecubeRpcManager.class.getDeclaredField("requestScheduler");
         field.setAccessible(true); field.set(rpc, scheduler);
         var node = rpc.new ClusterNode();
@@ -198,6 +204,98 @@ public class RpcByteBufOwnershipTest {
             reactor.test.StepVerifier.create(service.legacy(owner)).expectErrorMessage("context").verify();
             assertEquals(1, owner.refCnt()); verifyNoInteractions(transport);
         } finally { owner.release(); }
+    }
+
+    @Test public void channelFactoryFailureDisposesTheSerializedContext() throws Exception {
+        var disposed = new java.util.concurrent.atomic.AtomicInteger();
+        var codec = new org.jetlinks.core.rpc.ContextCodec() {
+            @Override public SerializedContext serialize(ContextView context) {
+                return new SerializedContext() {
+                    @Override public String getContext() { return null; }
+                    @Override public void dispose() { disposed.incrementAndGet(); }
+                };
+            }
+        };
+        var transport = mock(ServiceCall.class);
+        when(transport.requestBidirectional(any(org.reactivestreams.Publisher.class), any(java.lang.reflect.Type.class)))
+            .thenThrow(new IllegalStateException("factory failed"));
+        Service service = proxy(transport, Schedulers.immediate(), codec);
+        reactor.test.StepVerifier.create(service.channel(Flux.empty())).expectErrorMessage("factory failed").verify();
+        assertEquals(1, disposed.get());
+    }
+
+    @Test public void serializedContextIsSharedAcrossInternalRetriesAndClosesAfterDelivery() throws Exception {
+        var contexts = new java.util.ArrayList<TrackingContext>();
+        var codec = new org.jetlinks.core.rpc.ContextCodec() {
+            @Override public SerializedContext serialize(ContextView context) {
+                var serialized = new TrackingContext(); contexts.add(serialized); return serialized;
+            }
+        };
+        var transport = mock(ServiceCall.class);
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+            ServiceMessage message = call.getArgument(0);
+            assertEquals("context", message.header(ScalecubeRpcManager.HEADER_CONTEXT));
+            assertEquals(0, contexts.getLast().disposals);
+            ((ByteBuf) message.data()).release();
+            return attempts.incrementAndGet() == 1 ? Mono.error(new IllegalStateException("retry")) :
+                Mono.just(ServiceMessage.builder().data(Unpooled.EMPTY_BUFFER).build());
+        });
+        ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+        try {
+            Service service = proxy(transport, Schedulers.immediate(), codec, reactor.util.retry.Retry.max(1));
+            Mono<ByteBuf> call = service.legacy(owner).doOnNext(reply -> assertEquals(0, contexts.getLast().disposals));
+            assertTrue(contexts.isEmpty()); call.block().release();
+            assertEquals(2, attempts.get()); assertEquals(1, contexts.size()); assertEquals(1, contexts.getFirst().disposals);
+            call.block().release();
+            assertEquals(2, contexts.size()); assertEquals(1, contexts.getLast().disposals); assertEquals(1, owner.refCnt());
+        } finally { owner.release(); }
+    }
+
+    @Test public void serializedContextClosesOnceOnErrorOrCancellationForEveryInteraction() throws Exception {
+        for (int mode = 0; mode < 3; mode++) for (boolean fail : new boolean[]{false, true}) {
+            var serialized = new TrackingContext();
+            var codec = new org.jetlinks.core.rpc.ContextCodec() {
+                @Override public SerializedContext serialize(ContextView context) { return serialized; }
+            };
+            var transport = mock(ServiceCall.class);
+            when(transport.requestOne(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+                ((ByteBuf) ((ServiceMessage) call.getArgument(0)).data()).release();
+                return fail ? Mono.error(new IllegalStateException("failed")) : Mono.never();
+            });
+            when(transport.requestMany(any(ServiceMessage.class), any(java.lang.reflect.Type.class))).thenAnswer(call -> {
+                ((ByteBuf) ((ServiceMessage) call.getArgument(0)).data()).release();
+                return fail ? Flux.error(new IllegalStateException("failed")) : Flux.never();
+            });
+            when(transport.requestBidirectional(any(org.reactivestreams.Publisher.class), any(java.lang.reflect.Type.class)))
+                .thenAnswer(call -> Flux.from((org.reactivestreams.Publisher<ServiceMessage>) call.getArgument(0))
+                    .doOnNext(message -> ((ByteBuf) message.data()).release())
+                    .thenMany(fail ? Flux.error(new IllegalStateException("failed")) : Flux.never()));
+            ByteBuf owner = PooledByteBufAllocator.DEFAULT.directBuffer(8).writeLong(123);
+            try {
+                Service service = proxy(transport, Schedulers.immediate(), codec);
+                org.reactivestreams.Publisher<ByteBuf> call = switch (mode) {
+                    case 0 -> service.legacy(owner);
+                    case 1 -> service.stream(owner);
+                    default -> service.channel(Flux.defer(() -> Flux.just(owner.retainedDuplicate())));
+                };
+                Flux<ByteBuf> result = Flux.from(call)
+                    .contextWrite(Context.of(reactor.util.retry.Retry.class, reactor.util.retry.Retry.max(0)))
+                    .doOnError(error -> assertEquals(0, serialized.disposals));
+                if (fail) reactor.test.StepVerifier.create(result).expectErrorMessage("failed").verify();
+                else {
+                    var subscription = result.subscribe(); assertEquals(0, serialized.disposals);
+                    subscription.dispose(); subscription.dispose();
+                }
+                assertEquals(1, serialized.disposals); assertEquals(1, owner.refCnt());
+            } finally { owner.release(); }
+        }
+    }
+
+    private static final class TrackingContext implements SerializedContext {
+        int disposals;
+        @Override public String getContext() { assertEquals(0, disposals); return "context"; }
+        @Override public void dispose() { disposals++; }
     }
 
     @Test public void voidResponseAndStreamAlsoBorrowWithoutConsumingTheCaller() throws Exception {
