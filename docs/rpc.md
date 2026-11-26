@@ -100,7 +100,9 @@ service.latest("device-1").timeout(Duration.ofSeconds(3));
 
 业务超时通过取消传播到远端 Publisher，并归还调用租约、Context 与请求引用；取消不代表对端已经完成的副作用被回滚。不设置任何请求超时时，未结束的调用持续占用槽位和资源，直到完成、取消、断连或 manager 停止。
 
-`RpcTransport` 位于 Supports，直接使用 RSocket 的 `SocketAcceptor`、`RSocket`、`Payload` 和 `CloseableChannel`；Core 不依赖 RSocket。传输层管理监听、连接和 I/O 资源，不再创建帧/连接/handler 的平行抽象，也不在数据链路转换承载对象。SETUP 由 RSocket 借用至 acceptor 完成；业务请求的 Payload 所有权转移给 runtime，成功、失败或取消后由对应 owner 释放，channel 逐元素转移。\n\n`bind/connect` 接收本节点的 `maxPayloadBytes`，RSocket 双端使用共同的 16KiB 物理帧上限；分片重组上限为业务预算加协议开销，最低为一个物理帧。runtime 在 SETUP、目录、请求与响应入口精确校验 data/metadata 总字节数，小预算节点因此可以正常接收合法物理帧，同时拒绝超出业务预算的载荷。
+`RpcTransport` 位于 Supports，直接使用 RSocket 的 `SocketAcceptor`、`RSocket`、`Payload` 和 `CloseableChannel`；Core 不依赖 RSocket。传输层管理监听、连接和 I/O 资源，不再创建帧/连接/handler 的平行抽象，也不在数据链路转换承载对象。SETUP 由 RSocket 借用至 acceptor 完成；业务请求的 Payload 所有权转移给 runtime，成功、失败或取消后由对应 owner 释放，channel 逐元素转移。
+
+`bind/connect` 接收本节点的 `maxPayloadBytes`，RSocket 双端使用共同的 16KiB 物理帧上限；分片重组上限为业务预算加协议开销，最低为一个物理帧。runtime 在 SETUP、目录、请求与响应入口精确校验 data/metadata 总字节数，小预算节点因此可以正常接收合法物理帧，同时拒绝超出业务预算的载荷。
 
 响应式操作符保留 Context、取消与资源边界，空 Context codec 走直接路径。传输双端 ZERO_COPY；SETUP 保留一次连接级快照，避免连接建立阶段的取消和复用竞态。业务调用不复制 ByteBuf 载荷。`RpcBodyCodec`、`ContextCodec`、`SerializedContext` 及 Java/FST 格式标识保持原定义，路由、SETUP、目录、错误和 Context 的二进制布局不随承载对象改变。
 
