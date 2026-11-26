@@ -1,9 +1,13 @@
 package org.jetlinks.supports.rpc;
 
+import io.rsocket.Payload;
+import io.rsocket.RSocket;
+import io.rsocket.SocketAcceptor;
+import io.rsocket.transport.netty.server.CloseableChannel;
+import io.rsocket.util.ByteBufPayload;
 import io.netty.buffer.*;
 import org.jetlinks.core.cluster.discovery.*;
 import org.jetlinks.core.rpc.*;
-import org.jetlinks.core.rpc.transport.*;
 import org.jetlinks.core.trace.MonoTracer;
 import org.jetlinks.core.trace.FluxTracer;
 import org.reactivestreams.Publisher;
@@ -37,7 +41,7 @@ public final class DefaultRpcManager implements RpcManager {
     private volatile Set<String> conflicts = Set.of();
     private final AtomicInteger active = new AtomicInteger();
     private final AtomicBoolean started = new AtomicBoolean(), stopped = new AtomicBoolean(), catalogScheduled = new AtomicBoolean();
-    private RpcServer server;
+    private CloseableChannel server;
 
     public DefaultRpcManager(NodeAnnouncement local, NodeDiscovery discovery, RpcTransport transport,
                              RpcBodyCodec bodyCodec, ContextCodec contextCodec, RpcOptions options) {
@@ -61,7 +65,7 @@ public final class DefaultRpcManager implements RpcManager {
             return transport.bind(options.listen(), options.maxPayloadBytes(), this::accept).doOnNext(bound -> {
                 server = bound;
                 Map<String, URI> endpoints = new HashMap<>(local.endpoints());
-                endpoints.putIfAbsent("rpc", bound.address());
+                endpoints.putIfAbsent("rpc", URI.create("tcp://" + bound.address().getHostString() + ":" + bound.address().getPort()));
                 local = new NodeAnnouncement(local.identity(), local.namespace(), local.application(), local.labels(), endpoints);
             }).then(Mono.defer(() -> discovery.start(local))).doOnSuccess(ignored -> lifecycle.add(discovery.watch()
                 .publishOn(control, 1).subscribe(this::reconcile, this::discoveryFailed)))
@@ -94,10 +98,10 @@ public final class DefaultRpcManager implements RpcManager {
         return result == 0 ? left.incarnation().compareTo(right.incarnation()) : result;
     }
 
-    private Mono<RpcHandler> accept(RpcFrame frame, RpcConnection reverse) {
+    private Mono<RSocket> accept(Payload frame, RSocket reverse) {
         return Mono.fromCallable(() -> {
             registry.checkAvailable();
-            checkFrameBudget(frame);
+            checkPayloadBudget(frame);
             RpcProtocol.Setup setup = RpcProtocol.readSetup(frame);
             ClusterView view = discovery.currentView();
             NodeAnnouncement node = view.members().get(setup.identity());
@@ -119,10 +123,10 @@ public final class DefaultRpcManager implements RpcManager {
         if (stopped.get() || registry.isFailed() || peer.retired || peer.connection != null || peer.connecting) return;
         peer.connecting = true;
         peer.work.update(transport.connect(peer.node.endpoints().get("rpc"), options.maxPayloadBytes(),
-                () -> RpcProtocol.setup(new RpcProtocol.Setup(local.identity(), local.namespace(), bodyCodec.id(), contextCodec.formatId(), options.token())), handler(peer))
+                () -> RpcProtocol.setup(new RpcProtocol.Setup(local.identity(), local.namespace(), bodyCodec.id(), contextCodec.formatId(), options.token())), SocketAcceptor.with(handler(peer)))
             .timeout(options.connectTimeout()).publishOn(control).subscribe(connection -> {
                 peer.connecting = false;
-                if (stopped.get() || peer.retired) { connection.close().subscribe(); return; }
+                if (stopped.get() || peer.retired) { connection.dispose(); return; }
                 peer.connection = connection;
                 watchClose(peer);
                 sync(peer);
@@ -149,7 +153,7 @@ public final class DefaultRpcManager implements RpcManager {
         peer.work.dispose(); peer.sync.dispose(); peer.closeWatcher.dispose();
         publishRoutes();
         registry.unavailable(peer.node.identity());
-        if (peer.connection != null) peer.connection.close().subscribe();
+        if (peer.connection != null) peer.connection.dispose();
     }
 
     private void localChanged() {
@@ -162,10 +166,10 @@ public final class DefaultRpcManager implements RpcManager {
     private void sync(Peer peer) {
         if (peer.retired || peer.connection == null || peer.syncing || stopped.get()) return;
         peer.syncing = true; peer.dirty = false;
-        peer.sync.update(peer.connection.requestResponse(() -> RpcProtocol.catalog(local.identity(), registry.localCatalog(), true))
-            .timeout(options.connectTimeout()).publishOn(control).doOnDiscard(RpcFrame.class, RpcFrame::release)
+        peer.sync.update(Mono.defer(() -> peer.connection.requestResponse(RpcProtocol.catalog(local.identity(), registry.localCatalog(), true)))
+            .timeout(options.connectTimeout()).publishOn(control).doOnDiscard(Payload.class, Payload::release)
             .subscribe(frame -> {
-                try { checkFrameBudget(frame); RpcProtocol.checkResponse(frame); install(peer, RpcProtocol.readCatalog(frame, peer.node.identity())); }
+                try { checkPayloadBudget(frame); RpcProtocol.checkResponse(frame); install(peer, RpcProtocol.readCatalog(frame, peer.node.identity())); }
                 finally { frame.release(); }
             }, error -> disconnected(peer), () -> {
                 peer.syncing = false;
@@ -185,10 +189,10 @@ public final class DefaultRpcManager implements RpcManager {
         for (Peer peer : List.copyOf(peers.values())) retire(peer);
     }
 
-    private RpcHandler handler(Peer peer) {
+    private RSocket handler(Peer peer) {
         var unary = new RpcServerMono.Plan() {
             AtomicInteger acquire() { return slot(); }
-            Mono<?> invoke(RpcFrame request, RpcServerMono.CallSubscriber subscriber) {
+            Mono<?> invoke(Payload request, RpcServerMono.CallSubscriber subscriber) {
                 RpcProtocol.Call call = readCall(request);
                 var method = registry.localMethod(call.route());
                 requireMode(method.definition(), false, false);
@@ -197,29 +201,32 @@ public final class DefaultRpcManager implements RpcManager {
                 return Mono.defer(() -> Mono.from(invokeMethod(method, decodeRequest(request, method.definition(), false))))
                     .as(MonoTracer.create(method.definition().serverSpan));
             }
-            RpcFrame encode(Object value) { return encodeResponse(value); }
+            Payload encode(Object value) { return encodeResponse(value); }
         };
-        return new RpcHandler() {
-            public Mono<RpcFrame> requestResponse(RpcFrame request) {
-                if (RpcProtocol.peekKind(request.metadata()) == RpcProtocol.CATALOG) {
-                    checkFrameBudget(request);
-                    return Mono.fromCallable(() -> {
-                        install(peer, RpcProtocol.readCatalog(request, peer.node.identity()));
-                        return RpcProtocol.catalog(local.identity(), registry.localCatalog(), false);
-                    }).subscribeOn(control).onErrorResume(error -> Mono.just(RpcProtocol.error(error)));
-                }
-                return RpcServerMono.create(unary, request);
+        return new RSocket() {
+            public Mono<Payload> requestResponse(Payload request) {
+                return Mono.using(() -> request, payload -> {
+                    if (RpcProtocol.peekKind(payload.metadata()) == RpcProtocol.CATALOG) {
+                        checkPayloadBudget(payload);
+                        return Mono.fromCallable(() -> {
+                            install(peer, RpcProtocol.readCatalog(payload, peer.node.identity()));
+                            return RpcProtocol.catalog(local.identity(), registry.localCatalog(), false);
+                        }).subscribeOn(control).onErrorResume(error -> Mono.just(RpcProtocol.error(error)));
+                    }
+                    return RpcServerMono.create(unary, payload);
+                }, Payload::release, false);
             }
-            public Flux<RpcFrame> requestStream(RpcFrame request) {
-                return Flux.using(DefaultRpcManager.this::slot, ignored -> {
-                    RpcProtocol.Call call = readCall(request);
+            public Flux<Payload> requestStream(Payload request) {
+                return Flux.using(() -> request, payload -> Flux.using(DefaultRpcManager.this::slot, ignored -> {
+                    RpcProtocol.Call call = readCall(payload);
                     var method = registry.localMethod(call.route());
                     requireMode(method.definition(), true, false);
-                    return invokeMany(method, () -> decodeRequest(request, method.definition(), false), call.context())
+                    return invokeMany(method, () -> decodeRequest(payload, method.definition(), false), call.context())
                         .map(DefaultRpcManager.this::encodeResponse);
-                }, AtomicInteger::decrementAndGet, false).onErrorResume(error -> Flux.just(RpcProtocol.error(error)));
+                }, AtomicInteger::decrementAndGet, false), Payload::release, false)
+                    .onErrorResume(error -> Flux.just(RpcProtocol.error(error)));
             }
-            public Flux<RpcFrame> requestChannel(Publisher<RpcFrame> requests) {
+            public Flux<Payload> requestChannel(Publisher<Payload> requests) {
                 return Flux.using(DefaultRpcManager.this::slot, ignored -> Flux.from(requests)
                     .switchOnFirst((signal, frames) -> {
                         if (!signal.hasValue()) return frames;
@@ -232,16 +239,16 @@ public final class DefaultRpcManager implements RpcManager {
                         }).doOnDiscard(ByteBuf.class, ByteBuf::release);
                         return invokeMany(method, () -> method.definition().requestType == Mono.class ? values.next() : values, call.context())
                             .map(DefaultRpcManager.this::encodeResponse);
-                    }).doOnDiscard(RpcFrame.class, RpcFrame::release), AtomicInteger::decrementAndGet, false)
+                    }), AtomicInteger::decrementAndGet, false)
                     .onErrorResume(error -> Flux.just(RpcProtocol.error(error)));
             }
-            public Mono<Void> fireAndForget(RpcFrame request) {
-                return Mono.using(DefaultRpcManager.this::slot, ignored -> {
-                    RpcProtocol.Call call = readCall(request);
+            public Mono<Void> fireAndForget(Payload request) {
+                return Mono.using(() -> request, payload -> Mono.using(DefaultRpcManager.this::slot, ignored -> {
+                    RpcProtocol.Call call = readCall(payload);
                     var method = registry.localMethod(call.route());
                     if (!method.definition().forget) return Mono.error(new IllegalArgumentException("RPC method requires acknowledgement"));
-                    return invokeOne(method, request, call.context()).then();
-                }, AtomicInteger::decrementAndGet, false);
+                    return invokeOne(method, payload, call.context()).then();
+                }, AtomicInteger::decrementAndGet, false), Payload::release, false);
             }
         };
     }
@@ -249,16 +256,16 @@ public final class DefaultRpcManager implements RpcManager {
     private static void requireMode(RpcMethodBinding method, boolean stream, boolean channel) {
         if (method.stream != stream || method.channel != channel || method.forget) throw new IllegalArgumentException("RPC interaction mismatch");
     }
-    private void checkFrameBudget(RpcFrame frame) {
+    private void checkPayloadBudget(Payload frame) {
         if ((long) frame.data().readableBytes() + frame.metadata().readableBytes() > options.maxPayloadBytes()) {
             throw new IllegalArgumentException("RPC frame too large");
         }
     }
-    private RpcProtocol.Call readCall(RpcFrame frame) {
-        checkFrameBudget(frame);
+    private RpcProtocol.Call readCall(Payload frame) {
+        checkPayloadBudget(frame);
         return RpcProtocol.readCall(frame.metadata());
     }
-    private Mono<?> invokeOne(DefaultRpcServiceRegistry.BoundMethod method, RpcFrame frame, ByteBuf context) {
+    private Mono<?> invokeOne(DefaultRpcServiceRegistry.BoundMethod method, Payload frame, ByteBuf context) {
         if (contextCodec == ContextCodec.DEFAULT) {
             contextCodec.deserializeFrom(Context.empty(), context);
             return Mono.from(invokeMethod(method, decodeRequest(frame, method.definition(), false)))
@@ -306,7 +313,7 @@ public final class DefaultRpcManager implements RpcManager {
         conflicts = Set.copyOf(duplicate);
         routes = Map.copyOf(ready);
     }
-    private RpcConnection target(String nodeId, DefaultRpcServiceRegistry.ServiceKey service) {
+    private RSocket target(String nodeId, DefaultRpcServiceRegistry.ServiceKey service) {
         registry.checkAvailable();
         if (conflicts.contains(nodeId)) throw new IllegalStateException("Conflicting RPC node instances: " + nodeId);
         Peer peer = routes.get(nodeId);
@@ -319,7 +326,7 @@ public final class DefaultRpcManager implements RpcManager {
         if (method.channel) {
             return request -> Flux.deferContextual(context -> Flux.<Object, CallLease>using(() -> lease(context, null, route, localCall), lease -> {
                 if (localCall) return Flux.from(invokeMethod(registry.localMethod(key, method.name), request));
-                Flux<RpcFrame> frames = Flux.from((Publisher<?>) request).index((index, value) -> channelFrame(lease, index == 0, value))
+                Flux<Payload> frames = Flux.from((Publisher<?>) request).index((index, value) -> channelPayload(lease, index == 0, value))
                     .doOnDiscard(ByteBuf.class, ByteBuf::release);
                 return target(nodeId, key).requestChannel(frames).<Object>handle((frame, sink) -> deliver(frame, method.resultType, sink));
             }, CallLease::dispose, false)).as(FluxTracer.create(method.clientSpan));
@@ -327,7 +334,7 @@ public final class DefaultRpcManager implements RpcManager {
         if (method.stream) {
             return request -> Flux.deferContextual(context -> Flux.<Object, CallLease>using(() -> lease(context, request, route, localCall), lease -> {
                 if (localCall) return Flux.from(invokeMethod(registry.localMethod(key, method.name), lease.localRequest(request)));
-                return target(nodeId, key).requestStream(lease.frame::retainedDuplicate).<Object>handle((frame, sink) -> deliver(frame, method.resultType, sink));
+                return target(nodeId, key).requestStream(ByteBufPayload.create(lease.payload)).<Object>handle((frame, sink) -> deliver(frame, method.resultType, sink));
             }, CallLease::dispose, false)).as(FluxTracer.create(method.clientSpan));
         }
         var requestTimeout = localCall || method.forget ? null : options.requestTimeout();
@@ -336,13 +343,13 @@ public final class DefaultRpcManager implements RpcManager {
             CallLease acquire(Context context, Object request) { return lease(context, request, route, localCall); }
             Mono<?> invoke(CallLease lease, Object request) {
                 if (localCall) return Mono.from(invokeMethod(registry.localMethod(key, method.name), lease.localRequest(request)));
-                RpcConnection connection = target(nodeId, key);
-                return method.forget ? connection.fireAndForget(lease.frame::retainedDuplicate)
-                    : connection.requestResponse(lease.frame::retainedDuplicate);
+                RSocket connection = target(nodeId, key);
+                return method.forget ? Mono.defer(() -> connection.fireAndForget(ByteBufPayload.create(lease.payload)))
+                    : Mono.defer(() -> connection.requestResponse(ByteBufPayload.create(lease.payload)));
             }
             Object decode(Object value) {
                 if (localCall || method.forget) return value;
-                RpcFrame frame = (RpcFrame) value;
+                Payload frame = (Payload) value;
                 try { return decodeResponse(frame, method.resultType); }
                 finally { frame.release(); }
             }
@@ -364,7 +371,7 @@ public final class DefaultRpcManager implements RpcManager {
                 captured.writeTo(metadata);
             }
             if ((long) data.readableBytes() + metadata.readableBytes() > options.maxPayloadBytes()) throw new IllegalArgumentException("RPC frame too large");
-            return new CallLease(new RpcFrame(data, metadata), captured, slot);
+            return new CallLease(ByteBufPayload.create(data, metadata), captured, slot);
         } catch (Throwable error) {
             try { data.release(); metadata.release(); }
             finally { try { captured.dispose(); } finally { slot.decrementAndGet(); } }
@@ -372,21 +379,21 @@ public final class DefaultRpcManager implements RpcManager {
         }
     }
 
-    private record CallLease(RpcFrame frame, Disposable context, AtomicInteger slot) implements Disposable {
-        Object localRequest(Object original) { return original instanceof ByteBuf ? frame.data().duplicate() : original; }
+    private record CallLease(Payload payload, Disposable context, AtomicInteger slot) implements Disposable {
+        Object localRequest(Object original) { return original instanceof ByteBuf ? payload.data().duplicate() : original; }
         public void dispose() {
-            try { frame.release(); }
+            try { payload.release(); }
             finally { try { context.dispose(); } finally { slot.decrementAndGet(); } }
         }
     }
 
-    private RpcFrame channelFrame(CallLease lease, boolean first, Object value) {
+    private Payload channelPayload(CallLease lease, boolean first, Object value) {
         ByteBuf data = encodeBody(value);
         try {
-            if (!first) return new RpcFrame(data, Unpooled.EMPTY_BUFFER);
-            // Retain the frame atomically before reading metadata: cancellation may already own cleanup.
-            RpcFrame header = lease.frame.retainedDuplicate();
-            try { return new RpcFrame(data, header.metadata().retainedDuplicate()); }
+            if (!first) return ByteBufPayload.create(data, Unpooled.EMPTY_BUFFER);
+            // Retain the payload atomically before reading metadata: cancellation may already own cleanup.
+            Payload header = lease.payload.retain();
+            try { return ByteBufPayload.create(data, header.metadata().retainedDuplicate()); }
             finally { header.release(); }
         } catch (Throwable error) { data.release(); throw error; }
     }
@@ -401,27 +408,27 @@ public final class DefaultRpcManager implements RpcManager {
         try { bodyCodec.encode(value, output); return output; }
         catch (Throwable error) { output.release(); throw error; }
     }
-    private RpcFrame encodeResponse(Object value) { return new RpcFrame(encodeBody(value), Unpooled.EMPTY_BUFFER); }
+    private Payload encodeResponse(Object value) { return ByteBufPayload.create(encodeBody(value), Unpooled.EMPTY_BUFFER); }
 
-    private Object decodeRequest(RpcFrame frame, RpcMethodBinding method, boolean owned) {
-        if (owned) checkFrameBudget(frame);
+    private Object decodeRequest(Payload frame, RpcMethodBinding method, boolean owned) {
+        if (owned) checkPayloadBudget(frame);
         if (method.requestDataType == Void.TYPE) return null;
-        ByteBuf data = frame.data();
-        if (method.requestDataType == ByteBuf.class) return owned ? data.retainedSlice() : data.duplicate();
-        return data.isReadable() ? bodyCodec.decode(data.duplicate(), method.requestDataType) : null;
+        ByteBuf data = frame.sliceData();
+        if (method.requestDataType == ByteBuf.class) return owned ? data.retain() : data;
+        return data.isReadable() ? bodyCodec.decode(data, method.requestDataType) : null;
     }
-    private void deliver(RpcFrame frame, Type type, SynchronousSink<Object> sink) {
+    private void deliver(Payload frame, Type type, SynchronousSink<Object> sink) {
         try {
             Object value = decodeResponse(frame, type);
             if (value != null) sink.next(value);
         } finally { frame.release(); }
     }
-    private Object decodeResponse(RpcFrame frame, Type type) {
-        checkFrameBudget(frame);
+    private Object decodeResponse(Payload frame, Type type) {
+        checkPayloadBudget(frame);
         RpcProtocol.checkResponse(frame);
-        ByteBuf data = frame.data();
-        return type == Void.class ? null : type == ByteBuf.class ? data.retainedSlice()
-            : data.isReadable() ? bodyCodec.decode(data.duplicate(), type) : null;
+        ByteBuf data = frame.sliceData();
+        return type == Void.class ? null : type == ByteBuf.class ? data.retain()
+            : data.isReadable() ? bodyCodec.decode(data, type) : null;
     }
 
     public Mono<Void> stop() {
@@ -430,14 +437,14 @@ public final class DefaultRpcManager implements RpcManager {
             lifecycle.dispose();
             for (Peer peer : List.copyOf(peers.values())) retire(peer);
             registry.close();
-            return Flux.concatDelayError(server == null ? Mono.<Void>empty() : server.close(), discovery.stop(), transport.close()).then()
+            return Flux.concatDelayError(server == null ? Mono.<Void>empty() : Mono.defer(() -> { server.dispose(); return server.onClose(); }), discovery.stop(), transport.close()).then()
                 .doFinally(ignored -> control.dispose());
         });
     }
 
     private static final class Peer {
         final NodeAnnouncement node;
-        volatile RpcConnection connection;
+        volatile RSocket connection;
         volatile long remoteRevision = -1;
         volatile Set<DefaultRpcServiceRegistry.ServiceKey> catalog = Set.of();
         final Disposable.Swap work = Disposables.swap(), closeWatcher = Disposables.swap();

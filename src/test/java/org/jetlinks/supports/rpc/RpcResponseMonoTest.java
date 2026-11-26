@@ -1,7 +1,8 @@
 package org.jetlinks.supports.rpc;
 
+import io.rsocket.Payload;
+import io.rsocket.util.ByteBufPayload;
 import io.netty.buffer.*;
-import org.jetlinks.core.rpc.transport.RpcFrame;
 import org.junit.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.*;
@@ -19,38 +20,38 @@ import static org.jetlinks.supports.rpc.RpcSpiTestSupport.*;
 
 public class RpcResponseMonoTest {
     static final Duration TIMEOUT = Duration.ofSeconds(10);
-    static RpcFrame frame() { return new RpcFrame(Unpooled.directBuffer(8).writeLong(123), Unpooled.EMPTY_BUFFER); }
-    static ByteBuf bytes(RpcFrame frame) { return frame.data().retainedSlice(); }
+    static Payload frame() { return ByteBufPayload.create(Unpooled.directBuffer(8).writeLong(123), Unpooled.EMPTY_BUFFER); }
+    static ByteBuf bytes(Payload frame) { return frame.data().retainedSlice(); }
 
-    static <T> Mono<T> response(Mono<RpcFrame> source, java.util.function.Function<RpcFrame, T> decoder,
+    static <T> Mono<T> response(Mono<Payload> source, java.util.function.Function<Payload, T> decoder,
                                  Duration timeout, reactor.core.scheduler.Scheduler scheduler) {
         return RpcCallMono.create(new RpcCallMono.Plan<Disposable, T>(timeout, scheduler) {
             Disposable acquire(reactor.util.context.Context context, Object request) { return Disposables.disposed(); }
             Mono<?> invoke(Disposable resource, Object request) { return source; }
             T decode(Object input) {
-                RpcFrame frame = (RpcFrame) input;
+                Payload frame = (Payload) input;
                 try { return decoder.apply(frame); } finally { frame.release(); }
             }
         }, null);
     }
 
-    static class ManualSource extends Mono<RpcFrame> {
-        CoreSubscriber<? super RpcFrame> actual;
+    static class ManualSource extends Mono<Payload> {
+        CoreSubscriber<? super Payload> actual;
         final AtomicBoolean cancelled = new AtomicBoolean();
         final AtomicLong demand = new AtomicLong();
-        public void subscribe(CoreSubscriber<? super RpcFrame> subscriber) {
+        public void subscribe(CoreSubscriber<? super Payload> subscriber) {
             actual = subscriber;
             subscriber.onSubscribe(new Subscription() {
                 public void request(long n) { demand.addAndGet(n); }
                 public void cancel() { cancelled.set(true); }
             });
         }
-        void emit(RpcFrame frame) { actual.onNext(frame); }
+        void emit(Payload frame) { actual.onNext(frame); }
     }
 
     @Test public void honorsDemandContextAndTransfersOnlyTheDecodedReference() {
         VirtualTimeScheduler clock = VirtualTimeScheduler.create();
-        ManualSource source = new ManualSource(); RpcFrame frame = frame();
+        ManualSource source = new ManualSource(); Payload frame = frame();
         try {
             StepVerifier.create(response(source, RpcResponseMonoTest::bytes, TIMEOUT, clock)
                 .contextWrite(context -> context.put("rpc-test", "value")), 0)
@@ -64,7 +65,7 @@ public class RpcResponseMonoTest {
 
     @Test public void timeoutReleasesLateFramesWithoutDecodingThem() {
         VirtualTimeScheduler clock = VirtualTimeScheduler.create();
-        ManualSource source = new ManualSource(); RpcFrame frame = frame(); AtomicInteger decoded = new AtomicInteger();
+        ManualSource source = new ManualSource(); Payload frame = frame(); AtomicInteger decoded = new AtomicInteger();
         try {
             StepVerifier.create(response(source, value -> { decoded.incrementAndGet(); return bytes(value); }, TIMEOUT, clock), 0)
                 .then(() -> clock.advanceTimeBy(TIMEOUT)).expectError(TimeoutException.class).verify(WAIT);
@@ -75,7 +76,7 @@ public class RpcResponseMonoTest {
 
     @Test public void timeoutDuringDecodeDoesNotFreeTheBorrowAndReleasesTheLosingResult() throws Exception {
         VirtualTimeScheduler clock = VirtualTimeScheduler.create();
-        ManualSource source = new ManualSource(); RpcFrame frame = frame();
+        ManualSource source = new ManualSource(); Payload frame = frame();
         CountDownLatch entered = new CountDownLatch(1), resume = new CountDownLatch(1);
         ExecutorService executor = Executors.newSingleThreadExecutor(); AtomicReference<ByteBuf> result = new AtomicReference<>();
         AtomicReference<Future<?>> emission = new AtomicReference<>();
@@ -97,7 +98,7 @@ public class RpcResponseMonoTest {
     }
 
     @Test public void cancellationDuringDecodeReleasesTheResultAndSuppressesSignals() {
-        VirtualTimeScheduler clock = VirtualTimeScheduler.create(); RpcFrame frame = frame();
+        VirtualTimeScheduler clock = VirtualTimeScheduler.create(); Payload frame = frame();
         AtomicInteger signals = new AtomicInteger(); AtomicReference<ByteBuf> result = new AtomicReference<>();
         BaseSubscriber<ByteBuf> actual = new BaseSubscriber<>() {
             protected void hookOnSubscribe(Subscription subscription) { request(1); }
@@ -129,7 +130,7 @@ public class RpcResponseMonoTest {
     }
 
     @Test public void preservesEmptyAndErrorsAndReleasesFramesWhenDecoderFails() {
-        VirtualTimeScheduler clock = VirtualTimeScheduler.create(); RpcFrame frame = frame(); RuntimeException error = new IllegalStateException("decode");
+        VirtualTimeScheduler clock = VirtualTimeScheduler.create(); Payload frame = frame(); RuntimeException error = new IllegalStateException("decode");
         try {
             StepVerifier.create(response(Mono.empty(), RpcResponseMonoTest::bytes, TIMEOUT, clock)).verifyComplete();
             StepVerifier.create(response(Mono.error(error), RpcResponseMonoTest::bytes, TIMEOUT, clock)).expectErrorMatches(value -> value == error).verify();

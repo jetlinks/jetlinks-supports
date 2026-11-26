@@ -1,7 +1,8 @@
 package org.jetlinks.supports.rpc;
 
+import io.rsocket.Payload;
+import io.rsocket.util.ByteBufPayload;
 import io.netty.buffer.*;
-import org.jetlinks.core.rpc.transport.RpcFrame;
 import org.junit.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.*;
@@ -14,20 +15,20 @@ import static org.junit.Assert.*;
 import static org.jetlinks.supports.rpc.RpcSpiTestSupport.*;
 
 public class RpcServerMonoTest {
-    static RpcFrame request() { return new RpcFrame(Unpooled.directBuffer(8).writeLong(123), Unpooled.EMPTY_BUFFER); }
+    static Payload request() { return ByteBufPayload.create(Unpooled.directBuffer(8).writeLong(123), Unpooled.EMPTY_BUFFER); }
     abstract static class Plan extends RpcServerMono.Plan {
         final AtomicInteger active = new AtomicInteger();
         AtomicInteger acquire() { active.incrementAndGet(); return active; }
-        RpcFrame encode(Object value) { return new RpcFrame((ByteBuf) value, Unpooled.EMPTY_BUFFER); }
+        Payload encode(Object value) { return ByteBufPayload.create((ByteBuf) value, Unpooled.EMPTY_BUFFER); }
     }
-    static void consume(RpcFrame frame) {
+    static void consume(Payload frame) {
         try { assertEquals(123, frame.data().readLong()); } finally { frame.release(); }
     }
 
     @Test public void successPreservesDemandAndRestoredContextAndReleasesOneRequestLease() {
-        RpcFrame request = request(); AtomicLong demand = new AtomicLong();
+        Payload request = request(); AtomicLong demand = new AtomicLong();
         Plan plan = new Plan() {
-            Mono<?> invoke(RpcFrame frame, RpcServerMono.CallSubscriber actual) {
+            Mono<?> invoke(Payload frame, RpcServerMono.CallSubscriber actual) {
                 assertEquals("tenant", actual.currentContext().get("tenant"));
                 actual.context = actual.currentContext().put("rpc-user", "user");
                 return Mono.deferContextual(context -> {
@@ -46,8 +47,8 @@ public class RpcServerMonoTest {
 
     @Test public void emptyAndErrorResponsesWaitForDemandAndHoldTheSlotUntilDeliveredOrCancelled() {
         for (boolean error : new boolean[]{false, true}) for (boolean cancel : new boolean[]{false, true}) {
-            RpcFrame request = request(); Plan plan = new Plan() {
-                Mono<?> invoke(RpcFrame frame, RpcServerMono.CallSubscriber actual) {
+            Payload request = request(); Plan plan = new Plan() {
+                Mono<?> invoke(Payload frame, RpcServerMono.CallSubscriber actual) {
                     return error ? Mono.error(new IllegalStateException("remote failure")) : Mono.empty();
                 }
             };
@@ -67,12 +68,12 @@ public class RpcServerMonoTest {
     }
 
     @Test public void cancellationInsideInitializationDoesNotFreeTheBorrowedRequest() {
-        RpcFrame request = request(); AtomicInteger subscriptions = new AtomicInteger();
-        BaseSubscriber<RpcFrame> actual = new BaseSubscriber<>() {
+        Payload request = request(); AtomicInteger subscriptions = new AtomicInteger();
+        BaseSubscriber<Payload> actual = new BaseSubscriber<>() {
             protected void hookOnCancel() { request.release(); }
         };
         Plan plan = new Plan() {
-            Mono<?> invoke(RpcFrame frame, RpcServerMono.CallSubscriber ignored) {
+            Mono<?> invoke(Payload frame, RpcServerMono.CallSubscriber ignored) {
                 actual.dispose(); assertEquals(123, frame.data().getLong(0));
                 return Mono.defer(() -> { subscriptions.incrementAndGet(); return Mono.empty(); });
             }
@@ -82,14 +83,14 @@ public class RpcServerMonoTest {
     }
 
     @Test public void cancelledEncodingReleasesTheProducedFrameAndKeepsTheOwnedValueLiveUntilEncodingEnds() {
-        RpcFrame request = request(); AtomicReference<RpcFrame> produced = new AtomicReference<>();
+        Payload request = request(); AtomicReference<Payload> produced = new AtomicReference<>();
         ByteBuf value = Unpooled.directBuffer(8).writeLong(123);
-        BaseSubscriber<RpcFrame> actual = new BaseSubscriber<>() {};
+        BaseSubscriber<Payload> actual = new BaseSubscriber<>() {};
         Plan plan = new Plan() {
-            Mono<?> invoke(RpcFrame frame, RpcServerMono.CallSubscriber subscriber) { return Mono.just(value); }
-            RpcFrame encode(Object input) {
+            Mono<?> invoke(Payload frame, RpcServerMono.CallSubscriber subscriber) { return Mono.just(value); }
+            Payload encode(Object input) {
                 actual.dispose(); assertEquals(123, ((ByteBuf) input).getLong(0));
-                RpcFrame response = super.encode(input); produced.set(response); return response;
+                Payload response = super.encode(input); produced.set(response); return response;
             }
         };
         try {
@@ -101,9 +102,9 @@ public class RpcServerMonoTest {
 
     @Test public void failedSlotAndSourceFactoriesAreEncodedAndCleaned() {
         for (boolean acquire : new boolean[]{false, true}) {
-            RpcFrame request = request(); Plan plan = new Plan() {
+            Payload request = request(); Plan plan = new Plan() {
                 AtomicInteger acquire() { if (acquire) throw new RejectedExecutionException("slot"); return super.acquire(); }
-                Mono<?> invoke(RpcFrame frame, RpcServerMono.CallSubscriber subscriber) { throw new IllegalStateException("factory"); }
+                Mono<?> invoke(Payload frame, RpcServerMono.CallSubscriber subscriber) { throw new IllegalStateException("factory"); }
             };
             try {
                 StepVerifier.create(RpcServerMono.create(plan, request)).assertNext(frame -> {
@@ -116,11 +117,11 @@ public class RpcServerMonoTest {
     }
 
     @Test public void reusedPublisherCreatesIndependentRequestLeases() {
-        RpcFrame request = request(); Plan plan = new Plan() {
-            Mono<?> invoke(RpcFrame frame, RpcServerMono.CallSubscriber actual) { return Mono.just(frame.data().retainedSlice()); }
+        Payload request = request(); Plan plan = new Plan() {
+            Mono<?> invoke(Payload frame, RpcServerMono.CallSubscriber actual) { return Mono.just(frame.data().retainedSlice()); }
         };
         try {
-            Mono<RpcFrame> call = RpcServerMono.create(plan, request);
+            Mono<Payload> call = RpcServerMono.create(plan, request);
             for (int i = 0; i < 2; i++) StepVerifier.create(call).assertNext(RpcServerMonoTest::consume).verifyComplete();
             assertEquals(1, request.refCnt()); assertEquals(0, plan.active.get());
         } finally { request.release(); }
@@ -130,11 +131,11 @@ public class RpcServerMonoTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             for (int i = 0; i < 200; i++) {
-                RpcFrame request = request(); ByteBuf value = Unpooled.directBuffer(8).writeLong(123);
-                AtomicBoolean emitted = new AtomicBoolean(); AtomicReference<RpcFrame> produced = new AtomicReference<>();
+                Payload request = request(); ByteBuf value = Unpooled.directBuffer(8).writeLong(123);
+                AtomicBoolean emitted = new AtomicBoolean(); AtomicReference<Payload> produced = new AtomicReference<>();
                 AtomicInteger delivered = new AtomicInteger();
                 Plan plan = new Plan() {
-                    Mono<?> invoke(RpcFrame frame, RpcServerMono.CallSubscriber actual) {
+                    Mono<?> invoke(Payload frame, RpcServerMono.CallSubscriber actual) {
                         return new Mono<Object>() {
                             public void subscribe(CoreSubscriber<? super Object> subscriber) {
                                 subscriber.onSubscribe(new Subscription() {
@@ -144,11 +145,11 @@ public class RpcServerMonoTest {
                             }
                         };
                     }
-                    RpcFrame encode(Object input) { RpcFrame frame = super.encode(input); produced.set(frame); return frame; }
+                    Payload encode(Object input) { Payload frame = super.encode(input); produced.set(frame); return frame; }
                 };
-                BaseSubscriber<RpcFrame> actual = new BaseSubscriber<>() {
+                BaseSubscriber<Payload> actual = new BaseSubscriber<>() {
                     protected void hookOnSubscribe(Subscription subscription) { }
-                    protected void hookOnNext(RpcFrame frame) { delivered.incrementAndGet(); consume(frame); }
+                    protected void hookOnNext(Payload frame) { delivered.incrementAndGet(); consume(frame); }
                 };
                 try {
                     RpcServerMono.create(plan, request).subscribe(actual);

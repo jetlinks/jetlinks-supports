@@ -1,10 +1,13 @@
 package org.jetlinks.supports.rpc;
 
+import io.rsocket.Payload;
+import io.rsocket.RSocket;
+import io.rsocket.SocketAcceptor;
+import io.rsocket.transport.netty.server.CloseableChannel;
+import io.rsocket.util.ByteBufPayload;
 import io.netty.buffer.*;
 import org.hswebframework.web.authorization.exception.AccessDenyException;
 import org.jetlinks.core.rpc.*;
-import org.jetlinks.core.rpc.transport.RpcFrame;
-import org.jetlinks.core.rpc.transport.*;
 import org.jetlinks.core.cluster.discovery.*;
 import org.jetlinks.supports.rpc.rsocket.RSocketRpcTransport;
 import org.junit.Test;
@@ -51,8 +54,8 @@ public class RpcBoundaryTest {
     @Test public void failedDiscoveryShutdownStillClosesTheTransport() {
         AtomicInteger closed = new AtomicInteger();
         RpcTransport transport = new RpcTransport() {
-            public Mono<RpcServer> bind(URI address, int maxPayloadBytes, Acceptor acceptor) { return Mono.error(new UnsupportedOperationException()); }
-            public Mono<RpcConnection> connect(URI address, int maxPayloadBytes, java.util.function.Supplier<RpcFrame> setup, RpcHandler inbound) { return Mono.error(new UnsupportedOperationException()); }
+            public Mono<CloseableChannel> bind(URI address, int maxPayloadBytes, SocketAcceptor acceptor) { return Mono.error(new UnsupportedOperationException()); }
+            public Mono<RSocket> connect(URI address, int maxPayloadBytes, java.util.function.Supplier<Payload> setup, SocketAcceptor inbound) { return Mono.error(new UnsupportedOperationException()); }
             public Mono<Void> close() { return Mono.fromRunnable(closed::incrementAndGet); }
         };
         NodeDiscovery discovery = new NodeDiscovery() {
@@ -67,10 +70,10 @@ public class RpcBoundaryTest {
         manager.stop().block(WAIT);
         assertEquals(1, closed.get());
     }
-    @Test public void frameViewRetainsOneOwnerAndHasIndependentIndexes() {
+    @Test public void payloadViewsRetainBuffersAndHaveIndependentIndexes() {
         ByteBuf owner = Unpooled.directBuffer(8).writeLong(123);
-        RpcFrame frame = new RpcFrame(owner.retainedSlice(), Unpooled.EMPTY_BUFFER);
-        RpcFrame child = frame.retainedDuplicate();
+        Payload frame = ByteBufPayload.create(owner.retainedSlice(), Unpooled.EMPTY_BUFFER);
+        Payload child = ByteBufPayload.create(frame);
         assertEquals(123, child.data().readLong());
         assertEquals(0, frame.data().readerIndex());
         frame.release(); child.release();
@@ -79,7 +82,7 @@ public class RpcBoundaryTest {
         catch (io.netty.util.IllegalReferenceCountException expected) { assertEquals(0, frame.refCnt()); }
         owner.release();
         ByteBuf shared = Unpooled.directBuffer(8).writeLong(123);
-        RpcFrame empty = new RpcFrame(shared.retainedSlice(0, 0), shared.retainedSlice(0, 0));
+        Payload empty = ByteBufPayload.create(shared.retainedSlice(0, 0), shared.retainedSlice(0, 0));
         shared.release(); empty.release();
         assertEquals(0, shared.refCnt());
     }

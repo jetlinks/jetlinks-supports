@@ -6,12 +6,16 @@ import org.jetlinks.supports.rpc.rsocket.RSocketRpcTransport;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import java.net.URI;
+import io.rsocket.transport.netty.server.CloseableChannel;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.BooleanSupplier;
 
 final class RpcSpiTestSupport {
     static final Duration WAIT = Duration.ofSeconds(10);
+    static URI address(CloseableChannel server) {
+        return URI.create("tcp://" + server.address().getHostString() + ":" + server.address().getPort());
+    }
     static NodeAnnouncement node(String id) {
         return new NodeAnnouncement(new NodeIdentity(id, UUID.randomUUID()), "test", "test", Map.of(), Map.of());
     }

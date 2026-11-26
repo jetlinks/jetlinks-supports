@@ -1,8 +1,9 @@
 package org.jetlinks.supports.rpc;
 
+import io.rsocket.Payload;
+import io.rsocket.util.ByteBufPayload;
 import io.netty.buffer.*;
 import org.jetlinks.core.cluster.discovery.*;
-import org.jetlinks.core.rpc.transport.RpcFrame;
 import org.jetlinks.core.utils.ExceptionSerializer;
 import reactor.core.Exceptions;
 
@@ -55,7 +56,7 @@ final class RpcProtocol {
         return input.getUnsignedByte(start + 3);
     }
 
-    static RpcFrame setup(Setup setup) {
+    static Payload setup(Setup setup) {
         ByteBuf metadata = ByteBufAllocator.DEFAULT.buffer();
         try {
             header(metadata, 0);
@@ -65,11 +66,11 @@ final class RpcProtocol {
             output.writeLong(setup.identity.incarnation().getLeastSignificantBits());
             output.writeUTF(setup.namespace);
             output.writeUTF(setup.bodyCodec); output.writeUTF(setup.contextCodec); output.writeUTF(setup.token);
-            return new RpcFrame(Unpooled.EMPTY_BUFFER, metadata);
+            return ByteBufPayload.create(Unpooled.EMPTY_BUFFER, metadata);
         } catch (Throwable error) { metadata.release(); throw Exceptions.propagate(error); }
     }
-    static Setup readSetup(RpcFrame frame) {
-        ByteBuf metadata = frame.metadata().duplicate();
+    static Setup readSetup(Payload frame) {
+        ByteBuf metadata = frame.sliceMetadata();
         if (kind(metadata) != 0) throw new IllegalArgumentException("Expected RPC setup");
         try {
             DataInputStream input = input(metadata);
@@ -78,7 +79,7 @@ final class RpcProtocol {
         } catch (IOException error) { throw Exceptions.propagate(error); }
     }
 
-    static RpcFrame catalog(NodeIdentity local, DefaultRpcServiceRegistry.Catalog catalog, boolean request) {
+    static Payload catalog(NodeIdentity local, DefaultRpcServiceRegistry.Catalog catalog, boolean request) {
         ByteBuf data = ByteBufAllocator.DEFAULT.buffer();
         ByteBuf metadata = request ? ByteBufAllocator.DEFAULT.buffer(4).writeShort(MAGIC).writeByte(VERSION).writeByte(CATALOG) : Unpooled.EMPTY_BUFFER;
         try {
@@ -87,12 +88,12 @@ final class RpcProtocol {
             output.writeLong(local.incarnation().getMostSignificantBits()); output.writeLong(local.incarnation().getLeastSignificantBits());
             output.writeLong(catalog.revision()); output.writeInt(catalog.services().size());
             for (var key : catalog.services()) { output.writeUTF(key.id()); output.writeUTF(key.name()); }
-            return new RpcFrame(data, metadata);
+            return ByteBufPayload.create(data, metadata);
         } catch (Throwable error) { data.release(); metadata.release(); throw Exceptions.propagate(error); }
     }
-    static DefaultRpcServiceRegistry.Catalog readCatalog(RpcFrame frame, NodeIdentity expected) {
+    static DefaultRpcServiceRegistry.Catalog readCatalog(Payload frame, NodeIdentity expected) {
         try {
-            DataInputStream input = input(frame.data().duplicate());
+            DataInputStream input = input(frame.sliceData());
             NodeIdentity identity = new NodeIdentity(input.readUTF(), new UUID(input.readLong(), input.readLong()));
             if (!expected.equals(identity)) throw new IllegalArgumentException("RPC peer identity changed");
             long revision = input.readLong(); int count = input.readInt();
@@ -104,17 +105,17 @@ final class RpcProtocol {
     }
 
     // Preserve the platform's error/i18n categories; arbitrary Java exception classes are not a wire contract.
-    static RpcFrame error(Throwable error) {
+    static Payload error(Throwable error) {
         ByteBuf data = ByteBufAllocator.DEFAULT.buffer();
         try {
             ExceptionSerializer.serialize(error, new ByteBufOutputStream(data), false);
-            return new RpcFrame(data, ByteBufAllocator.DEFAULT.buffer(1).writeByte(ERROR));
+            return ByteBufPayload.create(data, ByteBufAllocator.DEFAULT.buffer(1).writeByte(ERROR));
         } catch (Throwable failure) { data.release(); throw Exceptions.propagate(failure); }
     }
-    static void checkResponse(RpcFrame frame) {
+    static void checkResponse(Payload frame) {
         if (frame.metadata().isReadable()) {
             if (frame.metadata().getUnsignedByte(frame.metadata().readerIndex()) != ERROR) throw new IllegalArgumentException("Unsupported RPC response metadata");
-            throw Exceptions.propagate(ExceptionSerializer.deserialize(new ByteBufInputStream(frame.data()), false));
+            throw Exceptions.propagate(ExceptionSerializer.deserialize(new ByteBufInputStream(frame.sliceData()), false));
         }
     }
     static DataInputStream input(ByteBuf buffer) { return new DataInputStream(new ByteBufInputStream(buffer)); }

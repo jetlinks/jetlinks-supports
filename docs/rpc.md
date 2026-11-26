@@ -5,7 +5,7 @@
 | 组件 | 职责 |
 | --- | --- |
 | `NodeDiscovery` | 本节点公告、不可变成员视图与变化；不保存服务目录或业务状态 |
-| `RpcTransport` | 连接、双向帧传输、四种 RSocket 交互及传输资源 |
+| `RpcTransport`（Supports） | 建立原生 `RSocket` 连接、监听及关闭 I/O 资源 |
 | `RpcServiceRegistry` | 沿用 RPC 的注册、查询、选择、监听方法；提供原子初始服务视图 |
 | `DefaultRpcManager` | 组合发现与传输，管理 peer、目录就绪、调用与 Context 租约 |
 | `RpcBodyCodec` / `ContextCodec` | 分别编解码业务对象与调用上下文 |
@@ -58,12 +58,12 @@ Mono<String> result = manager.getService("iot-2", LatestMetrics.class)
 | 单请求 ByteBuf 参数 | 调用方保留原引用；每次订阅运行时 retain 一个可读区租约；服务只借用，返回结果必须另 retain |
 | channel 的 ByteBuf 元素 | 逐元素转移所有权，接收方消费后 release；未交付元素由对应队列 owner 回收 |
 | ByteBuf 结果 | 转移给调用者，调用者负责 release |
-| `RpcFrame` | 拥有 data/metadata 各一份引用；只 release frame；`retainedDuplicate` 保持共同生命周期和独立索引 |
+| RSocket `Payload` | 拥有 data/metadata 引用；仅释放 Payload。需要独立索引的发送副本使用 `ByteBufPayload.create(payload)`，不复制载荷字节 |
 | Context capture | 每次订阅创建，成功、失败、超时或取消统一 dispose；不得跨请求缓存 |
 
 单请求的调用方须在订阅取得租约前保持原缓冲区可访问，完成或取消后可以释放自己的引用。借用参数的内容视为只读；异步保留到本次调用结束之后必须额外 retain。零拷贝描述载荷透传，不表示完全无对象分配。
 
-响应帧在 `onNext` 时转移所有权，此前的取消清理由传输方负责。runtime 解码并释放已经收到的帧。单次请求响应由局部操作符统一仲裁解码交付、超时与取消：解码期间保持帧有效，超时或取消先赢时回收晚到的帧及未交付的解码结果；成功交付后结果归调用者。channel 和业务异步队列回收自己尚未交付的元素，按各自边界配置 discard，避免对同一引用重复清理。调用者额外添加队列、超时等操作符时，仍须管理该边界持有的 ByteBuf。
+响应 Payload 在 `onNext` 时转移所有权，此前的取消清理由传输方负责。runtime 解码并释放已经收到的 Payload。单次请求响应由局部操作符统一仲裁解码交付、超时与取消：解码期间保持帧有效，超时或取消先赢时回收晚到的帧及未交付的解码结果；成功交付后结果归调用者。channel 和业务异步队列回收自己尚未交付的元素，按各自边界配置 discard，避免对同一引用重复清理。调用者额外添加队列、超时等操作符时，仍须管理该边界持有的 ByteBuf。
 
 ```java
 // 服务端：参数是借用视图；结果转移所有权。
@@ -100,8 +100,8 @@ service.latest("device-1").timeout(Duration.ofSeconds(3));
 
 业务超时通过取消传播到远端 Publisher，并归还调用租约、Context 与请求引用；取消不代表对端已经完成的副作用被回滚。不设置任何请求超时时，未结束的调用持续占用槽位和资源，直到完成、取消、断连或 manager 停止。
 
-`RpcTransport.bind/connect` 接收本节点的 `maxPayloadBytes`，限制单个载荷的 data 与 metadata 总字节数。RSocket 双端使用共同的 16KiB 物理帧上限；分片重组上限为业务预算加协议开销，最低为一个物理帧，解码时再精确校验业务预算。小预算节点因此可以正常接收对端的合法物理帧，同时拒绝超出自身业务预算的载荷。
+`RpcTransport` 位于 Supports，直接使用 RSocket 的 `SocketAcceptor`、`RSocket`、`Payload` 和 `CloseableChannel`；Core 不依赖 RSocket。传输层管理监听、连接和 I/O 资源，不再创建帧/连接/handler 的平行抽象，也不在数据链路转换承载对象。SETUP 由 RSocket 借用至 acceptor 完成；业务请求的 Payload 所有权转移给 runtime，成功、失败或取消后由对应 owner 释放，channel 逐元素转移。\n\n`bind/connect` 接收本节点的 `maxPayloadBytes`，RSocket 双端使用共同的 16KiB 物理帧上限；分片重组上限为业务预算加协议开销，最低为一个物理帧。runtime 在 SETUP、目录、请求与响应入口精确校验 data/metadata 总字节数，小预算节点因此可以正常接收合法物理帧，同时拒绝超出业务预算的载荷。
 
-响应式操作符保留 Context、取消与资源边界，空 Context codec 走直接路径。传输双端 ZERO_COPY；SETUP 保留一次连接级快照，避免连接建立阶段的取消和复用竞态。业务调用不复制 ByteBuf 载荷。
+响应式操作符保留 Context、取消与资源边界，空 Context codec 走直接路径。传输双端 ZERO_COPY；SETUP 保留一次连接级快照，避免连接建立阶段的取消和复用竞态。业务调用不复制 ByteBuf 载荷。`RpcBodyCodec`、`ContextCodec`、`SerializedContext` 及 Java/FST 格式标识保持原定义，路由、SETUP、目录、错误和 Context 的二进制布局不随承载对象改变。
 
 一期不含 RSocket resume、业务重试、自动连接池扩容、存储复制及选主。可选 token 为内部 peer 的共享凭据，默认空值仅适合受信网络；当前 TCP adapter 不提供 TLS，不能直接暴露到公网。Java/FST 对象编解码仅接受受信节点，不作为公共不可信数据格式。
