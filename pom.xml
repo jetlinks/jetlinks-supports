@@ -11,6 +11,10 @@
     <name>JetLinks Supports</name>
     <description>JetLinks 默认功能实现</description>
 
+    <properties>
+        <rsocket.version>1.1.5</rsocket.version>
+    </properties>
+
     <build>
         <plugins>
             <plugin>
@@ -31,6 +35,7 @@
         <dependency>
             <groupId>io.rsocket</groupId>
             <artifactId>rsocket-core</artifactId>
+            <version>${rsocket.version}</version>
             <optional>true</optional>
             <exclusions>
                 <exclusion>
@@ -43,6 +48,7 @@
         <dependency>
             <groupId>io.rsocket</groupId>
             <artifactId>rsocket-transport-netty</artifactId>
+            <version>${rsocket.version}</version>
             <optional>true</optional>
         </dependency>
 
