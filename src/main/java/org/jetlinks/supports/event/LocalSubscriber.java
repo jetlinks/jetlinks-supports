@@ -9,6 +9,7 @@ import org.jetlinks.core.event.TopicPayload;
 import org.jetlinks.core.topic.Topic;
 import static org.jetlinks.supports.event.InternalEventBus.*;
 import reactor.core.CoreSubscriber;
+import reactor.core.Scannable;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Operators;
@@ -21,7 +22,7 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 
 @Slf4j
-class LocalSubscriber implements BiFunction<SubscriptionInfo, TopicPayload, Mono<Void>>, Cancelable {
+class LocalSubscriber implements BiFunction<SubscriptionInfo, TopicPayload, Mono<Void>>, Cancelable, Scannable {
     private static final Object DISPOSED = new Object();
 
     private final int hashCode = System.identityHashCode(this);
@@ -85,6 +86,13 @@ class LocalSubscriber implements BiFunction<SubscriptionInfo, TopicPayload, Mono
     public void cancel() {
          // todo 取消订阅
         dispose();
+    }
+
+    @Override
+    public Object scanUnsafe(Attr key) {
+        // 发布者直接等待回调，本句柄没有队列；正在处理的消息不属于缓冲。
+        if (key == Attr.BUFFERED) return 0;
+        return null;
     }
 
     //订阅收到数据时执行
