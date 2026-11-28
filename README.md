@@ -6,6 +6,8 @@
 
 JetLinks 提供的一些默认实现以及集成
 
+原生 RSocket RPC、节点发现 SPI、Context 与 ByteBuf 所有权见 [RPC 接入说明](docs/rpc.md)。
+
 ## 设备会话读取
 
 真实连接在平台停机期间关闭时仍执行原集群会话检查：其他节点还有会话则保留在线状态，最后一个连接关闭才更新设备离线时间并发布注销事件。重新连接使用新连接的起点；会话恢复不能使已确认的连接中断继续沿用旧上线时间。该行为由 `AbstractDeviceSessionManager.closeSession0` 统一处理，持久化宿主的关闭流程复用同一边界。
